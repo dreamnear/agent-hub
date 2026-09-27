@@ -14,15 +14,17 @@ jobs:
         with:
           node-version: 20
 
-      - name: Rust fmt + clippy + test
-        run: |
-          cargo fmt --check
-          cargo clippy -- -D warnings
-          cargo test
-
       - name: Web build + typecheck
         working-directory: web
         run: |
           npm ci
           npm run build
           npx tsc --noEmit
+
+      # clippy/test scope to server: desktop (rfd→glib-sys) needs GTK dev libs on
+      # linux and is built/tested on macOS only; server tests need web/dist (rust-embed)
+      - name: Rust fmt + clippy + test
+        run: |
+          cargo fmt --check
+          cargo clippy -p server -- -D warnings
+          cargo test -p server
