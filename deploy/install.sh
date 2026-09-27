@@ -80,7 +80,11 @@ ASSET="claude-view-server-${OS}-${ARCH}"
 # SRC 指向来源文件（同目录模式可能是用户产物本身，绝不能在退出时删——只清 DOWNLOAD_TMP）
 SRC=""
 DOWNLOAD_TMP=""
-cleanup() { [ -n "$DOWNLOAD_TMP" ] && rm -f "$DOWNLOAD_TMP"; }
+EMBEDDED_UNIT=""
+cleanup() {
+  [ -n "$DOWNLOAD_TMP" ] && rm -f "$DOWNLOAD_TMP"
+  [ -n "$EMBEDDED_UNIT" ] && rm -f "$EMBEDDED_UNIT"
+}
 trap cleanup EXIT
 
 fetch_binary() {
@@ -157,7 +161,37 @@ if [ "$WITH_SYSTEMD" = 1 ]; then
         break
       }
     done
-    [ -n "$UNIT_SRC" ] || die "找不到 claude-view-server.service（与 install.sh 同目录）"
+    EMBEDDED_UNIT=""
+    if [ -z "$UNIT_SRC" ]; then
+      # curl|bash 管道执行时脚本在内存里，永远没有"同目录单元文件"可找
+      # （2026-09-28 E2E 实测：此前 --with-systemd 在管道模式下必死于找不到单元）。
+      # 回退到内置模板——与 deploy/claude-view-server.service 保持一致，改动须双改。
+      UNIT_SRC="$(mktemp)"
+      EMBEDDED_UNIT="$UNIT_SRC"
+      cat >"$UNIT_SRC" <<'UNIT'
+# agent-hub server systemd 常驻单元（Linux arm64/aarch64 远程实例）
+[Unit]
+Description=agent-hub server (claude-view)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 按实际用户改：登录态（~/.claude）与数据目录（~/.claude-view）都归属该用户
+User=pi
+Environment=AGENT_HUB_ALLOW_LAN=1
+# 占位：替换为强随机串（openssl rand -hex 32）；或删除本行，由 server 首启自生成并持久化到 ~/.claude-view/token
+Environment=AGENT_HUB_TOKEN=CHANGE_ME
+# 可选：监听地址（默认 0.0.0.0:7801 时无需设置；allow_lan=1 已强制 0.0.0.0）
+# Environment=AGENT_HUB_BIND=0.0.0.0:7801
+ExecStart=/usr/local/bin/claude-view-server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    fi
 
     # token：安装环境里给了就写死；没给则注释掉该行，让 server 首启自生成
     # （不预置弱口令 token 是安全默认）
