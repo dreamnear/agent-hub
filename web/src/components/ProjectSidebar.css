@@ -1,0 +1,218 @@
+/* 右工程栏（280px 白底左描边，容器样式在 App.css .pane-right） */
+.sidebar {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 100%;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sidebar-collapse {
+  border: none;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 12px;
+  min-height: 28px;
+  padding: 0 0.3rem;
+}
+
+.sidebar-collapse:hover {
+  color: var(--c-text);
+}
+
+.sidebar-empty {
+  color: var(--c-sub);
+  font-size: 12px;
+  margin: 0;
+}
+
+/* 工程树：主仓行 12px/600 带 ▾，行高 28 */
+.sidebar-tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0 0.3rem;
+}
+
+.tree-row label:hover {
+  background: var(--c-code);
+}
+
+.tree-caret {
+  color: var(--c-sub);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.tree-count {
+  margin-left: auto;
+  color: var(--c-sub);
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.sidebar-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.sidebar-action {
+  border: none;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 11px;
+  min-height: 28px;
+  padding: 0 0.2rem;
+}
+
+.sidebar-action:hover:not(:disabled) {
+  color: var(--c-text);
+}
+
+.sidebar-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.sidebar-add {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.sidebar-add input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar-add .btn-ghost {
+  min-height: 36px;
+  padding: 0 0.7rem;
+  font-weight: 400;
+}
+
+/* Git 面板：底部固定块容器（P6 前占位，不接假数据） */
+.git-panel {
+  margin-top: auto;
+  border-top: 1px solid var(--c-border);
+  padding-top: 0.6rem;
+}
+
+.git-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.git-empty {
+  margin: 0.35rem 0 0;
+  font-size: 11px;
+  color: var(--c-sub);
+}
+
+/* ===== P6 B1-B3：git 工程树 ===== */
+
+.tree-group-item {
+  list-style: none;
+}
+
+.tree-group summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.tree-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.tree-group summary .tree-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.tree-group[open] summary .tree-caret {
+  transform: rotate(90deg);
+}
+
+.tree-sub {
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  list-style: none;
+}
+
+.tree-sub-row .tree-name {
+  opacity: 0.85;
+}
+
+.tree-branch {
+  font-size: 0.72rem;
+  color: var(--c-sub, #888);
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 7rem;
+}
+
+.tree-open {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  min-height: 24px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.tree-open:hover {
+  opacity: 1;
+}
+
+.tree-name--select {
+  cursor: pointer;
+}
+
+.tree-name--select:hover {
+  text-decoration: underline;
+}
+
+.sidebar-open-err {
+  margin: 0.2rem 0.6rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: var(--c-warn-bg, #fde8e8);
+  color: var(--c-warn-text, #a33);
+  font-size: 0.75rem;
+}

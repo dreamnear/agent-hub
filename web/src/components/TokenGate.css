@@ -1,0 +1,87 @@
+/* token 门禁：420 卡（规格第三节第 3 条） */
+.token-gate {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-bg);
+  z-index: 30;
+}
+
+.token-card {
+  width: min(420px, 92vw);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-dialog);
+  padding: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.token-card h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.token-hint {
+  color: var(--c-sub);
+  font-size: 0.85rem;
+  margin: 0;
+  word-break: break-all;
+}
+
+.token-hint code {
+  background: var(--c-code);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font: 12px ui-monospace, monospace;
+}
+
+.token-card input {
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  min-height: 44px;
+}
+
+.token-card input:focus {
+  outline: none;
+  border-color: var(--c-text);
+}
+
+.token-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.token-actions button {
+  flex: 1;
+  min-height: 44px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+}
+
+.token-actions button:first-child {
+  background: var(--c-accent-strong);
+  border-color: var(--c-accent-strong);
+  color: var(--c-inverse);
+  font-weight: 600;
+}
+
+/* QR 区块：bg.code 圆角 8 + canvas + url 10px */
+.token-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--c-code);
+  border-radius: 8px;
+  padding: 0.7rem;
+}

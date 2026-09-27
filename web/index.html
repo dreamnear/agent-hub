@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>claude-view</title>
+    <script>
+      // 主题 FOUC 防护（反馈轮 26-A）：首帧前同步设 data-theme，
+      // 与 useTheme 的 hub_theme（auto|dark|light）同口径
+      (function () {
+        try {
+          var m = localStorage.getItem('hub_theme');
+          if (m !== 'dark' && m !== 'light') m = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          document.documentElement.dataset.theme = m;
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

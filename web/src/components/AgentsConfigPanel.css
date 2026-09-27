@@ -1,0 +1,138 @@
+/* Agents 配置：600 卡双栏（规格第三节第 4 条） */
+.agentscfg-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 13, 13, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 25;
+}
+
+.agentscfg-card {
+  width: min(600px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-dialog);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.agentscfg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agentscfg-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.agentscfg-body {
+  display: flex;
+  gap: 0.8rem;
+  min-height: 20rem;
+}
+
+.agentscfg-list {
+  width: 34%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* 列表项 52h：名称 600 12px + model 10px accent + 描述 10px 次级两行省略 */
+.agentscfg-opt {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.45rem 0.6rem;
+  min-height: 52px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.agentscfg-opt--sel,
+.agentscfg-opt:hover {
+  background: var(--c-bg);
+  border-color: var(--c-border-input);
+}
+
+.agentscfg-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.agentscfg-model {
+  font-size: 10px;
+  color: var(--c-accent);
+}
+
+.agentscfg-desc {
+  font-size: 10px;
+  color: var(--c-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.agentscfg-empty {
+  color: var(--c-sub);
+  padding: 0.6rem;
+}
+
+.agentscfg-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.agentscfg-editing-name {
+  font-size: 0.85rem;
+  color: var(--c-sub);
+}
+
+.agentscfg-saved {
+  color: var(--c-done);
+}
+
+/* 代码 textarea：bg.code 等宽 */
+.agentscfg-editor textarea {
+  flex: 1;
+  font: 12px/1.5 ui-monospace, monospace;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  min-height: 16rem;
+  resize: vertical;
+  background: var(--c-code);
+}
+
+.agentscfg-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .agentscfg-body {
+    flex-direction: column;
+  }
+
+  .agentscfg-list {
+    width: 100%;
+  }
+}

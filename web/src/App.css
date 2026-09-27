@@ -1,0 +1,403 @@
+:root {
+  color-scheme: light; /* 系统色随主题：裸 button 的 UA ButtonFace/滚动条/input 底随三态切换（批反馈：dark 工具芯片白底根因） */
+  /* ===== 亮色主题 token（反馈轮 26-B，Penpot Theme-Light-v1，默认）===== */
+  --c-bg: #ffffff; /* bg 主区背景 */
+  --c-panel: #f7f7f7; /* 次级面/按钮/输入件底（散兵白底统一归此） */
+  --c-bubble: #efefef; /* 用户气泡 */
+  --c-code: var(--c-panel); /* 旧名兼容：代码块/次级面 */
+  --c-code-border: #e5e5e5; /* 代码块围栏描边（与主底拉开层次） */
+  --c-surface: var(--c-panel); /* 旧 surface 语义并入 panel */
+  --c-selected: #efefef; /* 列表选中行 */
+  --c-text: #1a1a1a; /* text.primary */
+  --c-sub: #666666; /* text.secondary（#fff 底 5.7:1） */
+  --c-faint: #6c6c6c; /* text.tertiary（#fff 底 5.25:1、panel 底 4.90:1；批2 bui 卡片落 panel 面后按面板底重校） */
+  --c-inverse: #ffffff; /* accent/深底上文字 */
+  --c-border: #e5e5e5; /* border.subtle */
+  --c-border-input: #e5e5e5; /* border.input */
+  --c-accent: #10a37f; /* accent 主绿（两主题不变；文字场景：Respawn #222 底 4.98:1） */
+  --c-accent-strong: #0c7d60; /* 深绿底场景（绿底白字须 ≥4.5:1：btn-primary/页签/徽章/发送钮/TokenGate 白字对它 5.10:1，hover brightness(1.06) 后 4.60:1）；#10a37f 白字仅 3.2:1 不达标，文字场景勿用（两主题不变） */
+  --c-needs: #f59e0b; /* dot.needs-input */
+  --c-working: #6b7280; /* dot.working */
+  --c-done: #10a37f; /* dot.completed */
+  --c-danger: #cf222e;
+  --c-danger-bg: #fef2f2;
+  --c-danger-border: #f4c7c3;
+  --c-danger-text: #b42318;
+  --c-danger-bright: #f87171; /* 深底（侧栏 #171717/浮层菜单 #222，两主题不变）上的危险红文字：#222 底 5.75:1、hover #2a2a2a 底 5.19:1；浅色态 --c-danger #cf222e 在深底仅 2.97:1 不达标 */
+  --c-green-text: #0a7a5c; /* 状态绿文字态（#fff 底 5.31:1；#10a37f 点色直用不达标，批2 bui 文字场景） */
+  --c-warn-bg: #fff7ed;
+  --c-warn-border: #f5c08a;
+  --c-warn-text: #92400e;
+  /* 深色侧栏 token（两主题下侧栏均为深色系，DeepSeek 式布局） */
+  --c-sidebar: #171717;
+  --c-hover: #2a2a2a; /* 深色栏 hover */
+  --c-hover-strong: #343434; /* 深色栏选中/hover 提亮 */
+  --c-sidebar-border: #303030;
+  --c-sidebar-top: #1f1f1f; /* 顶栏底 */
+  --c-sidebar-line: #2a2a2a; /* 栏内分隔线 */
+  --c-sidebar-item: #222222; /* 底部菜单项/浮层底 */
+  --c-sidebar-text: #c2c2c2; /* 列表行默认文字（#171717 底 ~8:1） */
+  --c-sidebar-text-sel: #f0f0f0; /* 列表行选中文字 */
+  --c-sidebar-icon: #9a9a9a; /* 行内 ⋯/图标（#171717 底 ~6.4:1，反馈轮 26-C 对比度修复） */
+  --r: 10px;
+  --left-w: 260px;
+  --right-w: 280px;
+  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+/* ===== 暗色主题（反馈轮 26-A：手动/系统跟随，useTheme 写 data-theme） =====
+   次要文字对比度硬标准（26-C）：--c-sub/--c-sidebar-icon 在 --c-bg/#171717 底
+   上 ≥4.5:1（#9a9a9a≈6.4:1）；代码块 #1e1e1e 底 + #2e2e2e 描边与主底拉层次 */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --c-bg: #171717;
+  --c-panel: #1e1e1e;
+  --c-code: var(--c-panel);
+  --c-code-border: #2e2e2e;
+  --c-bubble: #262626;
+  --c-selected: #262626;
+  --c-text: #f0f0f0;
+  --c-sub: #b0b0b0; /* #171717 底 ~9:1 */
+  --c-faint: #9a9a9a; /* ~6.4:1 */
+  --c-border: #2e2e2e;
+  --c-border-input: #3a3a3a;
+  --c-danger: #f85149;
+  --c-danger-bg: #2d1517;
+  --c-danger-border: #5c2528;
+  --c-danger-text: #ff8183;
+  --c-danger-bright: #f85149; /* dark 保持现有亮红（#222 底 4.75:1） */
+  --c-green-text: var(--c-done);
+  --c-warn-bg: #2a2200;
+  --c-warn-border: #6b5600;
+  --c-warn-text: #e3b341;
+  --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 编辑元素统一 token（反馈轮 27）：浏览器默认 input/textarea 文字是硬编码黑，
+   不随 body 继承，暗色底下须显式走 --c-text/--c-faint；caret 与文字同色可见 */
+input,
+select,
+textarea {
+  color: var(--c-text);
+  caret-color: var(--c-text);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--c-faint);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font: 14px/1.5 ui-sans, system-ui, -apple-system, sans-serif;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* 按钮：文字/图标一律 flex 居中（规格第四节）；左对齐列表项按钮单独覆盖 */
+button {
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== 共享按钮语义类（弹窗/操作按钮统一） ===== */
+
+.btn-primary,
+.btn-danger,
+.btn-ghost {
+  min-height: 36px;
+  padding: 0 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.btn-primary {
+  border: 1px solid transparent;
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+}
+
+.btn-danger {
+  border: 1px solid transparent;
+  background: var(--c-danger);
+  color: var(--c-inverse);
+}
+
+.btn-primary:hover:not(:disabled),
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.btn-ghost {
+  border: 1px solid var(--c-border);
+  background: var(--c-panel);
+  color: var(--c-text);
+}
+
+.btn-ghost:hover {
+  background: var(--c-code);
+}
+
+.btn-primary:disabled,
+.btn-danger:disabled,
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 768px) {
+  .btn-primary,
+  .btn-danger,
+  .btn-ghost {
+    min-height: 44px;
+  }
+}
+
+/* ===== 弹窗规范（规格第三节，全部弹窗统一） ===== */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 13, 13, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.dialog-card {
+  width: min(560px, 92vw);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-dialog);
+  padding: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+}
+
+.dialog-error {
+  color: var(--c-danger-text);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.dialog-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.dialog-subtitle {
+  margin: 0;
+  font-size: 11px;
+  color: var(--c-sub);
+}
+
+/* ===== 状态圆点（侧栏会话行 / QuickChat 共用；色随现行状态语义：
+   working 绿 / needs_input 黄 / completed 灰 / 空闲 muted——对齐 chat-state-badge） ===== */
+
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.agent-dot--needs_input {
+  background: var(--c-needs);
+}
+
+.agent-dot--working {
+  background: var(--c-accent);
+}
+
+.agent-dot--completed {
+  background: var(--c-working); /* 历史灰 token（现 completed 徽标同色） */
+}
+
+.agent-dot--other {
+  background: var(--c-sub); /* 原 --c-sidebar-sub 未定义 → 空闲点透明，2026-09-23 修 */
+}
+
+/* ===== Sidebar-v2 布局：左深色栏自带 48px 顶栏（原全局 app-header 移除） ===== */
+
+.layout-body {
+  display: flex;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* 左：agent 深色栏（260px 固定） */
+.pane-left {
+  width: var(--left-w);
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--c-sidebar);
+  color: var(--c-inverse);
+}
+
+/* 中：对话主区 */
+.pane-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg);
+}
+
+.pane-main .chat-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-sub);
+}
+
+/* 右：工程列表（280px，白底左描边） */
+.pane-right {
+  width: var(--right-w);
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--c-border);
+  background: var(--c-bg);
+  transition: margin-right 0.2s ease;
+}
+
+.layout:not(.right-open) .pane-right {
+  display: none;
+}
+
+/* ===== Sidebar-v2 折叠态：桌面隐藏左栏；浮动 ☰ 在侧栏不可见时提供展开入口 ===== */
+
+.layout.left-collapsed .pane-left {
+  display: none;
+}
+
+.sidebar-expand {
+  display: none;
+  position: fixed;
+  left: 8px;
+  top: 8px;
+  z-index: 30;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-sidebar);
+  color: var(--c-inverse);
+  font-size: 14px;
+}
+
+@media (min-width: 769px) {
+  .layout.left-collapsed .sidebar-expand {
+    display: inline-flex;
+  }
+}
+
+/* ===== 手机 ≤768px：对话全屏 + 双抽屉（机制不变） ===== */
+
+/* 反馈轮 25-A：抽屉遮罩桌面恒隐藏（≤768px 媒体查询内才显示） */
+.drawer-overlay {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .pane-left {
+    display: none;
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    z-index: 22;
+    border-radius: 0 var(--r) var(--r) 0;
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.3);
+  }
+
+  .layout.left-open .pane-left {
+    display: block;
+  }
+
+  .pane-right {
+    display: none;
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: min(300px, 85vw);
+    z-index: 22;
+    border-radius: var(--r) 0 0 var(--r);
+    border-left: none;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .layout.right-open .pane-right {
+    display: block;
+  }
+
+  .pane-main {
+    height: 100%;
+  }
+
+  /* 抽屉关闭时显示浮动 ☰（打开左栏抽屉） */
+  .layout:not(.left-open) .sidebar-expand {
+    display: inline-flex;
+  }
+
+  /* 反馈轮 25-A：左抽屉打开时的全屏遮罩——半透明黑，覆盖抽屉以外整个页面；
+      点击关闭抽屉。z-index 21：抽屉（22）之下、页面内容之上。桌面恒隐藏。 */
+  .drawer-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 21;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  /* 有会话时顶栏行首已有汉堡（ChatTab .chat-topbar-menu-btn，反馈轮 20）：
+     fixed 浮层 ☰ 与顶栏标题同位会遮字，此处隐藏避免双汉堡 */
+  .layout.has-session:not(.left-open) .sidebar-expand {
+    display: none;
+  }
+}
+
+/* ===== 响应式显隐助手（顶栏/会话顶栏共用） ===== */
+
+.show-mobile {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .show-mobile {
+    display: inline;
+  }
+}

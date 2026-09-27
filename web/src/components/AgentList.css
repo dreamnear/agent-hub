@@ -1,0 +1,201 @@
+/* 左侧栏（Sidebar-v2）：顶部品牌条 + 全宽会话列表 + 底部功能菜单；色值全走 App.css token */
+
+.agent-list {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  color: var(--c-inverse);
+}
+
+/* 顶部品牌条：48h，agent-hub accent 14/700 + 右侧搜索/折叠图标（Penpot SB-TopBar） */
+.sb-topbar {
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px 0 14px;
+  background: var(--c-sidebar-top);
+  border-bottom: 1px solid var(--c-sidebar-line);
+}
+
+.sb-brand {
+  margin-right: auto;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--c-accent);
+}
+
+.sb-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-sidebar-sub);
+  padding: 0;
+}
+
+.sb-icon-btn:hover {
+  background: var(--c-hover);
+  color: var(--c-inverse);
+}
+
+/* 会话列表：顶栏之下直接开始（9px 首行间距对齐设计稿），只显示标题 */
+.sb-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 9px 0 0.5rem;
+}
+
+.sb-empty {
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--c-sidebar-sub);
+  font-size: 12px;
+}
+
+/* ===== Sidebar-v3 可折叠状态分组（反馈轮 18，Penpot Sidebar-v3 板）===== */
+
+/* ===== 多实例分组（任务6）：实例分组头 + 离线置灰 ===== */
+.inst-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.inst-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--c-sidebar-text, #e5e7eb);
+}
+
+.inst-group-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.inst-group-offline {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--c-sidebar-icon, #777777);
+}
+
+.inst-group-count {
+  margin-left: auto;
+  color: var(--c-sidebar-icon, #777777);
+  font-weight: 400;
+}
+
+/* 离线组置灰：组头 + 组内桶整体降透明度（其余实例不受影响） */
+.inst-group-head--offline {
+  opacity: 0.55;
+}
+.agent-group-head--offline {
+  opacity: 0.5;
+}
+
+/* 凭据失效态（任务10）：区别于离线置灰——服务可达但 token 无效；
+   点击进实例管理重配。侧栏深底两主题不变，用危险红亮色 token */
+.inst-group-autherr {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--c-danger-bright, #f87171);
+  cursor: pointer;
+}
+
+/* 组头：▾/▸ + 组名 + 计数，全宽可点 */
+.agent-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--c-sidebar-sub, #9ca3af);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  justify-content: flex-start; /* 覆盖全局 button 居中：组头左对齐 */
+  padding: 8px 14px 4px;
+}
+
+.agent-group-caret {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.agent-group-count {
+  margin-left: auto;
+  color: var(--c-sidebar-icon, #777777);
+  font-weight: 400;
+}
+
+/* 底部功能菜单区：分隔线之下三项（DeepSeek 式，Penpot Sidebar-v2 底部块） */
+.sb-menu {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--c-sidebar-line);
+}
+
+.sb-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: var(--c-sidebar-item);
+  color: var(--c-sidebar-text);
+  font-size: 12px;
+  font-weight: 600;
+  justify-content: flex-start;
+  padding: 0 10px;
+  width: 100%;
+}
+
+.sb-menu-item:hover {
+  background: var(--c-hover);
+  color: var(--c-inverse);
+}
+
+.sb-menu-icon {
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* 过滤隐藏提示条（反馈轮 24-A，Penpot filter-hidden-hint）：#1f1f1f 底 36px 行 11px #777 文本 */
+.filter-hidden-hint {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start; /* 覆盖全局 button 居中 */
+  min-height: 36px;
+  padding: 0 0.8rem;
+  border: none;
+  background: #1f1f1f;
+  color: #777;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+
+.filter-hidden-hint:hover {
+  color: #999;
+}

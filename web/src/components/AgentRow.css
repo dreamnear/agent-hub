@@ -1,0 +1,130 @@
+/* 单行会话行（Beautiful UI 批4：官网 sidebar-row 形态——32h 内缩圆角行，
+   选中 hover-2 底 + 亮文字；accent 点/⋯ 菜单等 r18 语义保留） */
+
+.agent-row-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  margin: 0 8px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.agent-row-wrap:hover {
+  background: var(--c-hover);
+}
+
+/* 选中态：官网 active = bg-hover-2 底 + 亮文字（accent 竖条随贴边形态移除） */
+.agent-row-wrap--sel,
+.agent-row-wrap--sel:hover {
+  background: var(--c-hover-strong);
+}
+
+.agent-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px; /* 状态圆点与名字间距（圆点样式在 App.css .agent-dot） */
+  justify-content: flex-start; /* 覆盖全局 button 居中：行文字左对齐 */
+  border: none;
+  background: transparent;
+  color: var(--c-sidebar-text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 0 0 8px;
+}
+
+.agent-row-wrap--sel .agent-row {
+  color: var(--c-sidebar-text-sel);
+}
+
+.agent-row-wrap--sel .agent-row {
+  color: var(--c-sidebar-text-sel);
+}
+
+.agent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 行内 ⋯ 菜单按钮 */
+.agent-row-menu-btn {
+  flex-shrink: 0;
+  width: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-sidebar-icon);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.agent-row-menu-btn:hover {
+  color: var(--c-inverse);
+}
+
+/* ⋯ 浮层菜单：fixed 定位（防被栏内滚动裁剪），点击遮罩关闭 */
+.agent-row-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+}
+
+.agent-row-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--c-sidebar-item);
+  border: 1px solid var(--c-sidebar-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-dialog);
+  padding: 4px;
+}
+
+.agent-row-menu button {
+  min-height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--c-sidebar-text);
+  font-size: 12px;
+  font-weight: 600;
+  justify-content: flex-start;
+  padding: 0 10px;
+  width: 100%;
+}
+
+.agent-row-menu button:hover {
+  background: var(--c-hover);
+  color: var(--c-inverse);
+}
+
+/* 会话操作分组分隔线（2026-09-22：危险操作 Sto/Respawn/Remove 收进菜单底部分组） */
+.agent-row-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--c-sidebar-border);
+}
+
+/* 危险操作（Stop/Remove）：红字 + hover 红底，与普通操作视觉区分防误触。
+   浮层菜单两主题均为深底（--c-sidebar-item #222），故用亮红变体 --c-danger-bright
+   （浅色态 --c-danger #cf222e 深底仅 2.97:1 不达标） */
+.agent-row-menu button.agent-row-menu-danger:hover,
+.agent-row-menu button.agent-row-menu-danger {
+  color: var(--c-danger-bright);
+}
+
+/* Respawn：accent 绿字（同原顶栏 Respawn 绿钮语义） */
+.agent-row-menu button.agent-row-menu-respawn {
+  color: var(--c-accent);
+}

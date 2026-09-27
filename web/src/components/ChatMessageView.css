@@ -1,0 +1,330 @@
+/* ===== 对话流（Penpot 规格）===== */
+
+.chat-msg {
+  display: flex;
+  margin: 0.45rem 0;
+}
+
+/* 用户消息：右对齐气泡 bg.bubble 圆角 18，文字居中，最大宽 70% */
+.chat-msg--user {
+  justify-content: flex-end;
+}
+
+.chat-bubble--user {
+  max-width: 70%;
+  padding: 12px 18px;
+  border-radius: 18px;
+  background: var(--c-bubble);
+  color: var(--c-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.92rem;
+  text-align: left;
+}
+
+.chat-time {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--c-sub);
+  margin-top: 0.2rem;
+}
+
+/* assistant 消息：28x28 黑圆头像 + 正文左对齐无气泡，正文距头像 16px */
+.chat-msg--assistant {
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.assistant-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--c-accent);
+  color: var(--c-inverse);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chat-assistant-body {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+  padding-top: 2px;
+  word-break: break-word;
+}
+
+/* ANSI 保色路径限域：SGR 背景色只落 .ansi 内的 inline span（parseAnsi 产出），
+   容器与正文永不吃背景色；高度随内容自然撑开。 */
+.ansi {
+  background: none;
+}
+
+/* ===== thinking / tool_result 收敛卡（渲染逻辑不变，容器对齐规格） ===== */
+
+.chat-card {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  margin: 0.45rem 0;
+  background: var(--c-panel);
+  font-size: 0.88rem;
+}
+
+.chat-card summary {
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  list-style: none;
+  min-height: 44px; /* 触摸热区 */
+}
+
+/* ===== 任务清单卡片（TaskCreate/TaskUpdate 聚合）=====
+   视觉评审 r1：去 1px --c-border 描边（「边框太重」主因），卡盒改 BUI 形态
+   bg-surface + shadow-card + rounded-card（token 引用，值随 theme.css 分主题）。
+   保留 padding 作卡内呼吸（TaskListBar/SubagentBar 的 summary/chip 依赖它定距）；
+   内层 BuiTaskRows(List) 自带同款 bg/shadow/radius，下方去重防双重盒子。 */
+.task-list-card {
+  margin: 0.45rem 0;
+  border: 0;
+  border-radius: var(--radius-card, 10px);
+  background: var(--c-panel); /* bg-surface */
+  box-shadow: var(--shadow-card);
+  padding: 0.5rem 0.7rem;
+  max-width: 85%;
+  font-size: 0.85rem;
+}
+
+/* TaskListBar：内层 BuiTaskRows(List) 根节点与外层卡同款盒——去重只留一份；
+   行间分隔线对齐官网 tone-on-tone（评审 r1 UNMET#5：--c-border 偏重 → --bui-tone 微差环色，
+   token 定义在 bui/theme.css 分主题取值） */
+.task-list-card [role='list'] > div {
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+.task-list-card [role='list'] > div > div {
+  border-color: var(--bui-tone);
+}
+
+/* BUI 挂载点按钮去 UA 默认 2px outset 描边（用户所见「每行明显描边框」的另一主因：
+   任务行/工具 chip 行/复制按钮均为裸 <button>，工程未引 Tailwind preflight，
+   UA 默认描边比官网重得多）。按 preflight 语义仅对 data-bui 挂载点内按钮补齐——
+   现上页面 BUI 按钮无一依赖边框类；后续批组件若需设计边框，走自身 border 工具类并复验。 */
+[data-bui] button {
+  border: 0;
+}
+
+.task-list-head {
+  font-weight: 600;
+  color: var(--c-text);
+  margin-bottom: 0.3rem;
+}
+
+.task-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0;
+}
+
+.task-icon {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+}
+
+.task-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态视觉：等待弱化 / 进行中强调 / 已完成删除线 */
+.task-row--pending .task-subject {
+  color: var(--c-sub);
+}
+
+.task-row--in_progress .task-subject {
+  color: var(--c-text);
+  font-weight: 600;
+}
+
+.task-row--completed .task-subject {
+  color: var(--c-sub);
+  text-decoration: line-through;
+}
+
+.chat-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-card summary::before {
+  content: '▸';
+  color: var(--c-sub);
+}
+
+.chat-card[open] summary::before {
+  content: '▾';
+}
+
+.chat-bubble--thinking {
+  background: var(--c-code);
+  color: var(--c-sub);
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-badge {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--c-code);
+  border: 1px solid var(--c-border);
+  color: var(--c-sub);
+}
+
+.chat-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-sub);
+}
+
+.chat-json {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-code);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  overflow: auto;
+  max-height: 16rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ===== 工具调用收敛卡 ===== */
+
+.tool-call-card .tool-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.tool-dot--running {
+  background: var(--c-sub);
+  animation: tool-pulse 1.2s ease-in-out infinite;
+}
+
+.tool-dot--ok {
+  background: var(--c-done);
+}
+
+.tool-dot--fail {
+  background: var(--c-danger);
+}
+
+@keyframes tool-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.tool-name {
+  font-weight: 600;
+}
+
+.tool-state {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--c-sub);
+}
+
+.tool-io {
+  margin: 0;
+  padding: 16px;
+  border-top: 1px solid var(--c-code-border);
+  background: var(--c-code);
+  border-radius: 0 0 8px 8px;
+  font: 12px/1.5 ui-monospace, monospace;
+  overflow: auto;
+  max-height: 16rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 图片 @路径收敛胶囊（缩略图加载失败的回落占位，输入区 [image#n] 芯片同款观感）：
+   只改展示层，原路径随消息数据保留（title 透出尾段便于排障），token 全走 --c-* 双态生效 */
+.img-pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-code);
+  color: var(--c-sub);
+  font-size: 0.78rem;
+  word-break: keep-all;
+}
+
+/* ===== 图片缩略图（r72）：消息流内嵌可视化，TUI 显示不了图，hub 直接看 ===== */
+
+.img-thumb {
+  display: inline-block;
+  margin: 0.15rem 0.15rem 0.15rem 0;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  line-height: 0; /* 行内 img 底部基线缝隙归零 */
+  vertical-align: middle;
+  cursor: zoom-in;
+}
+
+/* 紧凑卡片：thumb ≤160px，100% 兜底防 375 小屏撑破气泡 */
+.img-thumb img {
+  display: block;
+  max-width: min(160px, 100%);
+  max-height: 120px;
+  width: auto;
+  height: auto;
+}
+
+/* 灯箱：全屏遮罩看大图（ESC/点击任意处关闭，浏览器原生缩放） */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(13, 13, 13, 0.8); /* 弹窗规格遮罩色（同 QuickChat/AgentsConfigPanel） */
+  cursor: zoom-out;
+}
+
+.img-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+}
+
+/* ===== 系统通知块摘要条（task-notification/system-reminder 折叠）=====
+   弱化单行：小字 + sub 色（chat-detail 自带），盒/折叠箭头/等宽展开体复用
+   .chat-card 与 .chat-json；色全走 token，两主题对比度随既有变量。 */
+.sys-block {
+  font-size: 0.8rem;
+  margin: 0.3rem 0;
+}
+
+/* 工具卡 detail 内的来源变体：更紧凑，与消息文本形态区分 */
+.sys-block--tool {
+  font-size: 0.72rem;
+  margin: 0.15rem 0;
+}

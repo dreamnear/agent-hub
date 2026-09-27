@@ -1,0 +1,158 @@
+/* ⌘K 面板（Beautiful UI 批4 SearchList 视觉）：620 卡 raised 阴影，
+   输入行 icon+border-b，行 hover 圆角高亮；backdrop 用规格遮罩色 */
+.quickchat-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 13, 13, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 25;
+}
+
+.quickchat-card {
+  width: min(620px, 92vw);
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-raised);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 输入行：官网 SearchList「icon + input + border-b」形态（h-10 px-3） */
+.quickchat-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 44px;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.quickchat-search-icon {
+  color: var(--c-faint);
+}
+
+.quickchat-search {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text);
+}
+
+.quickchat-search::placeholder {
+  color: var(--c-faint);
+}
+
+.quickchat-search:focus {
+  outline: none;
+}
+
+.quickchat-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+}
+
+/* 列表行 44h：状态点 + 名称 600 + cwd/状态次级；官网行形态 rounded-[6px]，
+   选中 = bg-hover（token 派生 hover 底），无描边 */
+.qc-opt {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  min-height: 44px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.qc-opt--sel,
+.qc-opt:hover {
+  background: var(--c-hover);
+}
+
+.qc-name {
+  font-weight: 500;
+  flex-shrink: 0;
+  color: var(--c-text);
+}
+
+.qc-cwd {
+  flex: 1;
+  color: var(--c-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qc-state {
+  font-size: 11px;
+  color: var(--c-faint);
+  flex-shrink: 0;
+}
+
+.qc-enter {
+  font-size: 11px;
+  color: var(--c-faint);
+  flex-shrink: 0;
+}
+
+/* empty state：官网 SearchList 形态（圆底 icon + 标题 + 提示） */
+.qc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.qc-empty-icon {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: var(--c-code);
+  color: var(--c-faint);
+  box-shadow: var(--shadow-hairline);
+}
+
+.qc-empty-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text);
+}
+
+.qc-empty-hint {
+  font-size: 12px;
+  color: var(--c-faint);
+}
+
+.quickchat-footer {
+  font-size: 11px;
+  color: var(--c-faint);
+  text-align: center;
+  padding: 0.35rem 0.8rem 0.6rem;
+  border-top: 1px solid var(--c-border);
+}

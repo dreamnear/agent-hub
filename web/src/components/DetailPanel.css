@@ -1,0 +1,81 @@
+.detail-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, 92vw);
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r);
+  background: var(--c-bg);
+  padding: 1rem;
+  box-shadow: var(--shadow-dialog);
+  z-index: 20;
+}
+
+.detail-panel.needs-input {
+  border-color: var(--c-needs);
+}
+
+.detail-field {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.detail-field dt {
+  color: var(--c-sub);
+  font-size: 0.85rem;
+}
+
+.detail-field dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.logs-pre {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.6rem;
+  max-height: 20rem;
+  overflow: auto;
+  background: var(--c-code);
+  font: 12px/1.5 ui-monospace, monospace;
+  white-space: pre-wrap;
+  margin-top: 0.7rem;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.detail-tabs {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.detail-tabs button {
+  padding: 0.35rem 0.8rem;
+  min-height: 44px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+}
+
+.detail-tabs button[aria-selected='true'] {
+  background: var(--c-accent);
+  color: var(--c-inverse);
+  border-color: var(--c-accent);
+}

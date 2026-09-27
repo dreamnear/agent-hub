@@ -1,0 +1,24 @@
+# agent-hub server systemd 常驻单元（Linux arm64/aarch64 远程实例）
+# 安装：sudo cp deploy/claude-view-server.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# 注意：User 必须是已 `claude` 登录的用户（server spawn 的子进程依赖其 ~/.claude 登录态）
+
+[Unit]
+Description=agent-hub server (claude-view)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 按实际用户改：登录态（~/.claude）与数据目录（~/.claude-view）都归属该用户
+User=pi
+Environment=AGENT_HUB_ALLOW_LAN=1
+# 占位：替换为强随机串（openssl rand -hex 32）；或删除本行，由 server 首启自生成并持久化到 ~/.claude-view/token
+Environment=AGENT_HUB_TOKEN=CHANGE_ME
+# 可选：监听地址（默认 0.0.0.0:7801 时无需设置；allow_lan=1 已强制 0.0.0.0）
+# Environment=AGENT_HUB_BIND=0.0.0.0:7801
+ExecStart=/usr/local/bin/claude-view-server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

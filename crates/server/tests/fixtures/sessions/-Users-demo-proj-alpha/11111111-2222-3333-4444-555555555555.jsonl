@@ -1,0 +1,7 @@
+{"type":"user","sessionId":"s-1","timestamp":"2026-09-16T08:00:00.000Z","cwd":"/Users/demo/proj-alpha","message":{"role":"user","content":"帮我看看构建错误"}}
+{"type":"assistant","sessionId":"s-1","timestamp":"2026-09-16T08:00:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"需要先看报错输出"}]}}
+{"type":"assistant","sessionId":"s-1","timestamp":"2026-09-16T08:00:06.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"cargo build"}}]}}
+{"type":"user","sessionId":"s-1","timestamp":"2026-09-16T08:00:08.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"Compiling server v0.1.0"}]}}
+{"type":"assistant","sessionId":"s-1","timestamp":"2026-09-16T08:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"构建通过了"}]}}
+not-a-json-line {{{
+{"type":"file-history-snapshot","snapshot":{"trackedFileBases":[]}}

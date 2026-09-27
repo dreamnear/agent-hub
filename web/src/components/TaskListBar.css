@@ -1,0 +1,45 @@
+/* 任务清单固定栏：固定于会话窗口底部（消息列表之下、输入区之上），
+   样式沿用 .task-list-card（ChatMessageView.css），此处覆盖固定栏定位与折叠交互。
+   宽度对齐消息内容列（.chat-list > * 的 748px 居中约束），不通栏到窗口边缘 */
+.task-bar {
+  width: 100%;
+  max-width: 748px;
+  margin: 0.35rem auto 0;
+  flex-shrink: 0;
+}
+
+.task-bar summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  list-style: none;
+  user-select: none;
+}
+
+.task-bar summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-bar summary::before {
+  content: '▸ ';
+  color: var(--c-sub);
+}
+
+.task-bar[open] summary::before {
+  content: '▾ ';
+}
+
+.task-bar-summary-text {
+  font-weight: 600;
+  color: var(--c-text);
+  font-size: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-bar > div {
+  margin-top: 0.3rem;
+}

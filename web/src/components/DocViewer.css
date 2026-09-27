@@ -1,0 +1,273 @@
+/* ===== P6 反馈轮 12：VSCode 式树状文档浏览器 ===== */
+
+/* ===== 反馈轮 15：左右分栏——左树固定宽自身滚，右内容占满余宽 ===== */
+
+/* 高度链接管：chat-tab（flex column）→ docs 区占剩余全部高度，树超长可滚 */
+.chat-docs-area {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 切 Tab 隐藏而非卸载：树展开集/预览文件跨 Tab 保持（反馈轮 15 裁决修复） */
+.chat-docs-area--hidden {
+  display: none;
+}
+
+.doc-viewer {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.doc-tree-pane {
+  width: 280px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--c-border, #ddd);
+  padding: 0.5rem 0.4rem 0.5rem 0.9rem;
+}
+
+.doc-preview-pane {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden; /* 内容视图自滚，防双滚动条 */
+  padding: 0.5rem 0.9rem 0.5rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-empty-hint {
+  margin: auto;
+  color: var(--c-sub, #888);
+  font-size: 0.85rem;
+}
+
+.doc-tree,
+.doc-tree-sub {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-tree-sub {
+  /* 子级不再额外 margin：缩进由行内 paddingLeft 统一控制，保证同 depth 左缘严格对齐 */
+}
+
+.doc-row {
+  display: flex;
+  /* 覆盖全局 button 居中（App.css）：行内容左对齐，缩进只由行内 paddingLeft 控制（反馈轮 14） */
+  justify-content: flex-start;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: none;
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+  padding-right: 0.4rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  min-height: 26px;
+}
+
+.doc-row:hover {
+  background: var(--c-code, #f2f2f2);
+}
+
+.doc-row--active {
+  background: var(--c-code, #e8f0fe);
+  border-color: var(--c-accent, #36c);
+}
+
+.doc-caret {
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--c-sub, #888);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.doc-icon {
+  flex-shrink: 0;
+}
+
+.doc-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-kind {
+  margin-left: auto;
+  color: var(--c-sub, #888);
+  font-size: 0.68rem;
+}
+
+.doc-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--c-border, #ddd);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.doc-preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0.3rem 0.6rem;
+  background: var(--c-code, #f2f2f2);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.doc-preview-head button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  min-height: 22px;
+  padding: 0 0.35rem;
+}
+
+.doc-md {
+  flex: 1;
+  min-height: 0;
+  padding: 0.5rem 0.8rem;
+  overflow-y: auto;
+}
+
+.doc-html {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: var(--c-bg);
+}
+
+.doc-text {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0.5rem 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* ===== 移动端两态（≤768px，设计稿 DocViewer-Mobile-A/B，反馈轮 16）=====
+   桌面端以下规则全不生效；两态由 .doc-viewer--m-preview 类驱动 */
+
+.doc-mobile-head,
+.doc-mobile-back {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .doc-viewer {
+    flex-direction: column;
+  }
+
+  /* 树态：顶栏 + 目录树占满剩余全高（预览区隐藏，已选文件状态保留组件内） */
+  .doc-mobile-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    height: 44px;
+    padding: 0 0.9rem;
+    background: var(--c-sidebar, #171717);
+    color: var(--c-sidebar-text, #b8b8b8);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .doc-mobile-head button {
+    border: none;
+    background: none;
+    color: var(--c-sidebar-text, #b8b8b8);
+    font-size: 1.05rem;
+    min-height: 22px;
+    padding: 0 0.35rem;
+  }
+
+  .doc-preview-pane {
+    display: none;
+    padding: 0.5rem 0.9rem;
+  }
+
+  .doc-tree-pane {
+    width: 100%;
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--c-border, #ececec);
+    padding: 0.5rem 0.9rem;
+  }
+
+  /* 预览态：顶栏隐藏，树收起为 44px 返回栏（整条可点回树态），预览占满剩余全部高度 */
+  .doc-viewer--m-preview .doc-mobile-head {
+    display: none;
+  }
+
+  .doc-viewer--m-preview .doc-mobile-back {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+    border: none;
+    background: none;
+    min-height: 44px;
+    padding: 0 0.6rem;
+    font: inherit;
+    font-size: 0.8rem;
+    color: var(--c-text, #0d0d0d);
+    text-align: left;
+    justify-content: flex-start;
+  }
+
+  .doc-mobile-back-arrow {
+    color: var(--c-accent, #10a37f);
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .doc-mobile-back-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .doc-viewer--m-preview .doc-tree {
+    display: none;
+  }
+
+  .doc-viewer--m-preview .doc-tree-pane {
+    flex: 0 0 44px;
+    max-height: 44px;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .doc-viewer--m-preview .doc-preview-pane {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+.doc-hint {
+  color: var(--c-sub, #888);
+  padding: 0.3rem 0.2rem;
+}
+
+.doc-hint--err {
+  color: var(--c-warn-text, #a33);
+}

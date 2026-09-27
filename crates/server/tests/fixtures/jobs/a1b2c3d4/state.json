@@ -1,0 +1,9 @@
+{
+  "state": "blocked",
+  "detail": "Waiting for permission to run Bash command",
+  "tokens": 45231,
+  "name": "refactor-auth",
+  "sessionId": "3f9a2b7c-1111-2222-3333-444455556666",
+  "cwd": "/Users/demo/proj-alpha",
+  "updatedAt": "2026-09-16T12:00:00Z"
+}

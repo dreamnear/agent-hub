@@ -1,0 +1,152 @@
+/* ===== P6 批次 3：git 面板（B4-B7） ===== */
+
+.git-panel {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.78rem;
+  overflow-y: auto;
+}
+
+.git-title {
+  font-weight: 600;
+  color: var(--c-text, #222);
+  margin-bottom: 0.25rem;
+}
+
+.git-upstream {
+  color: var(--c-sub, #888);
+  font-weight: 400;
+}
+
+.git-meta {
+  display: flex;
+  gap: 0.6rem;
+  color: var(--c-sub, #888);
+  margin-bottom: 0.3rem;
+}
+
+.git-ab {
+  color: var(--c-accent, #36c);
+}
+
+.git-group-title {
+  color: var(--c-sub, #888);
+  margin: 0.4rem 0 0.15rem;
+}
+
+.git-files,
+.git-submods {
+  display: flex;
+  flex-direction: column;
+}
+
+.git-file {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: none;
+  padding: 0.15rem 0.3rem;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.git-file:hover {
+  background: var(--c-code, #f2f2f2);
+}
+
+.git-file-mark {
+  font-weight: 700;
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--c-accent, #36c);
+}
+
+.git-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-submod {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0.3rem;
+}
+
+.git-submod-mark {
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--c-warn-text, #a63);
+}
+
+.git-submod-sha {
+  margin-left: auto;
+  color: var(--c-sub, #888);
+}
+
+.git-diff-box {
+  margin-top: 0.4rem;
+  border: 1px solid var(--c-border, #ddd);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.git-diff-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  background: var(--c-code, #f2f2f2);
+  font-size: 0.72rem;
+}
+
+.git-diff-head button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  min-height: 20px;
+  padding: 0 0.3rem;
+}
+
+.git-diff {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  overflow: auto;
+  max-height: 14rem;
+  white-space: pre;
+}
+
+.git-wt-form {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.git-wt-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--c-border-input, #ccc);
+  border-radius: 6px;
+}
+
+.git-wt-form button {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--c-border, #ccc);
+  border-radius: 6px;
+  background: var(--c-bg, #fff);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.git-wt-msg {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--c-sub, #888);
+  word-break: break-all;
+}

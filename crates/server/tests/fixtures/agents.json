@@ -1,0 +1,29 @@
+[
+  {
+    "id": "a1b2c3d4",
+    "cwd": "/Users/demo/proj-alpha",
+    "kind": "background",
+    "startedAt": 1758000000,
+    "sessionId": "3f9a2b7c-1111-2222-3333-444455556666",
+    "name": "refactor-auth",
+    "state": "blocked"
+  },
+  {
+    "id": "e5f6a7b8",
+    "cwd": "/Users/demo/proj-beta",
+    "kind": "interactive",
+    "startedAt": 1758000100,
+    "sessionId": "4a8b3c8d-aaaa-bbbb-cccc-ddddeeeeffff",
+    "name": null,
+    "state": "running"
+  },
+  {
+    "id": "c9d0e1f2",
+    "cwd": "/Users/demo/proj-gamma",
+    "kind": "background",
+    "startedAt": 1757999900,
+    "sessionId": null,
+    "name": "nightly-sync",
+    "state": "exited"
+  }
+]

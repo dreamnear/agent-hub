@@ -1,0 +1,582 @@
+/* 高度由 .pane-main .chat-tab（flex:1 + min-height:0）接管，撑满中栏 */
+.chat-tab {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== TopBar 52h 白底下描边 ===== */
+
+.chat-area-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 52px;
+  padding: 0.3rem 0.9rem;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg);
+  flex-wrap: wrap;
+}
+
+.chat-topbar-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-topbar-name {
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0; /* 批5 MINOR-2：标题优先完整显示，右面板展开挤压时由 cwd 截断让位 */
+}
+
+/* cwd 路径占余宽截断（长路径不再把标题挤出可视区） */
+.chat-topbar-info .chat-topbar-meta:first-of-type {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 状态徽标：22h 圆角 11（working 绿底白字 / needs_input 黄底深字 / completed 灰底白字） */
+.chat-state-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 0.55rem;
+  border-radius: 11px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chat-state-badge--working {
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+}
+
+.chat-state-badge--needs_input {
+  background: var(--c-needs);
+  color: var(--c-text);
+}
+
+.chat-state-badge--completed {
+  background: var(--c-working);
+  color: var(--c-inverse);
+}
+
+.chat-state-badge--other {
+  background: var(--c-code);
+  color: var(--c-sub);
+  border: 1px solid var(--c-border);
+}
+
+.chat-topbar-meta {
+  font-size: 0.75rem;
+  color: var(--c-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 顶栏右侧操作区：视图页签 + ⌘K 搜索 + 关闭（会话级操作已移侧栏 ⋯ 菜单） */
+.chat-topbar-actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.chat-topbar-actions button {
+  min-height: 28px;
+  padding: 0 0.65rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 14px;
+  background: var(--c-panel);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.chat-topbar-actions button:hover {
+  border-color: var(--c-sub);
+}
+
+/* ⌘K 搜索：文字按钮次级色（无描边） */
+.chat-topbar-actions .btn-topbar-search {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-sub);
+}
+
+.chat-topbar-actions .btn-topbar-search:hover {
+  color: var(--c-text);
+  border-color: transparent;
+}
+
+/* 工程便签切换钮（agent-hub-notes 增强，原 ⌘K 搜索钮位；移动端保留）：
+   次级色透明底；打开态 accent 描边+字色高亮 */
+.chat-topbar-actions .btn-topbar-notes {
+  border-color: transparent;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 0.45rem;
+}
+
+.chat-topbar-actions .btn-topbar-notes:hover {
+  color: var(--c-text);
+  border-color: var(--c-border-input);
+}
+
+.chat-topbar-actions .btn-topbar-notes--open {
+  color: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+/* 对话列与输入卡对齐（max-width 748 居中） */
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  /* 兜底：个别内容仍超列宽时裁掉而非让整个消息流横向平移
+     （平移会把所有卡片右缘推出屏幕——2026-09-23 移动端反馈的症状） */
+  overflow-x: hidden;
+  padding: 0.6rem 0.9rem;
+}
+
+.chat-list > * {
+  max-width: 748px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+.chat-empty {
+  color: var(--c-sub);
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+/* 会话历史加载提示（反馈轮 11）：仅真实等待（无缓存且在途）出现，缓存命中不闪 */
+.chat-session-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--c-sub);
+  padding: 1.5rem 0;
+}
+
+.chat-session-loading .session-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--c-border);
+  border-top-color: var(--c-accent);
+  border-radius: 999px;
+  animation: send-spin 0.7s linear infinite;
+}
+
+/* 会话历史加载失败：提示 + 重试入口 */
+.chat-session-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--c-warn-text);
+  padding: 1.5rem 0;
+}
+
+.chat-session-error button {
+  padding: 0.25rem 0.8rem;
+  min-height: 32px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+}
+
+/* 向上翻页（P6 B13）：列表顶部居中胶囊按钮，随内容滚出视野（滚到顶自然可见）。
+   与消息列边界对齐（2026-09-22 用户反馈）：兄弟消息靠 .chat-list>* 的
+   margin:auto 水平居中，但按钮默认 inline-flex 不受 margin:auto 居中——
+   改 block + text-align:center 让 margin:auto 生效，双端同队列对齐。 */
+.chat-load-older {
+  margin: 0.5rem auto 0.2rem;
+  display: block;
+  text-align: center;
+  padding: 0.3rem 1rem;
+  min-height: 30px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  color: var(--c-sub);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.chat-load-older:hover {
+  border-color: var(--c-accent);
+  color: var(--c-text);
+}
+
+.chat-load-older:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 全量拉回（B13）：翻页耗尽提示 */
+.chat-no-more {
+  text-align: center;
+  color: var(--c-sub);
+  font-size: 0.8rem;
+  padding: 0.6rem 0 0.2rem;
+}
+
+/* pendingAsk 提示条（warn 组 token） */
+.chat-pending-ask {
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0 auto 0.4rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  background: var(--c-warn-bg);
+  border: 1px solid var(--c-warn-border);
+  color: var(--c-warn-text);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.chat-error {
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0 auto 0.3rem;
+}
+
+.chat-uploading {
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0 auto 0.3rem;
+  font-size: 0.8rem;
+  color: var(--c-sub);
+}
+
+/* ===== 输入卡：max-width 748 居中，圆角 24，focus 态，内嵌发送钮 ===== */
+
+.chat-input {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0.35rem auto 0.9rem;
+  padding: 0.4rem 0.6rem;
+  /* Beautiful UI 批4 官网 composer 形态：surface 底 + card 阴影 + 14px 圆角，
+     聚焦边框 line-strong（border-input token） */
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  background: var(--c-panel);
+  box-shadow: var(--shadow-card);
+  flex-shrink: 0;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-input:focus-within {
+  border-color: var(--c-border-input);
+}
+
+/* subagent 只读态提示（P5+）：聚焦子会话时替代输入区；右侧显式返回按钮 */
+.chat-readonly-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0.35rem auto 0;
+  padding: 0.4rem 0.5rem 0.4rem 0.8rem;
+  border: 1px dashed var(--c-border-input);
+  border-radius: 12px;
+  color: var(--c-sub);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.chat-readonly-hint button {
+  border: 1px solid var(--c-border-input);
+  border-radius: 999px;
+  background: var(--c-panel);
+  color: var(--c-text);
+  padding: 0.18rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease;
+}
+
+.chat-readonly-hint button:hover {
+  border-color: var(--c-text);
+}
+
+/* 初始一行紧凑（preview 反馈五），多行由 ChatTab 自适应增高，封顶后内滚 */
+.chat-input textarea {
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  min-height: 24px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: transparent;
+}
+
+.chat-input textarea::placeholder {
+  color: var(--c-faint);
+  font-size: 15px;
+}
+
+.chat-input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-image-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 1rem;
+}
+
+.chat-image-btn:hover {
+  background: var(--c-code);
+}
+
+/* 右下角内嵌圆形发送按钮：36x36 accent-strong，↑ 白 18px（白字对比度红线同 btn-primary） */
+.chat-send-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.chat-send-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.chat-send-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 工作态/发送中：转圈即按钮，点击 = 中断（反馈 7-3）；发信 ↑ 仅空闲态出现 */
+.chat-send-btn .send-spinner {
+  cursor: pointer;
+}
+
+/* 发送中 spinner（accent 底上反白） */
+.chat-send-btn .send-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--c-bubble);
+  border-top-color: var(--c-inverse);
+  border-radius: 999px;
+  animation: send-spin 0.7s linear infinite;
+}
+
+@keyframes send-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 视图切换（2026-09-22 顶栏重排）：并入顶栏右侧操作区，与 ⌘K 搜索并排 */
+.chat-view-toggle {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0;
+}
+
+.chat-view-toggle button {
+  padding: 0 0.75rem;
+  min-height: 28px;
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  background: var(--c-panel);
+  font-size: 0.8rem;
+}
+
+.chat-view-toggle button[aria-selected='true'] {
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+  border-color: var(--c-accent-strong);
+}
+
+.chat-streaming {
+  color: var(--c-accent);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.4rem;
+  animation: stream-pulse 1.2s ease-in-out infinite;
+}
+
+.stream-dot {
+  animation: stream-blink 0.9s steps(2) infinite;
+}
+
+@keyframes stream-pulse {
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes stream-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+/* slash 菜单悬浮于输入卡上方 */
+.slash-menu {
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0 auto 0.3rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg);
+  max-height: 14rem;
+  overflow-y: auto;
+  box-shadow: var(--shadow-dialog);
+}
+
+.slash-menu button {
+  width: 100%;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: flex-start;
+  padding: 0.45rem 0.6rem;
+  min-height: 36px;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.slash-menu button:hover {
+  background: var(--c-code);
+}
+
+.slash-name {
+  font-weight: 600;
+}
+
+.slash-src {
+  font-size: 0.7rem;
+  color: var(--c-accent);
+}
+
+.slash-desc {
+  font-size: 0.78rem;
+  color: var(--c-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 图片 chips 悬浮于输入卡上方 */
+.image-chips {
+  width: min(748px, calc(100% - 1.8rem));
+  margin: 0 auto 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-code);
+  font-size: 0.78rem;
+}
+
+.image-chip button {
+  border: none;
+  background: none;
+  color: var(--c-sub);
+  padding: 0 0.15rem;
+}
+
+/* ===== 手机端操作收敛：会话操作已全收进侧栏 ⋯ 菜单（2026-09-22），顶栏只留汉堡+标题+页签 ===== */
+
+/* 移动端顶栏行首汉堡（反馈轮 20）：独立占位不遮标题；桌面不渲染 */
+.chat-topbar-menu-btn {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .chat-area-topbar {
+    position: relative;
+  }
+
+  /* ⌘K 搜索窄屏隐藏（侧栏搜索图标/快捷键可达），防顶栏拥挤 */
+  .chat-topbar-actions .btn-topbar-search {
+    display: none;
+  }
+
+  /* 工程便签切换钮窄屏保留（agent-hub-notes）：同汉堡 44px 触达规格，shrink-0 不挤标题 */
+  .chat-topbar-actions .btn-topbar-notes {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0;
+    border: 1px solid var(--c-border-input);
+    border-radius: 8px;
+    background: var(--c-panel);
+  }
+
+  .chat-topbar-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-height: 44px;
+    min-width: 44px;
+    border: 1px solid var(--c-border-input);
+    border-radius: 8px;
+    background: var(--c-panel);
+    font-size: 1rem;
+  }
+
+  /* info 占据汉堡与右侧页签之间的全部余宽（static-r21 MINOR-1：375px 下 cwd/tokens
+     meta 挤压标题至不可辨——窄屏隐藏 meta，标题优先占宽） */
+  .chat-topbar-info {
+    flex: 1;
+  }
+
+  .chat-topbar-meta {
+    display: none;
+  }
+
+  .chat-topbar-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* 排队气泡（反馈轮 24-C，Tabs-v24 queued-bubble）：working 期发送成功提示 */
+.chat-queued-bubble {
+  display: flex;
+  align-items: center;
+  padding: 0.45rem 0.8rem;
+  /* 水平 auto 保持 .chat-list>* 的列居中（此处的显式 margin 会覆盖居中，错位到最左） */
+  margin: 0.35rem auto;
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-needs);
+  border-radius: 8px;
+  background: var(--c-code);
+  color: var(--c-sub);
+  font-size: 12px;
+}

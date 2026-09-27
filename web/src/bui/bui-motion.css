@@ -1,0 +1,110 @@
+/* Beautiful UI 动画与自定义类（批2，照搬自官网样式表，keyframes 原文；
+   source-avatar 描边色经 token 派生以保三态）。组件以内联 style 引用
+   animation 名，故 keyframes 必须在全局层可见（不在 @layer 内）。 */
+
+@keyframes shimmer-text {
+  0% {
+    background-position: 150%;
+  }
+  to {
+    background-position: -50%;
+  }
+}
+
+@keyframes fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  0% {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 官网自定义类（组件 className 引用） */
+.animated-underline {
+  display: inline-block;
+  position: relative;
+}
+
+.source-avatar {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-text) 10%, transparent);
+}
+
+/* 动效降级：bui 组件落位根（data-bui）内禁动画，内容即时呈现 */
+@media (prefers-reduced-motion: reduce) {
+  [data-bui],
+  [data-bui] * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Beautiful UI 表格类 primitive-*（批3，官网 computed 值照搬，色经 token） */
+.primitive-card-bar {
+  padding: 10px 12px;
+}
+
+.primitive-table-cell {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.primitive-card-footer {
+  padding: 10px;
+}
+
+/* Beautiful UI FilterTable 状态 pill（批3；官网 --tag-base 三色替换为 --c-*，
+   grid-line 官网值经 --c-border 派生） */
+.filter-status-todo {
+  --tag-base: var(--c-needs);
+}
+
+.filter-status-progress {
+  --tag-base: var(--c-working);
+}
+
+.filter-status-done {
+  --tag-base: var(--c-done);
+}
+
+.filter-status-done,
+.filter-status-progress,
+.filter-status-todo {
+  border: 1px solid transparent;
+  color: var(--tag-base);
+  background: color-mix(in srgb, var(--tag-base) 20%, var(--c-panel));
+}
+
+:root {
+  --grid-line: color-mix(in srgb, var(--c-border) 78%, transparent);
+}

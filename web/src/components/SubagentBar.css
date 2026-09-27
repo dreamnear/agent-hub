@@ -1,0 +1,84 @@
+/* subagent 折叠条（P5+ 反馈轮 6）：与任务清单（.task-bar）并列同构——
+   基础卡样式沿用 .task-list-card（ChatMessageView.css），此处补折叠交互与 chip 列表 */
+.subagent-card {
+  width: 100%;
+  max-width: 748px;
+  margin: 0.35rem auto 0;
+  flex-shrink: 0;
+}
+
+.subagent-card summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  list-style: none;
+  user-select: none;
+}
+
+.subagent-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-card summary::before {
+  content: '▸ ';
+  color: var(--c-sub);
+}
+
+.subagent-card[open] summary::before {
+  content: '▾ ';
+}
+
+.subagent-summary-text {
+  font-weight: 600;
+  color: var(--c-text);
+  font-size: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.subagent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.6rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 999px;
+  background: var(--c-panel);
+  font-size: 0.8rem;
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.subagent-chip span.subagent-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-chip--active {
+  border-color: var(--c-text);
+  font-weight: 600;
+}
+
+.subagent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--c-sub);
+  flex-shrink: 0;
+}
+
+.subagent-dot--active {
+  background: #2e9e5b;
+}

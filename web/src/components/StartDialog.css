@@ -1,0 +1,74 @@
+/* backdrop / dialog-card / dialog-actions 复用 App.css 弹窗规范，此处仅 StartDialog 特有样式 */
+
+/* driver 切换（批2 任务7）：与 ChatTab 视图切换同构的段控件，色值全走 --c-* token */
+.driver-toggle {
+  display: inline-flex;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.driver-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--c-sub);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+.driver-toggle button[aria-selected='true'] {
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+}
+
+.start-card select {
+  min-height: 36px;
+}
+
+.start-card textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.start-advanced {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.start-advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--c-sub);
+  user-select: none;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.start-advanced[open] summary {
+  margin-bottom: 0.25rem;
+}
+
+.start-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.start-card input,
+.start-card select,
+.start-card textarea {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  min-height: 36px;
+}

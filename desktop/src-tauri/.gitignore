@@ -1,0 +1,8 @@
+/target
+/binaries/
+/gen/schemas/
+# 明确不做 Windows/移动端：tauri icon 生成的对应平台图标不入库
+/icons/android/
+/icons/ios/
+/icons/Square*.png
+/icons/StoreLogo.png

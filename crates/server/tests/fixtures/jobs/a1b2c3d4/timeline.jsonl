@@ -1,0 +1,3 @@
+{"at": 1758000000, "state": "starting", "detail": null, "text": "task started"}
+not valid json line {{{
+{"at": 1758000060, "state": "blocked", "detail": "needs permission", "text": null}

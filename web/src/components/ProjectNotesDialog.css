@@ -1,0 +1,146 @@
+/* 工程便签悬浮卡（agent-hub-notes 增强）：fixed 悬浮 + 头部拖动 + 图钉；
+   色值全走 --c-* token。z-index：高于内容/行菜单(40)、低于确认弹窗灯箱(50)。 */
+
+.notes-card {
+  position: fixed;
+  z-index: 48;
+  left: 50%;
+  top: 12%;
+  transform: translateX(-50%); /* 初始未落位时的居中缺省；--float 落位后移除 */
+  width: min(560px, 92vw);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-dialog);
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.notes-card--float {
+  transform: none; /* 记忆/计算落位：left/top 内联 */
+}
+
+/* 拖动中：grabbing 光标 + 阴影加深反馈 */
+.notes-card--dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* 顶部标题条：accent-strong 深绿底白字（白字对它 5.10:1，两主题不变，≥4.5 达标），
+   便签卡辨识条 + 拖动握把 */
+.notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin: -0.8rem -0.8rem 0;
+  padding: 0.45rem 0.4rem 0.45rem 0.7rem;
+  background: var(--c-accent-strong);
+  border-radius: 10px 10px 0 0;
+  cursor: grab;
+  touch-action: none; /* 拖动期间禁浏览器手势（移动滚动/选择） */
+}
+
+.notes-card--dragging .notes-head {
+  cursor: grabbing;
+}
+
+.notes-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-inverse);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.notes-pin-btn,
+.notes-close-btn {
+  width: 28px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-inverse);
+  font-size: 13px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.notes-pin-btn:hover,
+.notes-close-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.notes-pin-btn[aria-pressed='true'] {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.notes-subtitle {
+  margin: 0;
+  word-break: break-all;
+}
+
+.notes-textarea {
+  width: 100%;
+  flex: 1; /* 卡片定高（resize 后）时随卡片伸缩；默认 auto 高由 rows 撑起 */
+  min-height: 120px;
+  resize: none; /* 高度调整统一走卡片右下角握把 */
+  background: var(--c-panel);
+  color: var(--c-text);
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* 右下角 resize 握把：三角纹标识可拖拽调尺寸 */
+.notes-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  border-radius: 0 0 10px 0;
+  background: linear-gradient(
+    135deg,
+    transparent 0 8px,
+    var(--c-border) 8px 9px,
+    transparent 9px 12px,
+    var(--c-border) 12px 13px,
+    transparent 13px
+  );
+}
+
+.notes-textarea:focus {
+  outline: 2px solid var(--c-accent);
+  outline-offset: -1px;
+}
+
+.notes-saved {
+  align-self: center;
+  font-size: 12px;
+  color: var(--c-green-text);
+}
+
+/* 移动端（≤768px）：不拖动，保持居中全宽面板形态（卡片宽 min(560px,92vw) 自适应） */
+@media (max-width: 768px) {
+  .notes-card {
+    top: 6%;
+  }
+
+  .notes-head {
+    cursor: default;
+  }
+}

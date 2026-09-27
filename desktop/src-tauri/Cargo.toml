@@ -1,0 +1,14 @@
+[package]
+license = "Apache-2.0"
+name = "claude-view-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Claude View 桌面壳（Tauri 2 sidecar）"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+libc = "0.2"
+rfd = "0.15"
+tauri = { version = "2", features = [] }

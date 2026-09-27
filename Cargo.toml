@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/server", "desktop/src-tauri"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+notify = "7"
+uuid = { version = "1", features = ["v4"] }

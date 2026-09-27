@@ -1,0 +1,18 @@
+/* token 全量定义移至 App.css（:root 唯一来源，避免双处维护漂移） */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font: 14px/1.5 ui-sans, system-ui, -apple-system, sans-serif;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
