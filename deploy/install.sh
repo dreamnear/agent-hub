@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 DEST_BIN_NAME="claude-view-server"
 # 默认源：GitHub Releases latest 直链；显式 RELEASE_BASE_URL= 置空则回退脚本同目录文件
 RELEASE_BASE_URL="${RELEASE_BASE_URL-https://github.com/dreamnear/agent-hub/releases/latest/download}"
