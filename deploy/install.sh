@@ -117,6 +117,14 @@ fetch_binary() {
 
 fetch_binary
 
+# ---------- 提权方式 ----------
+# root 本身或无 sudo（不少 VPS 默认 root 且不装 sudo）都不加前缀——E2E 实测裸 root
+# Ubuntu 上 `sudo systemctl` 会死于 command not found，装到一半断掉比拒绝执行更糟。
+SUDO=""
+if [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1; then
+  SUDO="sudo"
+fi
+
 # ---------- 选安装目录 ----------
 if [ -n "$FORCE_PREFIX" ]; then
   PREFIX="$FORCE_PREFIX"
@@ -136,7 +144,7 @@ install_binary() {
   if [ -w "$PREFIX" ]; then
     install -m 755 "$src" "$DEST"
   else
-    sudo install -m 755 "$src" "$DEST"
+    $SUDO install -m 755 "$src" "$DEST"
   fi
   echo "✓ 已安装 $DEST"
 }
@@ -210,14 +218,14 @@ UNIT
     if [ -w /etc/systemd/system ]; then
       install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
     else
-      sudo install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
+      $SUDO install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
     fi
     rm -f "$UNIT_TMP"
     echo "✓ 已安装 systemd 单元 /etc/systemd/system/claude-view-server.service"
 
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-      sudo systemctl daemon-reload
-      sudo systemctl enable --now claude-view-server
+      $SUDO systemctl daemon-reload
+      $SUDO systemctl enable --now claude-view-server
       echo "✓ 已 enable --now，查看状态：systemctl status claude-view-server"
     else
       echo "⚠ 未检测到运行中的 systemd，未启动。装完单元后手动："
