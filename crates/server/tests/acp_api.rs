@@ -81,6 +81,8 @@ async fn wait_for_agent(app: axum::Router, sid: &str) -> Value {
 fn test_app(mode: &str, log: Option<&Path>) -> (axum::Router, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::load();
+    // 钉 fake claude：不依赖宿主机的真实 claude CLI（CI 裸机没有）
+    cfg.claude_bin = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-claude.sh");
     cfg.acp = AcpConfig {
         agents: vec![fake_agent(mode, log)],
     };

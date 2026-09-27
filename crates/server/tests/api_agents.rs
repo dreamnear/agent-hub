@@ -52,6 +52,22 @@ fn test_app(dir: &tempfile::TempDir) -> axum::Router {
 }
 
 #[tokio::test]
+async fn list_degrades_to_empty_when_claude_bin_missing() {
+    // 全新机器没有 claude CLI：/api/agents 应 200 数组（ACP 会话仍合并），不能 500
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = Config::load();
+    cfg.claude_bin = PathBuf::from("/nonexistent/claude-bin-missing");
+    cfg.jobs_dir = dir.path().to_path_buf();
+    let app = router(Arc::new(AppState::from_config(cfg)));
+    let (status, body) = req(app, "GET", "/api/agents?all=1", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.as_array().is_some(),
+        "缺 claude CLI 时仍应返回数组: {body}"
+    );
+}
+
+#[tokio::test]
 async fn list_returns_grouped_agents() {
     let dir = tempfile::tempdir().unwrap();
     let (status, body) = req(test_app(&dir), "GET", "/api/agents?all=1", None).await;
