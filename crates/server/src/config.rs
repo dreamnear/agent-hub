@@ -284,10 +284,17 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// env var 是进程级全局态：本模块多个场景测试都改 AGENT_HUB_CONFIG，
+    /// cargo test 默认并行，两个测试互踩会导致对方读到错文件（CI 实测翻车：
+    /// chat 场景 2 期望 clamp 30 实得 20）。共享锁串行化全部动 env 的测试。
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// env var 全局态 + cargo test 并行 → 三场景合并单测试顺序执行，防跨测试竞态
     #[test]
     fn chat_config_load_scenarios() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // 场景 1：无 config.toml → 默认 20/100（B14 验收）
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("AGENT_HUB_CONFIG", dir.path().join("none.toml"));
@@ -315,6 +322,7 @@ mod tests {
     /// env var 全局态 + cargo test 并行 → 四场景合并单测顺序执行，防跨测试竞态
     #[test]
     fn acp_config_load_scenarios() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // 场景 1：无 config.toml → 内置 omp 条目（任务 1 验收：缺省回退）
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("AGENT_HUB_CONFIG", dir.path().join("none.toml"));
