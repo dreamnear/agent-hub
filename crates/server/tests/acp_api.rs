@@ -62,9 +62,27 @@ fn fake_agent(mode: &str, log: Option<&Path>) -> AcpAgentConfig {
     }
 }
 
+/// agents list 刷新是异步的（本地 <50ms，CI 慢机可达数秒）：轮询至条目出现。
+/// 根因修复 r2：两处「动作后立即查 list 并 unwrap」在 CI 偶发 None。
+async fn wait_for_agent(app: axum::Router, sid: &str) -> Value {
+    for _ in 0..100 {
+        let (_, body) = req(app.clone(), "GET", "/api/agents?all=1", None).await;
+        let hit = body
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["id"] == sid).cloned());
+        if let Some(e) = hit {
+            return e;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("agent {sid} 未在 5s 内出现在 /api/agents");
+}
+
 fn test_app(mode: &str, log: Option<&Path>) -> (axum::Router, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::load();
+    // 钉 fake claude：不依赖宿主机的真实 claude CLI（CI 裸机没有）
+    cfg.claude_bin = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-claude.sh");
     cfg.acp = AcpConfig {
         agents: vec![fake_agent(mode, log)],
     };
@@ -326,13 +344,7 @@ async fn acp_api_permission_reject_answer_then_idempotent() {
     assert!(perm_key.starts_with("perm:"), "permKey 形态: {perm_key}");
 
     // 弹卡挂起期间，agents list 该会话 group=needs_input（批4：与 Claude blocked 同语义）
-    let (_, body) = req(app.clone(), "GET", "/api/agents?all=1", None).await;
-    let e = body
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["id"] == sid.as_str())
-        .unwrap();
+    let e = wait_for_agent(app.clone(), &sid).await;
     assert_eq!(e["rawState"], "awaiting_input");
     assert_eq!(e["group"], "needs_input");
 
@@ -719,15 +731,8 @@ async fn acp_sessions_merged_into_agents_list() {
     let sid = created["sessionId"].as_str().unwrap().to_string();
 
     // 创建后：list 恰含一条 acp 条目，字段逐一对齐
-    let (_, body) = req(app.clone(), "GET", "/api/agents?all=1", None).await;
-    let entries: Vec<&Value> = body
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|a| a["driver"] == "acp")
-        .collect();
-    assert_eq!(entries.len(), 1);
-    let e = entries[0];
+    let e = wait_for_agent(app.clone(), &sid).await;
+    assert_eq!(e["driver"], "acp");
     assert_eq!(e["id"], sid.as_str());
     assert_eq!(e["name"], "fake");
     assert_eq!(e["cwd"], dir.path().to_string_lossy().as_ref());
