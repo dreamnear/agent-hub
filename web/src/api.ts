@@ -1,4 +1,5 @@
 import type { AgentSummary, ChatMessage, DocEntry, DocFile, GitStatus, GitTreeGroup, InstanceConfig, SubagentEntry, SubmoduleInfo } from './types';
+import { t } from './i18n';
 
 /** 历史分页信封（P6 B12/B13）：firstLine 为向前翻页游标，hasMore 标识还有更早消息 */
 export interface MessagePage {
@@ -135,6 +136,55 @@ export function resourceTokenQuery(): string {
   return t ? `?token=${encodeURIComponent(t)}` : '';
 }
 
+/// harness 发现项（agent-hub-settings 批A 需求5/6）：镜像 server src/harness.rs
+/// （camelCase）。alive=false = 路径失效/不可执行（默认过滤项）。
+export interface HarnessEntry {
+  name: string;
+  path: string;
+  version: string | null;
+  alive: boolean;
+  kind: 'cli' | 'acp';
+  configured: boolean;
+}
+
+/// 远程安装探测/计划/执行（agent-hub-settings D2–D5）：镜像 server src/remote_install.rs
+/// （camelCase）。reason 四态可区分（已装/未装/端口被占/SSH 不可达）。
+export type RemoteProbeReason = 'installed' | 'not_installed' | 'not_agent_hub' | 'ssh_unreachable';
+
+export interface RemoteProbe {
+  installed: boolean;
+  os: string | null;
+  arch: string | null;
+  reason: RemoteProbeReason;
+  detail: string;
+}
+
+export interface PlanStep {
+  desc: string;
+  /** 将执行的命令原文（确认面板逐条展示的就是它，所见即所执） */
+  display: string;
+}
+
+export interface InstallPlan {
+  planId: string;
+  planHash: string;
+  steps: PlanStep[];
+}
+
+export interface InstallRequest {
+  planId: string;
+  planHash: string;
+  /** 红线：非 true 服务端拒绝执行任何命令 */
+  confirm: boolean;
+}
+
+export interface InstallResult {
+  ok: boolean;
+  logs: string[];
+  error: string | null;
+  tokenStored: boolean;
+}
+
 export interface Api {
   /** 实例连接上下文：instanceId 用于 per-instance token 存储与 queryKey；baseUrl 为空=本机相对路径 */
   readonly instanceId: string | null;
@@ -150,8 +200,17 @@ export interface Api {
   tunnelStart: (id: string) => Promise<{ localPort: number }>;
   tunnelStop: (id: string) => Promise<{ stopped: boolean }>;
   tunnelStatus: (id: string) => Promise<{ running: boolean; localPort: number | null; state: string; retries: number }>;
+  /** 远程自动安装（agent-hub-settings D2–D4）：探测只读；计划只生成不执行；执行需 confirm */
+  remoteProbe: (id: string) => Promise<RemoteProbe>;
+  installPlan: (id: string) => Promise<InstallPlan>;
+  installExecute: (id: string, body: InstallRequest) => Promise<InstallResult>;
+  /** direct 模式手动命令清单（与 ssh-tunnel 计划同一处定义，防漂移） */
+  installManual: () => Promise<InstallPlan>;
   listAgents: (all: boolean) => Promise<AgentSummary[]>;
   listAcpAgents: () => Promise<{ agents: { name: string; command: string; args: string[]; cwd: string | null; model: string | null }[] }>;
+  /** harness 发现（agent-hub-settings 批A）：本机探测清单 + 一键加入 ACP agent 配置 */
+  listHarnesses: () => Promise<{ harnesses: HarnessEntry[] }>;
+  addHarness: (name: string, path: string) => Promise<{ added: boolean; name: string }>;
   createAcpSession: (body: { agent: string; cwd: string; model?: string }) => Promise<{ sessionId: string; agent: string; cwd: string; model: string | null; status: string }>;
   acpMessages: (id: string) => Promise<MessagePage>;
   sendAcpPrompt: (id: string, text: string) => Promise<void>;
@@ -222,7 +281,7 @@ export function makeApi(baseUrl: string, instanceId: string | null): Api {
     }
     if (res.status === 413) {
       const serverMsg = await res.text();
-      throw new Error(serverMsg.trim() || '内容过大，无法处理');
+      throw new Error(serverMsg.trim() || t('api.payloadTooLarge'));
     }
     if (!res.ok) throw new Error(await res.text());
     if (instanceId != null) clearAuthFailed(instanceId);
@@ -282,8 +341,23 @@ export function makeApi(baseUrl: string, instanceId: string | null): Api {
     tunnelStart: (id) => json<{ localPort: number }>(`/api/instances/${encodeURIComponent(id)}/tunnel/start`, { method: 'POST' }),
     tunnelStop: (id) => json<{ stopped: boolean }>(`/api/instances/${encodeURIComponent(id)}/tunnel/stop`, { method: 'POST' }),
     tunnelStatus: (id) => json<{ running: boolean; localPort: number | null; state: string; retries: number }>(`/api/instances/${encodeURIComponent(id)}/tunnel/status`),
+    remoteProbe: (id) => json<RemoteProbe>(`/api/instances/${encodeURIComponent(id)}/remote-probe`),
+    installPlan: (id) => json<InstallPlan>(`/api/instances/${encodeURIComponent(id)}/install-plan`, { method: 'POST' }),
+    installExecute: (id, body) => json<InstallResult>(`/api/instances/${encodeURIComponent(id)}/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    installManual: () => json<InstallPlan>('/api/instances/install-manual'),
     listAgents: (all) => json<AgentSummary[]>(`/api/agents${all ? '?all=1' : ''}`),
     listAcpAgents: () => json('/api/acp/agents'),
+    listHarnesses: () => json<{ harnesses: HarnessEntry[] }>('/api/harness'),
+    addHarness: (name, path) =>
+      json<{ added: boolean; name: string }>(`/api/harness/${encodeURIComponent(name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      }),
     createAcpSession: (body) => json('/api/acp/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

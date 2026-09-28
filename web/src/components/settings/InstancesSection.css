@@ -1,0 +1,223 @@
+/* 设置页「实例」分区（agent-hub-settings D1，自 InstanceSettings.css 迁入）：
+   无弹层外壳（backdrop/card/head 已随迁出删除），列表-表单两态样式保持原类名。
+   颜色全走三态主题 token --c-*。 */
+
+.inst-sub {
+  margin: 0;
+  color: var(--c-sub);
+  font-size: 0.82rem;
+}
+
+.inst-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.inst-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+}
+
+.inst-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.inst-row-name {
+  font-weight: 500;
+}
+
+.inst-row-mode {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+
+.inst-row-url {
+  color: var(--c-sub);
+  font-size: 0.78rem;
+}
+
+.inst-tunnel-state {
+  font-size: 0.72rem;
+  color: var(--c-sub);
+}
+.inst-tunnel-state--running { color: var(--c-done); }
+.inst-tunnel-state--reconnecting { color: var(--c-warn, #b8860b); }
+.inst-tunnel-state--failed { color: var(--c-danger, #c0392b); }
+.inst-tunnel-state--not_started { color: var(--c-sub); }
+
+.inst-tunnel-err {
+  color: var(--c-danger, #c0392b);
+  font-size: 0.72rem;
+}
+
+.inst-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.inst-btn {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  color: var(--c-text);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.inst-btn--danger { color: var(--c-danger, #c0392b); }
+.inst-btn:disabled { opacity: 0.5; cursor: default; }
+
+.inst-empty { color: var(--c-sub); font-size: 0.85rem; }
+
+.inst-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.inst-form { display: flex; flex-direction: column; gap: 0.6rem; width: 100%; }
+
+.inst-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.inst-field label {
+  font-size: 0.8rem;
+  color: var(--c-sub);
+}
+
+.inst-field input,
+.inst-field select {
+  background: var(--c-bg);
+  color: var(--c-text);
+  border: 1px solid var(--c-border-input);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+.inst-hint {
+  color: var(--c-sub);
+  font-size: 0.72rem;
+}
+
+.inst-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+/* ===== 远程自动安装流程块（agent-hub-settings D4/D5）：行内展开 ===== */
+
+.inst-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.inst-confirm {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: var(--c-panel);
+}
+
+.inst-confirm-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.inst-remote-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--c-warn, #b8860b);
+}
+
+.inst-step-desc {
+  margin: 0 0 0.2rem;
+  font-size: 0.78rem;
+  color: var(--c-sub);
+}
+
+.inst-cmd {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.inst-install-running {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--c-sub);
+}
+
+.inst-install-ok {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--c-done);
+}
+
+.inst-logs {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
+  color: var(--c-sub);
+  font-size: 0.72rem;
+  max-height: 10rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.inst-manual {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  background: var(--c-panel);
+  align-items: flex-start;
+}
+
+/* 375px：实例行操作按钮换行到信息区下方，不横向溢出 */
+@media (max-width: 768px) {
+  .inst-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .inst-row-actions {
+    width: 100%;
+  }
+}

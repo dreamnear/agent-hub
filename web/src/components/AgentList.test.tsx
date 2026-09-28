@@ -107,8 +107,8 @@ const renderList = (overrides: Partial<Parameters<typeof AgentList>[0]> = {}) =>
       onCollapse={vi.fn()}
       onOpenProjects={vi.fn()}
       onOpenConfig={vi.fn()}
-      onOpenInstances={vi.fn()}
       onStart={vi.fn()}
+      onOpenSettings={vi.fn()}
       onRemoved={vi.fn()}
       onOpenNotes={vi.fn()}
       {...overrides}
@@ -233,6 +233,17 @@ describe('AgentList Sidebar-v2', () => {
     expect(onOpenProjects).toHaveBeenCalledTimes(1);
     expect(onOpenConfig).toHaveBeenCalledTimes(1);
     expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('底部「设置」项与顶栏主题标记均跳设置页外观分区（agent-hub-settings B1/B3）', () => {
+    const onOpenSettings = vi.fn();
+    renderList({ onOpenSettings });
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    expect(onOpenSettings).toHaveBeenCalledWith('appearance');
+    // 顶栏主题按钮：B3 起不再 cycle，唯一入口收口到设置页
+    fireEvent.click(screen.getByRole('button', { name: /主题：/ }));
+    expect(onOpenSettings).toHaveBeenCalledWith('appearance');
+    expect(onOpenSettings).toHaveBeenCalledTimes(2);
   });
 
   it('选中行带高亮类（左 2px accent 竖条由样式承载）', () => {
@@ -440,14 +451,14 @@ describe('AgentList 实例降级态（任务10：离线/凭据失效）', () => 
     expect(screen.getByText('运行中的会话')).toBeTruthy();
   });
 
-  it('凭据失效：组头显示可点标记，点击打开实例管理（重配 token 入口）', () => {
+  it('凭据失效：组头显示可点标记，点击跳设置页实例分区（D1 迁移后唯一入口）', () => {
     withRemote();
     degradeState.authError = { instR: true };
-    const onOpenInstances = vi.fn();
-    renderList({ onOpenInstances });
+    const onOpenSettings = vi.fn();
+    renderList({ onOpenSettings });
     const badge = screen.getByRole('button', { name: /凭据失效/ });
     fireEvent.click(badge);
-    expect(onOpenInstances).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith('instances');
   });
 
   it('离线实例零会话时组头仍渲染（不静默消失——修复前 visible=0 直接 return null）', () => {

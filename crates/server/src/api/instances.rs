@@ -27,6 +27,91 @@ pub fn router() -> Router<SharedState> {
         .route("/api/instances/{id}/tunnel/start", post(tunnel_start))
         .route("/api/instances/{id}/tunnel/stop", post(tunnel_stop))
         .route("/api/instances/{id}/tunnel/status", get(tunnel_status))
+        // 远程自动安装（agent-hub-settings 任务 D2/D3）：探测只读、计划只生成不执行、
+        // 执行需 confirm + planHash 校验（防静默执行 / 防确认后被换清单）
+        .route("/api/instances/{id}/remote-probe", get(remote_probe))
+        .route("/api/instances/{id}/install-plan", post(install_plan))
+        .route("/api/instances/{id}/install", post(install_execute))
+        .route("/api/instances/install-manual", get(install_manual))
+}
+
+/// ssh-tunnel 实例守卫：非该模式统一 400（探测/安装计划都依赖 SSH 通道）
+fn require_ssh_tunnel(inst: &InstanceConfig) -> Result<Option<u16>, AppError> {
+    if inst.mode != crate::instances::InstanceMode::SshTunnel {
+        return Err(AppError::bad("仅 ssh-tunnel 实例支持远程探测/安装"));
+    }
+    Ok(inst.remote_port)
+}
+
+/// GET /{id}/remote-probe：SSH 通到远端跑只读命令（uname + curl /health +
+/// /api/instances），返回 {installed, os, arch, reason, detail}
+async fn remote_probe(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::remote_install::RemoteProbe>, AppError> {
+    let store = InstancesStore::new(&state.cfg);
+    let inst = store
+        .get(&id)
+        .await
+        .ok_or_else(|| AppError::not_found("实例不存在"))?;
+    let remote_port =
+        require_ssh_tunnel(&inst)?.ok_or_else(|| AppError::bad("实例未配置远程目标端口"))?;
+    Ok(Json(crate::remote_install::probe(&inst, remote_port).await))
+}
+
+/// POST /{id}/install-plan：只生成命令清单（含 planId/planHash），**不执行**。
+/// 计划同时进服务端缓存（同实例旧计划作废）；D3 的 install 端点凭 planId/planHash
+/// 校验"用户确认的清单 = 将执行的清单"。
+async fn install_plan(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::remote_install::InstallPlan>, AppError> {
+    let store = InstancesStore::new(&state.cfg);
+    let inst = store
+        .get(&id)
+        .await
+        .ok_or_else(|| AppError::not_found("实例不存在"))?;
+    let remote_port = require_ssh_tunnel(&inst)?;
+    Ok(Json(crate::remote_install::build_and_cache_plan(
+        &inst.id,
+        remote_port,
+    )))
+}
+
+/// POST /{id}/install：执行已确认的安装计划（D3）。确认标志/计划校验不过 → 400
+/// 且零命令；执行结果（含失败分类与执行日志）200 返回，远端状态不用 5xx 表达。
+async fn install_execute(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(req): Json<crate::remote_install::InstallRequest>,
+) -> Result<Json<crate::remote_install::InstallOutcome>, AppError> {
+    use crate::remote_install::InstallRejection;
+    let store = InstancesStore::new(&state.cfg);
+    let inst = store
+        .get(&id)
+        .await
+        .ok_or_else(|| AppError::not_found("实例不存在"))?;
+    require_ssh_tunnel(&inst)?;
+    match crate::remote_install::execute(&inst, &req, &store, crate::remote_install::real_run).await
+    {
+        Ok(outcome) => Ok(Json(outcome)),
+        Err(InstallRejection::NotConfirmed) => Err(AppError::bad(
+            "缺少用户确认标志（confirm=true）：未经确认的安装计划不会执行任何命令",
+        )),
+        Err(InstallRejection::PlanNotFound) => Err(AppError::bad(
+            "安装计划不存在或已失效（成功后即消费，被新计划作废），请重新生成计划",
+        )),
+        Err(InstallRejection::PlanMismatch) => Err(AppError::bad(
+            "命令清单与用户确认时不一致（planHash 或实例不匹配），已拒绝执行",
+        )),
+    }
+}
+
+/// GET /install-manual：direct 模式的同一份命令清单（无 SSH 通道，用户自行执行）
+async fn install_manual() -> Json<crate::remote_install::InstallPlan> {
+    Json(crate::remote_install::build_plan(
+        "manual", None, // direct 实例无已知端口 → 用 server 默认 7800
+    ))
 }
 
 /// direct 实例连接测试（打 /health）；ssh-tunnel 需先 start 隧道再测→前端走 base-url + /health

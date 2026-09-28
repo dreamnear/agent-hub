@@ -3,13 +3,8 @@
   box-sizing: border-box;
 }
 
-html,
-body {
-  margin: 0;
-  background: var(--c-bg);
-  color: var(--c-text);
-  font: 14px/1.5 ui-sans, system-ui, -apple-system, sans-serif;
-}
+/* html/body 基础样式同样只在 App.css 维护一份（agent-hub-settings B2）：
+   根字号 = 100% × --ui-scale、字体族 = var(--font-ui)，两处各写一份必漂移 */
 
 ul {
   list-style: none;

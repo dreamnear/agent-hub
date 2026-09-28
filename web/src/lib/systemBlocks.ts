@@ -2,6 +2,7 @@
 // 新形态往 SYS_TAGS 加一行）→ 独立 sys 段，UI 折叠成摘要条。只处理裸文本区——
 // 围栏代码块与行内代码内的同标签原样保留（防误伤用户代码）；块未闭合（流式半截）
 // 按普通文本不折叠。ponytail: 不识别 ~~~ 围栏与 4 空格缩进代码块，出现误伤再扩 PROTECTED_RE。
+import { t } from '../i18n';
 
 export interface SystemBlockSegment {
   kind: 'text' | 'sys';
@@ -44,7 +45,7 @@ export function splitSystemBlocks(text: string): SystemBlockSegment[] {
         kind: 'sys',
         text: raw.slice(open.start, closeIdx + close.length),
         tag: open.tag,
-        label: summary || '系统通知',
+        label: summary || t('sys.defaultLabel'),
       });
       pos = scan = closeIdx + close.length;
     }

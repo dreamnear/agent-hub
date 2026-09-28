@@ -5,6 +5,7 @@ pub mod auth;
 pub mod commands;
 pub mod docs;
 pub mod git_tree;
+pub mod harness;
 pub mod instances;
 pub mod messages;
 pub mod notes;

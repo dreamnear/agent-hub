@@ -31,7 +31,7 @@
 
 .agentscfg-head h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
 }
 
@@ -71,16 +71,16 @@
 
 .agentscfg-name {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .agentscfg-model {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--c-accent);
 }
 
 .agentscfg-desc {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--c-sub);
   overflow: hidden;
   text-overflow: ellipsis;

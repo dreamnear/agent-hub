@@ -14,7 +14,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     time::Duration,
 };
@@ -498,20 +498,36 @@ impl super::MessageSender for AcpSendRouter {
 }
 
 /// 生命周期门面（批1 任务3）：spawn → initialize 握手 → session/new。
+/// agents 带内部可写：harness 面板「加入配置」后无需重启即可用（settings 批A 需求5）。
 #[derive(Debug, Clone)]
 pub struct AcpDriver {
-    pub agents: Vec<AcpAgentConfig>,
+    pub agents: Arc<RwLock<Vec<AcpAgentConfig>>>,
 }
 
 impl AcpDriver {
     pub fn from_config(acp: &crate::config::AcpConfig) -> Self {
         Self {
-            agents: acp.agents.clone(),
+            agents: Arc::new(RwLock::new(acp.agents.clone())),
         }
     }
 
-    pub fn agent(&self, name: &str) -> Option<&AcpAgentConfig> {
-        self.agents.iter().find(|a| a.name == name)
+    pub fn agent(&self, name: &str) -> Option<AcpAgentConfig> {
+        self.agents
+            .read()
+            .expect("acp agents lock")
+            .iter()
+            .find(|a| a.name == name)
+            .cloned()
+    }
+
+    /// 清单快照（锁内克隆即出，不跨 await）
+    pub fn agents(&self) -> Vec<AcpAgentConfig> {
+        self.agents.read().expect("acp agents lock").clone()
+    }
+
+    /// 运行时追加（调用方负责先落盘 config.toml）
+    pub fn add_agent(&self, agent: AcpAgentConfig) {
+        self.agents.write().expect("acp agents lock").push(agent);
     }
 
     /// spawn + initialize 握手（版本协商锁定 v1）——start/resume 共用前缀。
@@ -574,7 +590,7 @@ impl AcpDriver {
         let agent = self
             .agent(agent_name)
             .ok_or_else(|| anyhow::anyhow!("未知 ACP agent: {agent_name}"))?;
-        let (conn, rx) = self.connect_initialized(agent, cwd).await?;
+        let (conn, rx) = self.connect_initialized(&agent, cwd).await?;
         // model 走 session/new params（批2 任务7）：omp 宽松解析，不支持时忽略（best-effort）
         let mut new_params = serde_json::json!({"cwd": cwd.to_string_lossy(), "mcpServers": []});
         if let Some(m) = &model {
@@ -625,7 +641,7 @@ impl AcpDriver {
         let agent = self
             .agent(agent_name)
             .ok_or_else(|| anyhow::anyhow!("未知 ACP agent: {agent_name}"))?;
-        let (conn, rx) = self.connect_initialized(agent, cwd).await?;
+        let (conn, rx) = self.connect_initialized(&agent, cwd).await?;
         match conn
             .request(
                 "session/load",

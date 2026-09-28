@@ -206,6 +206,65 @@ export function useRemoteInstances(): {
   return { instances: ctxs, registry, isLoading, wsDown };
 }
 
+// —— ssh-tunnel 自动隧道复活：退避 + 上限 + 在途去重（r80 自激风暴修复）——
+// 此前 agents 拉取失败即无条件 tunnelStart + invalidate(['instances'])：远端持续不可达时
+// 每 ~3s 一对 tunnel/start 风暴 → WS 拆建 + 清单重拉循环 → 侧栏 render↔loading 抖动长卡。
+// 现改为指数退避（2s/4s/8s/16s…封顶 30s），连续 5 次失败后停止自动拉起（实例保持既有
+// 离线置灰态）；实例管理面板手动「启动隧道」（InstancesSection）直调 api.tunnelStart，
+// 不经此路径，不受退避限制。
+const TUNNEL_BACKOFF_BASE_MS = 2_000;
+const TUNNEL_BACKOFF_MAX_MS = 30_000;
+const TUNNEL_MAX_AUTO_STARTS = 5;
+
+interface TunnelRetryState {
+  /** 已发生的自动拉起次数（agents 恢复成功即整条复位） */
+  fails: number;
+  /** 下次允许自动拉起的时间戳（Date.now() 口径） */
+  nextAt: number;
+  /** 在途去重：拉起未落定不再发起（react-query retry 会重入 catch） */
+  inflight: boolean;
+}
+const tunnelRetries = new Map<string, TunnelRetryState>();
+
+/** agents 失败驱动的自动隧道复活。返回是否真正发起（被去重/退避/上限拦截返回 false）。 */
+export function autoTunnelStart(
+  id: string,
+  start: (id: string) => Promise<unknown>,
+  onSuccess: () => void,
+  now: number = Date.now(),
+): boolean {
+  const s = tunnelRetries.get(id) ?? { fails: 0, nextAt: 0, inflight: false };
+  if (s.inflight || s.fails >= TUNNEL_MAX_AUTO_STARTS || now < s.nextAt) return false;
+  s.inflight = true;
+  tunnelRetries.set(id, s);
+  void start(id)
+    .then(() => onSuccess())
+    .catch(() => {
+      // 拉起失败：留给离线降级（侧栏置灰），不报错不循环
+    })
+    .finally(() => {
+      // 无论 start 成败都计数——计数锚定 agents 连续失败（恢复成功在 queryFn 成功路径复位）
+      const cur = tunnelRetries.get(id);
+      if (cur) {
+        cur.fails += 1;
+        cur.nextAt =
+          Date.now() + Math.min(TUNNEL_BACKOFF_BASE_MS * 2 ** (cur.fails - 1), TUNNEL_BACKOFF_MAX_MS);
+        cur.inflight = false;
+      }
+    });
+  return true;
+}
+
+/** agents 拉取成功即复位该实例退避状态（远端恢复后自动拉起能力完整还原） */
+export function resetTunnelBackoff(id: string): void {
+  tunnelRetries.delete(id);
+}
+
+/** 曾失败标记（r80）：never-successful 的查询每次重探会 pending↔error 翻转，
+ * isError 期间离线门打开 → 整栏 loading 抖动。一旦失败即保持降级（置灰），
+ * 拉取成功才清除——与 resetTunnelBackoff 同生命周期。键与 offline 一致（null=''）。 */
+const everErrored = new Set<string>();
+
 export function useAgents(): {
   data: AgentSummary[];
   grouped: GroupedAgents;
@@ -233,18 +292,25 @@ export function useAgents(): {
     queries: registry.instances.map((ctx) => ({
       queryKey: ['agents', ctx.id ?? null] as const,
       queryFn: () => {
+        const k = ctx.id ?? '';
         const a = registry.apiFor(ctx.id);
         return a
           .listAgents(true)
-          .then((list) => list.map((agent) => ({ ...agent, instanceId: ctx.id })))
+          .then((list) => {
+            // 恢复：退避与降级标记整条复位（r80——成功后自动拉起与正常展示完整还原）
+            resetTunnelBackoff(k);
+            everErrored.delete(k);
+            return list.map((agent) => ({ ...agent, instanceId: ctx.id }));
+          })
           .catch((e: unknown) => {
             // 任务10：ssh-tunnel 实例离线联动隧道复活——start 幂等（运行中返回现端口；
-            // 服务端重连耗尽后可重新拉起），成功后重拉清单取新 localPort 再连
+            // 服务端重连耗尽后可重新拉起），成功后重拉清单取新 localPort 再连。
+            // r80：改走退避 + 上限 + 在途去重（原无条件 start 在远端持续不可达时自激风暴）
+            everErrored.add(k);
             if (ctx.mode === 'ssh-tunnel' && ctx.id != null) {
-              api
-                .tunnelStart(ctx.id)
-                .then(() => qc.invalidateQueries({ queryKey: ['instances'] }))
-                .catch(() => {});
+              autoTunnelStart(ctx.id, (id) => api.tunnelStart(id), () =>
+                qc.invalidateQueries({ queryKey: ['instances'] }),
+              );
             }
             throw e;
           });
@@ -280,7 +346,9 @@ export function useAgents(): {
     const map: Record<string, boolean> = {};
     queries.forEach((q, i) => {
       const k = registry.instances[i]?.id ?? '';
-      map[k] = q.isError || wsDown[k] || false;
+      // r80：everErrored——pending 重探期间 isError 翻转会让离线门间歇打开（整栏 loading 抖动），
+      // 失败过的实例保持降级直到拉取成功
+      map[k] = q.isError || wsDown[k] || everErrored.has(k) || false;
     });
     return map;
   }, [queries, wsDown]);

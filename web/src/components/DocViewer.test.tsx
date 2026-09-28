@@ -58,15 +58,15 @@ const PERSONAL_REAL: DocEntry[] = [
 ];
 const PROJECTS_REAL: DocEntry[] = [
   { name: 'claude-view', isDir: true, kind: 'dir' },
-  { name: 'sample-agent', isDir: true, kind: 'dir' },
+  { name: 'ecom-ai-agent', isDir: true, kind: 'dir' },
 ];
 
 // 按路径分发：root / docs 子目录 / personal 真实形态
 docsListMock.mockImplementation((path: string): Promise<DocEntry[]> => {
   if (path === ROOT) return Promise.resolve(ROOT_ENTRIES);
   if (path === DOCS) return Promise.resolve(DOCS_ENTRIES);
-  if (path === '/Users/demo/Works/personal') return Promise.resolve(PERSONAL_REAL);
-  if (path === '/Users/demo/Works/personal/projects') return Promise.resolve(PROJECTS_REAL);
+  if (path === '/Users/alice/Works/personal') return Promise.resolve(PERSONAL_REAL);
+  if (path === '/Users/alice/Works/personal/projects') return Promise.resolve(PROJECTS_REAL);
   return Promise.resolve([]);
 });
 
@@ -145,7 +145,7 @@ describe('DocViewer tree (反馈轮 12)', () => {
   it('keeps same-level alignment with real-world irregular entries (personal root)', async () => {
     // 反馈轮 13 真实数据驱动：personal 根 21 条真实响应（点开头目录/文件、大小写混合）
     // —— 根级全部同 padding；展开 projects 子目录后子级 = 父 + 14，同级再对齐
-    const personalRoot = '/Users/demo/Works/personal';
+    const personalRoot = '/Users/alice/Works/personal';
     const { container } = render(<DocViewer root={personalRoot} />, { wrapper });
     await waitFor(() =>
       expect(container.querySelectorAll('.doc-row').length).toBe(PERSONAL_REAL.length),
@@ -162,7 +162,7 @@ describe('DocViewer tree (反馈轮 12)', () => {
     fireEvent.click(projRow);
     await waitFor(() => expect(container.textContent).toContain('claude-view'));
     const childRows = [...container.querySelectorAll('.doc-row')].filter((r) =>
-      ['claude-view', 'sample-agent'].includes(r.querySelector('.doc-row-name')?.textContent ?? ''),
+      ['claude-view', 'ecom-ai-agent'].includes(r.querySelector('.doc-row-name')?.textContent ?? ''),
     );
     expect(childRows.length).toBe(2);
     const childPads = new Set(childRows.map((r) => (r as HTMLButtonElement).style.paddingLeft));

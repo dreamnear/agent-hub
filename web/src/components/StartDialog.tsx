@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 import './StartDialog.css';
 
 type Driver = 'claude' | 'acp';
@@ -11,6 +12,7 @@ export default function StartDialog({
   onClose: () => void;
 }): ReactElement {
   const qc = useQueryClient();
+  const t = useI18n();
   // driver 选择（acp-omp 批2 任务7）：claude 走 bg 派发，acp 走 ACP 握手建会话
   const [driver, setDriver] = useState<Driver>('claude');
   const [projects, setProjects] = useState<string[]>([]);
@@ -99,7 +101,7 @@ export default function StartDialog({
   return (
     <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-label="Start agent">
       <div className="dialog-card start-card">
-        <h2 className="dialog-title">新建对话 · Start agent</h2>
+        <h2 className="dialog-title">{t('start.title')}</h2>
         <div className="driver-toggle" role="tablist" aria-label="driver">
           <button
             type="button"
@@ -119,14 +121,12 @@ export default function StartDialog({
           </button>
         </div>
         {driver === 'acp' ? (
-          <p className="dialog-subtitle">
-            选择 ACP agent 与工作目录建会话（首次建会话约 30–60s，请耐心等待）
-          </p>
+          <p className="dialog-subtitle">{t('start.acpSubtitle')}</p>
         ) : (
-          <p className="dialog-subtitle">选择工程（cwd）并输入启动指令，agent 将在该目录启动会话</p>
+          <p className="dialog-subtitle">{t('start.subtitle')}</p>
         )}
         <label>
-          工程 (cwd)
+          {t('start.cwd')}
           <select value={cwd} onChange={(e) => setCwd(e.target.value)}>
             <option value="">-- choose or type below --</option>
             {projects.map((p) => (
@@ -153,23 +153,23 @@ export default function StartDialog({
               <input
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="如 claude-sonnet"
+                placeholder={t('start.modelPh')}
               />
             </label>
           </>
         ) : (
           <>
             <label>
-              指令 Prompt
+              {t('start.prompt')}
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
-                placeholder="要 agent 完成的任务描述…"
+                placeholder={t('start.promptPh')}
               />
             </label>
             <details className="start-advanced" open={advancedOpen}>
-              <summary>▸ 高级（Model / Effort / Name）</summary>
+              <summary>{t('start.advanced')}</summary>
               <label>
                 CWD fallback
                 <input
@@ -196,10 +196,10 @@ export default function StartDialog({
         {err ? <p className="dialog-error">{err}</p> : null}
         <div className="dialog-actions">
           <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
-            取消
+            {t('dialog.cancel')}
           </button>
           <button type="button" className="btn-primary" onClick={() => void submit()} disabled={busy}>
-            {busy && driver === 'acp' ? '创建中…' : '启动'}
+            {busy && driver === 'acp' ? t('start.creating') : t('start.launch')}
           </button>
         </div>
       </div>

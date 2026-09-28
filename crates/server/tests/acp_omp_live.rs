@@ -16,13 +16,13 @@ fn omp_driver() -> (AcpDriver, tempfile::TempDir) {
     let command = std::env::var("AGENT_HUB_ACP_BIN").unwrap_or_else(|_| "omp".into());
     (
         AcpDriver {
-            agents: vec![AcpAgentConfig {
+            agents: std::sync::Arc::new(std::sync::RwLock::new(vec![AcpAgentConfig {
                 name: "omp".into(),
                 command,
                 args: vec!["acp".into()],
                 cwd: None,
                 model: None,
-            }],
+            }])),
         },
         dir,
     )

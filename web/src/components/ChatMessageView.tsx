@@ -5,6 +5,7 @@ import { parseAnsi } from '../lib/ansi';
 import { parseCrossSessionMessage } from '../lib/parseCrossSessionMessage';
 import { splitImageRefs, imageUrlOf, type ImageRefSegment } from '../lib/image';
 import { splitSystemBlocks, type SystemBlockSegment } from '../lib/systemBlocks';
+import { useI18n } from '../i18n';
 import MarkdownView from './MarkdownView';
 import CrossSessionCard from './CrossSessionCard';
 import BuiThinking from './bui/Thinking';
@@ -101,6 +102,7 @@ function iconForTool(name: string | null): string {
 }
 
 function ToolCallCardView({ card }: { card: ToolCallCard }): ReactElement {
+  const t = useI18n();
   // ACP 分支（批2 任务9）：tool_call update 原样存在 input.sessionUpdate 里，
   // 走 ACP 视图（diff 喂 DiffTable chips）；claude 卡走原 JSON dump 路径
   const acpInput =
@@ -112,7 +114,7 @@ function ToolCallCardView({ card }: { card: ToolCallCard }): ReactElement {
   }
   // 状态语义保留：header 文本「工具 · 运行中/失败/完成」（BUI 行内无状态色概念，
   // r16-28 的运行中可见性经文字承载；结果 ANSI 保色经 detail ReactNode 直通）
-  const stateLabel = card.result == null ? '运行中' : card.isError ? '失败' : '完成';
+  const stateLabel = card.result == null ? t('msg.state.running') : card.isError ? t('msg.state.failed') : t('msg.state.completed');
   const output = card.result?.text ?? (card.result?.result != null ? JSON.stringify(card.result.result) : null);
   const inputJson = card.input != null ? JSON.stringify(card.input, null, 2) : null;
   const detail: ToolDetailLine[] = [];
@@ -156,7 +158,7 @@ function acpContentBlocks(update: Record<string, unknown> | null): Record<string
 
 function acpToolView(card: ToolCallCard): {
   label: string;
-  stateLabel: string;
+  stateKey: string;
   icon: string;
   chip: string;
   detail: ToolDetailLine[];
@@ -166,7 +168,8 @@ function acpToolView(card: ToolCallCard): {
   const input = (card.input ?? {}) as Record<string, unknown>;
   const resultUpdate = (card.result?.result ?? null) as Record<string, unknown> | null;
   const status = typeof resultUpdate?.status === 'string' ? resultUpdate.status : null;
-  const stateLabel = status === 'failed' ? '失败' : status === 'completed' ? '完成' : '运行中';
+  // 状态文案渲染期翻译（C3 i18n）：此处只定 key
+  const stateKey = status === 'failed' ? 'msg.state.failed' : status === 'completed' ? 'msg.state.completed' : 'msg.state.running';
   const kind = typeof input.kind === 'string' ? input.kind : '';
   const title = typeof input.title === 'string' && input.title ? input.title : kind || 'tool';
   // ACP kind → BUI 行图标（omp 特有类型不硬编码，未知归 think）
@@ -216,10 +219,11 @@ function acpToolView(card: ToolCallCard): {
   const chip =
     diffs[0]?.file ??
     ((typeof input.title === 'string' && input.title ? input.title : '') || kind || '—');
-  return { label: title, stateLabel, icon, chip, detail, diffs, diffLines };
+  return { label: title, stateKey, icon, chip, detail, diffs, diffLines };
 }
 
 function AcpToolCardView({ card }: { card: ToolCallCard }): ReactElement {
+  const t = useI18n();
   const view = acpToolView(card);
   const step: ToolStep = {
     icon: view.icon,
@@ -236,13 +240,14 @@ function AcpToolCardView({ card }: { card: ToolCallCard }): ReactElement {
         steps={[step]}
         diffs={view.diffs}
         diffLines={view.diffLines}
-        labels={{ header: `${view.label} · ${view.stateLabel}`, more: '' }}
+        labels={{ header: `${view.label} · ${t(view.stateKey)}`, more: '' }}
       />
     </div>
   );
 }
 
 function PlainMessageView({ msg }: { msg: ChatMessage }): ReactElement {
+  const t = useI18n();
   const when = msg.ts ? new Date(msg.ts).toLocaleTimeString() : '';
 
   if (msg.kind === 'thinking') {
@@ -254,7 +259,7 @@ function PlainMessageView({ msg }: { msg: ChatMessage }): ReactElement {
           mode="static"
           variant="Reasoning"
           active="thinking"
-          done="思考完成"
+          done={t('msg.thinkingDone')}
           working={false}
           defaultExpanded={false}
           rows={[{ primary: msg.text ?? '…', secondary: when }]}
@@ -357,11 +362,12 @@ function ToolOutputText({ text }: { text: string }): ReactElement {
 /// （等宽小字，内容不丢）；复用 chat-card 折叠盒与 chat-json 等宽样式。
 /// source="tool"（工具卡 detail 内）加「工具输出」badge + 更紧凑样式区分来源。
 function SystemBlockBar({ seg, source }: { seg: SystemBlockSegment; source?: 'msg' | 'tool' }): ReactElement {
+  const t = useI18n();
   return (
     <details className={`chat-card sys-block${source === 'tool' ? ' sys-block--tool' : ''}`}>
       <summary>
         <span aria-hidden="true">⚙</span>
-        {source === 'tool' && <span className="chat-badge">工具输出</span>}
+        {source === 'tool' && <span className="chat-badge">{t('msg.toolOutput')}</span>}
         <span className="chat-badge">{seg.tag}</span>
         <span className="chat-detail">{seg.label}</span>
       </summary>

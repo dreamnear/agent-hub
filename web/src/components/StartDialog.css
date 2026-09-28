@@ -44,7 +44,7 @@
 
 .start-advanced summary {
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--c-sub);
   user-select: none;
   min-height: 28px;

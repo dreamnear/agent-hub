@@ -1,6 +1,6 @@
 //! 会话 jsonl 读取：`~/.claude/projects/<slug>/<sessionId>.jsonl`。
 //! slug 编码实测（2026-09-16，tester-r2 教训同源）：`/` → `-`、`.` → `-`、其余字符保留。
-//! 佐证样本：`/Users/demo/.claude/jobs/aa14d3e3-tmp` → `-Users-demo--claude-jobs-aa14d3e3-tmp`。
+//! 佐证样本：`/Users/alice/.claude/jobs/aa14d3e3-tmp` → `-Users-alice--claude-jobs-aa14d3e3-tmp`。
 
 use std::path::{Path, PathBuf};
 

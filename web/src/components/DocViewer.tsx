@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactElement } from 'react';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 import type { DocEntry } from '../types';
 import MarkdownView from './MarkdownView';
 import './DocViewer.css';
@@ -25,6 +26,7 @@ interface Preview {
 /// 点文件进预览态（44px 返回栏+预览占满），回树态保留已选文件；桌面端零变化。
 export default function DocViewer({ root, onClose }: Props): ReactElement {
   const qc = useQueryClient();
+  const t = useI18n();
   // 每目录已加载子项：undefined = 未加载；root 初始即加载
   const [dirs, setDirs] = useState<Record<string, DocEntry[] | undefined>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([root]));
@@ -126,15 +128,15 @@ export default function DocViewer({ root, onClose }: Props): ReactElement {
     // ≤768px 两态：树态（顶栏+树全高）/ 预览态（44px 返回栏+预览占满），类切换驱动
     <div className={`doc-viewer${mobilePreview && preview ? ' doc-viewer--m-preview' : ''}`}>
       <div className="doc-mobile-head">
-        <span>文档</span>
+        <span>{t('docs.title')}</span>
         {onClose ? (
-          <button type="button" onClick={onClose} aria-label="关闭文档">
+          <button type="button" onClick={onClose} aria-label={t('docs.close')}>
             ×
           </button>
         ) : null}
       </div>
 
-      <nav className="doc-tree-pane" aria-label="文件目录">
+      <nav className="doc-tree-pane" aria-label={t('docs.treeAria')}>
         {preview ? (
           <button
             type="button"
@@ -147,10 +149,10 @@ export default function DocViewer({ root, onClose }: Props): ReactElement {
             <span className="doc-mobile-back-path">{relPath}</span>
           </button>
         ) : null}
-        <ul className="doc-tree" aria-label="文件树">
+        <ul className="doc-tree" aria-label={t('docs.tree')}>
           {(dirs[root] ?? []).map((e) => row(e, `${root}/${e.name}`, 0))}
           {dirs[root] != null && (dirs[root]?.length ?? 0) === 0 ? (
-            <li className="doc-hint">空目录</li>
+            <li className="doc-hint">{t('docs.emptyDir')}</li>
           ) : null}
         </ul>
       </nav>
@@ -160,12 +162,12 @@ export default function DocViewer({ root, onClose }: Props): ReactElement {
           <div className="doc-preview">
             <div className="doc-preview-head">
               <span>{preview.name}</span>
-              <button type="button" onClick={() => setPreview(null)} aria-label="关闭预览">
+              <button type="button" onClick={() => setPreview(null)} aria-label={t('docs.closePreview')}>
                 ×
               </button>
             </div>
             {file.isLoading ? (
-              <p className="doc-hint">加载中…</p>
+              <p className="doc-hint">{t('docs.loading')}</p>
             ) : file.isError ? (
               <p className="doc-hint doc-hint--err">{String(file.error)}</p>
             ) : file.data?.kind === 'markdown' ? (
@@ -183,11 +185,11 @@ export default function DocViewer({ root, onClose }: Props): ReactElement {
             ) : file.data?.kind === 'text' ? (
               <pre className="doc-text">{file.data.content}</pre>
             ) : (
-              <p className="doc-hint">该文件类型仅列出，不支持预览</p>
+              <p className="doc-hint">{t('docs.noPreview')}</p>
             )}
           </div>
         ) : (
-          <p className="doc-empty-hint">在左侧选择文件预览</p>
+          <p className="doc-empty-hint">{t('docs.pickHint')}</p>
         )}
       </div>
     </div>

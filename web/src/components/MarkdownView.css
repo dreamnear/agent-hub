@@ -71,7 +71,7 @@
   border: 1px solid var(--c-border);
   color: var(--c-text);
   overflow-x: auto;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .md-body pre code {

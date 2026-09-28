@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { api, type Api } from '../api';
+import { useI18n } from '../i18n';
 import './ProjectNotesDialog.css';
 
 /// 工程便签悬浮卡（agent-hub-notes 增强）：绑定归一化 cwd 的共享 Markdown 便签——
@@ -126,6 +127,7 @@ export default function ProjectNotesDialog({
   instanceId?: string | null;
   onClose: () => void;
 }): ReactElement {
+  const t = useI18n();
   const [loaded, setLoaded] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [err, setErr] = useState('');
@@ -273,7 +275,7 @@ export default function ProjectNotesDialog({
       ref={cardRef}
       className={`notes-card ${pos && !mobile ? 'notes-card--float' : ''} ${dragging || resizing ? 'notes-card--dragging' : ''}`}
       role="dialog"
-      aria-label="工程便签"
+      aria-label={t('notes.aria')}
       style={
         pos && !mobile
           ? { left: pos.x, top: pos.y, ...(size ? { width: size.w, height: size.h } : {}) }
@@ -291,26 +293,27 @@ export default function ProjectNotesDialog({
         onPointerCancel={onHeadPointerUp}
       >
         <span className="notes-title" aria-hidden="true">
-          📋 工程便签
+          {t('notes.title')}
         </span>
         <span className="notes-head-actions">
           <button
             type="button"
             className="notes-pin-btn"
             aria-pressed={pinned}
-            aria-label={pinned ? '取消钉住' : '钉住：打开本工程会话时自动展开'}
-            title={pinned ? '已钉住：本工程任一会话打开时自动展开' : '钉住后随本工程会话自动打开'}
+            aria-label={pinned ? t('notes.unpin') : t('notes.pin')}
+            title={pinned ? t('notes.pinnedTitle') : t('notes.pinTitle')}
             onClick={togglePin}
           >
             {pinned ? '📌' : '📍'}
           </button>
-          <button type="button" className="notes-close-btn" aria-label="关闭便签" onClick={onClose}>
+          <button type="button" className="notes-close-btn" aria-label={t('notes.close')} onClick={onClose}>
             ×
           </button>
         </span>
       </div>
       <p className="dialog-subtitle notes-subtitle">
-        {title} · {cwd}（同一工程的所有会话共享）
+        {title} · {cwd}
+        {t('notes.subtitleShared')}
       </p>
       {err ? <p className="dialog-error">{err}</p> : null}
       <textarea
@@ -323,13 +326,13 @@ export default function ProjectNotesDialog({
         }}
         rows={12}
         spellCheck={false}
-        aria-label="便签内容"
-        placeholder="服务端口、测试账号等备忘（自由文本，保存后同一工程所有会话可见）"
+        aria-label={t('notes.contentLabel')}
+        placeholder={t('notes.placeholder')}
       />
       <div className="dialog-actions">
         {saved ? (
           <span className="notes-saved" role="status">
-            已保存
+            {t('notes.saved')}
           </span>
         ) : null}
         <button
@@ -338,7 +341,7 @@ export default function ProjectNotesDialog({
           onClick={() => void save()}
           disabled={busy || loaded == null || draft === loaded}
         >
-          保存
+          {t('notes.save')}
         </button>
       </div>
       {/* 右下角 resize 握把（桌面）：pointer events 拖拽改宽高，最小 240×180 */}
@@ -346,7 +349,7 @@ export default function ProjectNotesDialog({
         <div
           className="notes-resize-handle"
           role="separator"
-          aria-label="调整便签大小"
+          aria-label={t('notes.resize')}
           onPointerDown={onResizePointerDown}
           onPointerMove={onResizePointerMove}
           onPointerUp={onResizePointerUp}

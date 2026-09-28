@@ -27,7 +27,7 @@
 }
 
 .chat-topbar-name {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0; /* 批5 MINOR-2：标题优先完整显示，右面板展开挤压时由 cwd 截断让位 */
@@ -46,7 +46,7 @@
   height: 22px;
   padding: 0 0.55rem;
   border-radius: 11px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -94,7 +94,7 @@
   border: 1px solid var(--c-border-input);
   border-radius: 14px;
   background: var(--c-panel);
-  font-size: 12px;
+  font-size: 0.75rem;
   flex-shrink: 0;
 }
 
@@ -120,7 +120,7 @@
   border-color: transparent;
   background: transparent;
   color: var(--c-sub);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1;
   padding: 0 0.45rem;
 }
@@ -325,7 +325,7 @@
 
 .chat-input textarea::placeholder {
   color: var(--c-faint);
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .chat-input-actions {
@@ -355,7 +355,7 @@
   border-radius: 999px;
   background: var(--c-accent-strong);
   color: var(--c-inverse);
-  font-size: 18px;
+  font-size: 1.125rem;
   flex-shrink: 0;
 }
 
@@ -578,5 +578,5 @@
   border-radius: 8px;
   background: var(--c-code);
   color: var(--c-sub);
-  font-size: 12px;
+  font-size: 0.75rem;
 }

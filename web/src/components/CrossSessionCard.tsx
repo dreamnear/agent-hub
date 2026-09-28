@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { useI18n } from '../i18n';
 import type { CrossSessionMessage } from '../lib/parseCrossSessionMessage';
 import MarkdownView from './MarkdownView';
 import './CrossSessionCard.css';
@@ -13,6 +14,7 @@ export default function CrossSessionCard({
   msg: CrossSessionMessage;
   when: string;
 }): ReactElement {
+  const t = useI18n();
   const source = msg.fromName ?? msg.from?.split('/').pop() ?? msg.from ?? 'agent';
   const peek =
     msg.body
@@ -30,14 +32,14 @@ export default function CrossSessionCard({
         <span className="cross-peek" title={msg.body}>
           {peek}
         </span>
-        <span className="cross-hint">（{when} · 点击展开）</span>
+        <span className="cross-hint">{t('cross.expandHint', { when })}</span>
       </summary>
       <div className="cross-body">
         <MarkdownView text={msg.body} />
       </div>
       {msg.disclaimer ? (
         <details className="cross-disclaimer">
-          <summary>系统提示：此为其他会话代理消息，非用户输入</summary>
+          <summary>{t('cross.disclaimerSummary')}</summary>
           <p>{msg.disclaimer}</p>
         </details>
       ) : null}

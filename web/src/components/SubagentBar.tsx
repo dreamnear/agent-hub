@@ -1,5 +1,6 @@
 import './SubagentBar.css';
 import type { ReactElement } from 'react';
+import { useI18n } from '../i18n';
 import type { SubagentEntry } from '../types';
 
 /// subagent 折叠条（P5+ 反馈轮 6：形态对齐 TaskListBar，与会话底部任务清单并列）：
@@ -15,6 +16,7 @@ export default function SubagentBar({
   activeId: string | null;
   onSelect: (agentId: string) => void;
 }): ReactElement | null {
+  const t = useI18n();
   if (subagents.length === 0) return null;
   const activeCount = subagents.filter((s) => s.status === 'active').length;
   return (
@@ -25,7 +27,7 @@ export default function SubagentBar({
           {activeCount > 0 ? ` · ${activeCount} active` : ''}
         </span>
       </summary>
-      <div className="subagent-chip-list" role="tablist" aria-label="subagent 会话">
+      <div className="subagent-chip-list" role="tablist" aria-label={t('subagents.aria')}>
         {subagents.map((s) => (
           <button
             key={s.agentId}

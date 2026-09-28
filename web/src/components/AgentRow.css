@@ -33,7 +33,7 @@
   color: var(--c-sidebar-text);
   cursor: pointer;
   text-align: left;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   padding: 0 0 0 8px;
 }
@@ -61,7 +61,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--c-sidebar-icon);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   padding: 0;
 }
@@ -97,7 +97,7 @@
   border-radius: 6px;
   background: none;
   color: var(--c-sidebar-text);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   justify-content: flex-start;
   padding: 0 10px;

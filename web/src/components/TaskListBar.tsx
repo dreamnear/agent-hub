@@ -1,6 +1,7 @@
 import './TaskListBar.css';
 import type { ReactElement } from 'react';
 import type { TaskItem } from '../hooks/combineToolCalls';
+import { useI18n } from '../i18n';
 import BuiTaskRows, { type TaskRow } from './bui/TaskRows';
 
 // preview 反馈：未完成的在前（in_progress → pending），已完成沉底；同状态保持出现顺序（稳定排序）
@@ -17,6 +18,7 @@ const STATUS_ORDER: Record<TaskItem['status'], number> = {
 /// done=绿勾徽章+已完成 pill、in_progress=活跃 spinner（序号）、pending=静默环；
 /// 排序/摘要/判空语义不变。
 export default function TaskListBar({ tasks }: { tasks: TaskItem[] }): ReactElement {
+  const t = useI18n();
   const sorted = [...tasks].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
   const rows: TaskRow[] = sorted.map((t, i) => ({
     key: t.taskId,
@@ -30,11 +32,11 @@ export default function TaskListBar({ tasks }: { tasks: TaskItem[] }): ReactElem
     <details className="task-list-card task-bar" data-bui>
       <summary>
         <span className="task-bar-summary-text">
-          📋 任务清单：{sorted[0].subject}...({tasks.length})
+          {t('tasks.summary', { first: sorted[0].subject, n: tasks.length })}
         </span>
       </summary>
-      <div role="list" aria-label="任务清单">
-        <BuiTaskRows variant="List" rows={rows} labels={{ completed: '已完成', failed: '失败' }} className="!max-w-full" />
+      <div role="list" aria-label={t('tasks.aria')}>
+        <BuiTaskRows variant="List" rows={rows} labels={{ completed: t('tasks.completed'), failed: t('tasks.failed') }} className="!max-w-full" />
       </div>
     </details>
   );

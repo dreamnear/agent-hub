@@ -13,6 +13,16 @@
           if (m !== 'dark' && m !== 'light') m = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
           document.documentElement.dataset.theme = m;
         } catch (e) {}
+        // 外观 FOUC 防护（agent-hub-settings B2）：字体族落 dataset、字号缩放落 CSS
+        // 变量，口径镜像 useAppearance —— 防止刷新后首帧字号闪回 100%
+        try {
+          var f = localStorage.getItem('hub_font_family');
+          if (f === 'mono' || f === 'serif' || f === 'system') document.documentElement.dataset.font = f;
+          var s = Number(localStorage.getItem('hub_font_scale'));
+          if (s === 0.9 || s === 1 || s === 1.1 || s === 1.25 || s === 1.5) {
+            document.documentElement.style.setProperty('--ui-scale', String(s));
+          }
+        } catch (e) {}
       })();
     </script>
   </head>

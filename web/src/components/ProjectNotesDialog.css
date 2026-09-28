@@ -48,7 +48,7 @@
 }
 
 .notes-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 700;
   color: var(--c-inverse);
   white-space: nowrap;
@@ -71,7 +71,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--c-inverse);
-  font-size: 13px;
+  font-size: 0.8125rem;
   padding: 0;
   cursor: pointer;
 }
@@ -130,7 +130,7 @@
 
 .notes-saved {
   align-self: center;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--c-green-text);
 }
 

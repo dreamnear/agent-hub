@@ -39,10 +39,28 @@
   --c-sidebar-text: #c2c2c2; /* 列表行默认文字（#171717 底 ~8:1） */
   --c-sidebar-text-sel: #f0f0f0; /* 列表行选中文字 */
   --c-sidebar-icon: #9a9a9a; /* 行内 ⋯/图标（#171717 底 ~6.4:1，反馈轮 26-C 对比度修复） */
+  /* ===== 外观 token（agent-hub-settings B2：字体族 + 字号缩放）=====
+     --font-ui：界面字体族唯一入口（body 的 font-family 只读它；等宽代码块仍各自
+     指定 ui-monospace 栈，不受切字体影响）
+     --ui-scale：界面字号缩放唯一入口——根字号 = 浏览器基准 × 本值，全站字号一律
+     rem，所以「缩放 150%」只改这一个变量，不逐组件改字号 */
+  --font-ui: ui-sans, system-ui, -apple-system, sans-serif;
+  --ui-scale: 1;
   --r: 10px;
   --left-w: 260px;
   --right-w: 280px;
   --shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+/* 界面字体族档位（agent-hub-settings B2）：前端只写 `documentElement.dataset.font`
+   （不复制字体串），字体栈仅此三处 + :root 默认。等宽代码块自带 ui-monospace 栈，
+   不随本项切换 */
+html[data-font='mono'] {
+  --font-ui: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html[data-font='serif'] {
+  --font-ui: ui-serif, Georgia, Songti SC, serif;
 }
 
 /* ===== 暗色主题（反馈轮 26-A：手动/系统跟随，useTheme 写 data-theme） =====
@@ -91,12 +109,22 @@ textarea::placeholder {
   color: var(--c-faint);
 }
 
+html {
+  /* 根字号 = 浏览器基准 × --ui-scale：全站 rem 字号挂在这一个变量上（B2 缩放入口） */
+  font-size: calc(100% * var(--ui-scale));
+}
+
 html,
 body {
   margin: 0;
   background: var(--c-bg);
   color: var(--c-text);
-  font: 14px/1.5 ui-sans, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-ui);
+  line-height: 1.5;
+}
+
+body {
+  font-size: 0.875rem; /* 原 14px → rem，随 --ui-scale 等比缩放 */
 }
 
 ul {
@@ -206,13 +234,13 @@ button {
 
 .dialog-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
 }
 
 .dialog-subtitle {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-sub);
 }
 
@@ -315,7 +343,7 @@ button {
   border-radius: 8px;
   background: var(--c-sidebar);
   color: var(--c-inverse);
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 @media (min-width: 769px) {

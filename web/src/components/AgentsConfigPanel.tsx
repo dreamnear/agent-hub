@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 import './AgentsConfigPanel.css';
 
 interface AgentDocSummary {
@@ -15,6 +16,7 @@ interface AgentDoc extends AgentDocSummary {
 
 /// agents 配置管理器（P3）：~/.claude/agents/*.md 列表 / 查看 / 编辑写回。
 export default function AgentsConfigPanel({ onClose }: { onClose: () => void }): ReactElement {
+  const t = useI18n();
   const [docs, setDocs] = useState<AgentDocSummary[]>([]);
   const [editing, setEditing] = useState<AgentDoc | null>(null);
   const [draft, setDraft] = useState('');
@@ -62,9 +64,9 @@ export default function AgentsConfigPanel({ onClose }: { onClose: () => void }):
     >
       <div className="agentscfg-card">
         <div className="agentscfg-head">
-          <h2>Agents 配置</h2>
+          <h2>{t('agents.title')}</h2>
           <button type="button" className="btn-ghost" onClick={onClose}>
-            关闭
+            {t('agents.close')}
           </button>
         </div>
         {err ? <p className="dialog-error">{err}</p> : null}
@@ -83,12 +85,12 @@ export default function AgentsConfigPanel({ onClose }: { onClose: () => void }):
                 </button>
               </li>
             ))}
-            {docs.length === 0 ? <li className="agentscfg-empty">无 agents 配置</li> : null}
+            {docs.length === 0 ? <li className="agentscfg-empty">{t('agents.empty')}</li> : null}
           </ul>
           {editing ? (
             <div className="agentscfg-editor">
               <div className="agentscfg-editing-name">
-                编辑：{editing.name} {saved ? <span className="agentscfg-saved">已保存</span> : null}
+                {t('agents.editing', { name: editing.name })} {saved ? <span className="agentscfg-saved">{t('agents.saved')}</span> : null}
               </div>
               <textarea
                 value={draft}
@@ -99,12 +101,12 @@ export default function AgentsConfigPanel({ onClose }: { onClose: () => void }):
               />
               <div className="agentscfg-actions">
                 <button type="button" className="btn-primary" onClick={() => void save()}>
-                  保存写回
+                  {t('agents.writeBack')}
                 </button>
               </div>
             </div>
           ) : (
-            <p className="agentscfg-empty">左侧选择一个配置查看/编辑</p>
+            <p className="agentscfg-empty">{t('agents.pickHint')}</p>
           )}
         </div>
       </div>

@@ -1,5 +1,19 @@
 use std::{net::SocketAddr, path::PathBuf};
 
+/// config.toml 路径：env `AGENT_HUB_CONFIG` 覆盖，默认 `~/.claude-view/config.toml`。
+/// 写侧（harness 加入配置）用它定位；读侧各段仍走自己的 `load()`。
+pub fn config_path() -> PathBuf {
+    std::env::var("AGENT_HUB_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            format!(
+                "{}/.claude-view/config.toml",
+                std::env::var("HOME").expect("HOME 环境变量未设置，无法定位数据目录")
+            )
+            .into()
+        })
+}
+
 /// chat 分页配置（P6 B14）：`~/.claude-view/config.toml` 的 `[chat]` 段；
 /// 文件缺失/解析失败回退默认（20/100）。page_size 限 20-30，buffer_max 不低于 page_size。
 #[derive(Debug, Clone)]

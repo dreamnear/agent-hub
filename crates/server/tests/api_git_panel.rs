@@ -282,12 +282,9 @@ async fn submodules_listed_recursively() {
     git(&["-C", sub.to_str().unwrap(), "commit", "-q", "-m", "s-init"]);
 
     let main = seed_repo(&dir);
-    // -c protocol.file.allow=always：git≥2.38.1 默认禁 file 协议 submodule（CVE-2022-39253）
     git(&[
         "-C",
         main.to_str().unwrap(),
-        "-c",
-        "protocol.file.allow=always",
         "submodule",
         "add",
         "-q",

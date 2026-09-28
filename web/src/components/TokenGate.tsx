@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import QRCode from 'qrcode';
 import { captureUrlToken, storeToken } from '../api';
+import { useI18n } from '../i18n';
 import './TokenGate.css';
 
 /// allow_lan 模式遇 401 时的门禁：token 输入 / 二维码扫码。
 /// localhost 默认模式不触发（无 401）。
 export default function TokenGate({ onUnlocked }: { onUnlocked: () => void }): ReactElement {
+  const t = useI18n();
   const [token, setToken] = useState(sessionStorage.getItem('hub_token') ?? '');
   const [err, setErr] = useState('');
   const [qrText, setQrText] = useState('');
@@ -25,12 +27,12 @@ export default function TokenGate({ onUnlocked }: { onUnlocked: () => void }): R
         headers: token.trim() ? { authorization: `Bearer ${token.trim()}` } : {},
       });
       if (!res.ok) {
-        setErr('获取 token 失败（局域网模式未开启或非本机访问）');
+        setErr(t('gate.qrFail'));
         return;
       }
-      const { token: t } = (await res.json()) as { token: string };
+      const { token: qrToken } = (await res.json()) as { token: string };
       // 二维码内容 = 带 token 的本机访问地址（hostname 取当前访问地址）
-      const url = `${location.protocol}//${location.host}/?token=${encodeURIComponent(t)}`;
+      const url = `${location.protocol}//${location.host}/?token=${encodeURIComponent(qrToken)}`;
       setQrText(url);
       if (canvasRef.current) {
         await QRCode.toCanvas(canvasRef.current, url, { width: 220 });
@@ -41,23 +43,23 @@ export default function TokenGate({ onUnlocked }: { onUnlocked: () => void }): R
   };
 
   const save = (): void => {
-    const t = token.trim();
-    if (!t) {
-      setErr('请输入 token');
+    const tok = token.trim();
+    if (!tok) {
+      setErr(t('gate.enterToken'));
       return;
     }
     // 反馈轮 10：持久化到 localStorage（跨浏览器重启免输）；失效由 401 清除兜底
-    storeToken(t);
+    storeToken(tok);
     onUnlocked();
   };
 
   return (
     <div className="token-gate" role="dialog" aria-label="Token gate">
       <div className="token-card">
-        <h2>需要访问令牌</h2>
+        <h2>{t('gate.title')}</h2>
         <p className="token-hint">
-          已开启局域网访问。输入本机 <code>~/.claude-view/token</code> 中的 token，
-          或在本机打开此页面生成二维码扫码。
+          {t('gate.hint1')} <code>~/.claude-view/token</code>
+          {t('gate.hint2')}
         </p>
         <input
           type="password"
@@ -70,10 +72,10 @@ export default function TokenGate({ onUnlocked }: { onUnlocked: () => void }): R
         {err ? <p className="dialog-error">{err}</p> : null}
         <div className="token-actions">
           <button type="button" onClick={save}>
-            保存并进入
+            {t('gate.save')}
           </button>
           <button type="button" onClick={() => void showQr()}>
-            生成二维码（本机）
+            {t('gate.qr')}
           </button>
         </div>
         {qrText ? (

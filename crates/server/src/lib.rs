@@ -4,10 +4,13 @@ pub mod config;
 pub mod cors;
 pub mod drivers;
 pub mod error;
+pub mod harness;
 pub mod instances;
 pub mod models;
 pub mod notes;
 pub mod projects;
+pub mod remote_install;
+pub mod ssh_cmd;
 pub mod static_assets;
 pub mod tunnel;
 
@@ -38,6 +41,7 @@ pub fn router(state: Arc<api::AppState>) -> Router {
         .merge(api::git_tree::router())
         .merge(api::docs::router())
         .merge(api::instances::router())
+        .merge(api::harness::router())
         .route("/api/commands", get(api::commands::list_commands))
         .route("/api/upload", post(api::upload::upload))
         .route("/api/images/{filename}", get(api::upload::get_image))

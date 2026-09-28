@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactElement } from 'react';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 import type { GitStatusFile, GitTreeNode } from '../types';
 import './GitPanel.css';
 
@@ -13,6 +14,7 @@ interface Props {
 /// 子模块 git-status 即递归展开），以及基于当前节点创建 worktree 的表单。
 export default function GitPanel({ node }: Props): ReactElement {
   const qc = useQueryClient();
+  const t = useI18n();
   const status = useQuery({
     queryKey: ['gitStatus', node.path],
     queryFn: () => api.gitStatus(node.path),
@@ -40,11 +42,11 @@ export default function GitPanel({ node }: Props): ReactElement {
   const untracked = st?.files.filter((f) => f.x === '?' && f.y === '?') ?? [];
 
   const createWt = async (): Promise<void> => {
-    setWtMsg('创建中…');
+    setWtMsg(t('git.creating'));
     try {
       const r = await api.createWorktree(node.path, wtName.trim());
       setWtName('');
-      setWtMsg(`✓ 已创建 ${r.path}`);
+      setWtMsg(t('git.created', { path: r.path }));
       await qc.invalidateQueries({ queryKey: ['projectTree'] });
     } catch (e) {
       setWtMsg(String(e));
@@ -81,46 +83,46 @@ export default function GitPanel({ node }: Props): ReactElement {
               ↑{st.ahead} ↓{st.behind}
             </span>
           ) : null}
-          <span>变更 {st.files.length}</span>
+          <span>{t('git.changes', { n: st.files.length })}</span>
         </div>
       ) : (
-        <p className="git-empty">状态加载中…</p>
+        <p className="git-empty">{t('git.loading')}</p>
       )}
 
       {st && st.files.length > 0 ? (
         <div className="git-files">
           {staged.length > 0 ? (
             <>
-              <div className="git-group-title">已暂存 ({staged.length})</div>
+              <div className="git-group-title">{t('git.stagedN', { n: staged.length })}</div>
               {staged.map((f) => fileRow(f, true))}
             </>
           ) : null}
           {unstaged.length > 0 ? (
             <>
-              <div className="git-group-title">未暂存 ({unstaged.length})</div>
+              <div className="git-group-title">{t('git.unstagedN', { n: unstaged.length })}</div>
               {unstaged.map((f) => fileRow(f, false))}
             </>
           ) : null}
           {untracked.length > 0 ? (
             <>
-              <div className="git-group-title">未跟踪 ({untracked.length})</div>
+              <div className="git-group-title">{t('git.untrackedN', { n: untracked.length })}</div>
               {untracked.map((f) => fileRow(f, false))}
             </>
           ) : null}
         </div>
       ) : st ? (
-        <p className="git-empty">工作区干净</p>
+        <p className="git-empty">{t('git.clean')}</p>
       ) : null}
 
       {diffFile ? (
         <div className="git-diff-box">
           <div className="git-diff-head">
-            <span>{diffFile.cached ? '已暂存' : '工作区'} diff · {diffFile.file}</span>
-            <button type="button" onClick={() => setDiffFile(null)} aria-label="关闭 diff">
+            <span>{diffFile.cached ? t('git.staged') : t('git.worktree')} diff · {diffFile.file}</span>
+            <button type="button" onClick={() => setDiffFile(null)} aria-label={t('git.closeDiff')}>
               ×
             </button>
           </div>
-          <pre className="git-diff">{diff.data?.diff || '（无差异）'}</pre>
+          <pre className="git-diff">{diff.data?.diff || t('git.noDiff')}</pre>
         </div>
       ) : null}
 
@@ -143,7 +145,7 @@ export default function GitPanel({ node }: Props): ReactElement {
         <input
           value={wtName}
           onChange={(e) => setWtName(e.target.value)}
-          placeholder="新分支名（基于当前节点）"
+          placeholder={t('git.wtPh')}
           aria-label="New worktree branch name"
         />
         <button type="button" disabled={!wtName.trim()} onClick={() => void createWt()}>

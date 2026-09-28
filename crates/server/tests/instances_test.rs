@@ -262,7 +262,7 @@ async fn ssh_tunnel_instance_roundtrip() {
         "id": "s1",
         "name": "remote-ssh",
         "mode": "ssh-tunnel",
-        "ssh": { "host": "example.com", "port": 22, "user": "demo",
+        "ssh": { "host": "example.com", "port": 22, "user": "alice",
                  "auth": "authsock" },
         "remotePort": 7800
     });

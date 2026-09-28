@@ -12,7 +12,7 @@ fn fake_driver(mode: &str) -> (AcpDriver, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_fake_agent.py");
     let driver = AcpDriver {
-        agents: vec![AcpAgentConfig {
+        agents: std::sync::Arc::new(std::sync::RwLock::new(vec![AcpAgentConfig {
             name: "fake".into(),
             command: "python3".into(),
             args: vec![
@@ -22,7 +22,7 @@ fn fake_driver(mode: &str) -> (AcpDriver, tempfile::TempDir) {
             ],
             cwd: None,
             model: None,
-        }],
+        }])),
     };
     (driver, dir)
 }

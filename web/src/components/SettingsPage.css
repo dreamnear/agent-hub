@@ -1,0 +1,196 @@
+/* ===== 设置页外壳（agent-hub-settings B1）：全屏覆盖层 + 分区导航 ===== */
+
+.settings {
+  position: fixed;
+  inset: 0;
+  z-index: 40; /* 高于抽屉（22）与遮罩（21） */
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg);
+  color: var(--c-text);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.settings-close {
+  min-height: 32px;
+  padding: 0 0.6rem;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.settings-nav {
+  width: 190px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--c-border);
+}
+
+.settings-tab {
+  justify-content: flex-start;
+  min-height: 34px;
+  padding: 0 0.7rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.settings-tab:hover {
+  background: var(--c-panel);
+  color: var(--c-text);
+}
+
+.settings-tab.is-active {
+  background: var(--c-selected);
+  color: var(--c-text);
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+}
+
+/* ===== 分区内容行（外观分区 / 关于分区共用） ===== */
+
+.set-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-width: 640px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.set-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.set-value {
+  font-size: 0.875rem;
+  color: var(--c-sub);
+}
+
+.set-empty {
+  margin: 0;
+  color: var(--c-sub);
+  font-size: 0.875rem;
+}
+
+.set-preview {
+  margin: 0.3rem 0 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+  font-size: 0.875rem;
+  color: var(--c-text);
+}
+
+/* 分段控件（主题三态 / 字号档位共用） */
+.set-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+}
+
+.set-seg-btn {
+  min-height: 30px;
+  padding: 0 0.65rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.set-seg-btn:hover {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+
+.set-seg-btn.is-active {
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+}
+
+.set-select {
+  min-height: 32px;
+  min-width: 150px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  background: var(--c-panel);
+  font-size: 0.875rem;
+}
+
+/* ===== 手机 ≤768px：分区导航转顶部分段控件（横滚，不折行不溢出） ===== */
+
+@media (max-width: 768px) {
+  .settings-body {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    width: auto;
+    flex-direction: row;
+    gap: 4px;
+    padding: 0.4rem 0.5rem;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .settings-tab {
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  .settings-content {
+    padding: 0.75rem;
+  }
+
+  .set-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+}

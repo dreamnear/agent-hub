@@ -5,6 +5,7 @@ import { detectPendingAsk } from '../hooks/usePendingAsk';
 import { detectPendingPermission } from '../hooks/usePendingPermission';
 import { combineToolCalls, extractAcpPlan, extractTaskList, type TaskItem } from '../hooks/combineToolCalls';
 import { compressToJpeg, fileToBase64 } from '../lib/image';
+import { useI18n } from '../i18n';
 import DocViewer from './DocViewer';
 import ChatMessageView from './ChatMessageView';
 import TaskListBar from './TaskListBar';
@@ -37,6 +38,7 @@ export default function ChatTab({
   onToggleNotes,
   api = localApi,
 }: Props): ReactElement | null {
+  const t = useI18n();
   const sessionId = agent.sessionId;
   // ACP 会话（acp-omp 批2 任务8）：历史/发送/中断走 ACP 端点，活跃度轮询与
   // subagent/任务聚合（claude jsonl 专属）跳过
@@ -213,11 +215,11 @@ export default function ChatTab({
   }, [agent.id, focusSubagent, isAcp]);
 
   const send = async (): Promise<void> => {
-    const t = draft.trim();
+    const text = draft.trim();
     // r71 实测（tmux 靶子）：@绝对路径 文本注入后 CLI 自动 attach 图片（多模态直读），
     // 比纯文本路径提示（依赖模型自发 Read 工具）可靠——引用置于消息尾，正文保持用户原文
     const imageRefs = pendingImages.map((p) => `@${p.path}`).join(' ');
-    const finalText = imageRefs ? (t ? `${t}\n${imageRefs}` : imageRefs) : t;
+    const finalText = imageRefs ? (text ? `${text}\n${imageRefs}` : imageRefs) : text;
     // 反馈轮 24-C：sending（POST 在途）仍挡防双击；awaitingReply 不再挡——
     // agent 处理中再发消息 = 进入 CLI 队列（working 期排队实测支持）
     if (!finalText || sending) return;
@@ -244,7 +246,7 @@ export default function ChatTab({
       // 失败回滚：还原文本、撤气泡
       setOptimisticText(null);
       setQueuedHint(false);
-      setDraft(t);
+      setDraft(text);
       setErr(String(e));
     } finally {
       setSending(false);
@@ -284,11 +286,11 @@ export default function ChatTab({
     if (pendingAsk) {
       // pendingAsk 确认改走 ConfirmDialog（提醒型）
       setConfirmReq({
-        title: '仍要发送？',
-        message: 'agent 正在等待选项回答（TUI 模态），普通文本可能被丢弃。',
-        banner: '建议选择选项后按 Enter 提交',
+        title: t('chat.sendAnywayTitle'),
+        message: t('chat.sendAnywayMessage'),
+        banner: t('chat.sendAnywayBanner'),
         variant: 'warn',
-        confirmLabel: '仍要发送',
+        confirmLabel: t('chat.sendAnyway'),
         action: () => send(),
       });
       return;
@@ -306,14 +308,14 @@ export default function ChatTab({
         if (file.size > 5 * 1024 * 1024 || file.type === 'image/heic') {
           const compressed = await compressToJpeg(file);
           if (compressed == null) {
-            throw new Error('图片格式无法解码（iPhone HEIC 请先转 JPG）');
+            throw new Error(t('chat.imageUndecodable'));
           }
           return compressed;
         }
         return { base64: await fileToBase64(file), name: file.name };
       })();
       if (base64.length > 7 * 1024 * 1024) {
-        throw new Error('压缩后图片仍过大，请手动缩小后重试');
+        throw new Error(t('chat.imageTooLarge'));
       }
       const { path } = await api.uploadImage(name, base64);
       // [image#N] 标签显示（不显真实长路径），发送时前端映射替换为引导语（P5 preview 反馈）
@@ -388,7 +390,7 @@ export default function ChatTab({
           <button
             type="button"
             className="chat-topbar-menu-btn"
-            aria-label="展开侧栏"
+            aria-label={t('shell.expandSidebar')}
             onClick={onOpenSidebar}
           >
             ☰
@@ -417,16 +419,16 @@ export default function ChatTab({
               aria-selected={view === 'docs'}
               onClick={() => setView('docs')}
             >
-              文档
+              {t('chat.docsTab')}
             </button>
           </div>
           {onToggleNotes ? (
             <button
               type="button"
               className={`btn-topbar-notes ${notesOpen ? 'btn-topbar-notes--open' : ''}`}
-              aria-label="工程便签"
+              aria-label={t('chat.notes')}
               aria-pressed={notesOpen}
-              title="工程便签（服务端口、测试账密等备忘，同一工程所有会话共享）"
+              title={t('chat.notesTitle')}
               onClick={onToggleNotes}
             >
               📋
@@ -447,7 +449,7 @@ export default function ChatTab({
           <DocViewer root={agent.cwd} onClose={() => setView('chat')} />
         </div>
       ) : view === 'docs' ? (
-        <p className="doc-hint">该会话无关联目录，无法浏览文档</p>
+        <p className="doc-hint">{t('chat.noDocs')}</p>
       ) : null}
 
       {view === 'chat' ? (
@@ -455,18 +457,18 @@ export default function ChatTab({
           {focusSubagent ? (
             <div className="chat-readonly-hint" role="status">
               <span>
-                🔎 正在查看 subagent「
-                {subagents.find((s) => s.agentId === focusSubagent)?.name ?? focusSubagent}
-                」会话（只读）
+                {t('chat.viewingSubagent', {
+                  name: subagents.find((s) => s.agentId === focusSubagent)?.name ?? focusSubagent,
+                })}
               </span>
               <button type="button" onClick={() => setFocusSubagent(null)}>
-                ← 返回主会话
+                {t('chat.backToMain')}
               </button>
             </div>
           ) : null}
           {!focusSubagent && pendingAsk ? (
             <div className="chat-pending-ask" role="status">
-              ⏸ agent 正在等待选项回答——TUI 模态中，普通文本会被丢弃；请选择选项后按 Enter 提交
+              {t('chat.pendingAskBanner')}
             </div>
           ) : null}
           <div className="chat-list" ref={listRef} role="log" aria-label="conversation">
@@ -477,24 +479,24 @@ export default function ChatTab({
                 onClick={() => void loadOlderWithAnchor()}
                 disabled={loadingOlder}
               >
-                {loadingOlder ? '加载中…' : '加载更早消息'}
+                {loadingOlder ? t('chat.loading') : t('chat.loadOlder')}
               </button>
             ) : null}
-            {noMore ? <p className="chat-no-more">无更多消息</p> : null}
+            {noMore ? <p className="chat-no-more">{t('chat.noMore')}</p> : null}
             {isLoading && items.length === 0 ? (
               <div className="chat-session-loading" role="status">
-                <span className="session-spinner" aria-hidden /> 正在加载会话…
+                <span className="session-spinner" aria-hidden /> {t('chat.sessionLoading')}
               </div>
             ) : error && items.length === 0 ? (
               <div className="chat-session-error" role="alert">
-                会话加载失败
+                {t('chat.sessionFailed')}
                 <button type="button" onClick={refetch}>
-                  重试
+                  {t('chat.retry')}
                 </button>
               </div>
             ) : items.length === 0 ? (
               <p className="chat-empty">
-                {focusSubagent ? '该 subagent 会话暂无消息' : '暂无消息，输入开始对话'}
+                {focusSubagent ? t('chat.emptySubagent') : t('chat.empty')}
               </p>
             ) : (
               items.map((item) => (
@@ -513,13 +515,13 @@ export default function ChatTab({
                     subagent，文案区分「subagent 执行中」与真实输出，判定链不动。
                     ACP 无 jsonl 静默语义（批2 任务8），恒显输出中文案 */}
                 {agent.group === 'working' && !remoteActive && !isAcp
-                  ? 'subagent 执行中 · 主会话待续'
-                  : 'agent 正在输出…'}
+                  ? t('chat.subagentWorking')
+                  : t('chat.outputting')}
               </div>
             ) : null}
             {queuedHint && !focusSubagent ? (
               <div className="chat-queued-bubble" role="status">
-                ⏳ 已加入队列 · Agent 完成当前任务后处理
+                {t('chat.queued')}
               </div>
             ) : null}
             {optimisticText ? (
@@ -555,7 +557,7 @@ export default function ChatTab({
               {err ? <p className="dialog-error chat-error">{err}</p> : null}
               {uploading ? (
                 <div className="chat-uploading" role="status">
-                  上传中…
+                  {t('chat.uploading')}
                 </div>
               ) : null}
               {pendingImages.length > 0 ? (
@@ -565,7 +567,7 @@ export default function ChatTab({
                       [image#{i + 1}]
                       <button
                         type="button"
-                        aria-label={`移除 image#${i + 1}`}
+                        aria-label={t('chat.removeImage', { n: i + 1 })}
                         onClick={() => setPendingImages((prev) => prev.filter((_, j: number) => j !== i))}
                       >
                         ×
@@ -590,7 +592,7 @@ export default function ChatTab({
                           {entry.isDir ? '/' : ''}
                         </span>
                         <span className="slash-src">@</span>
-                        <span className="slash-desc">{atDir || '工作目录'}</span>
+                        <span className="slash-desc">{atDir || t('chat.workingDir')}</span>
                       </button>
                     </li>
                   ))}
@@ -647,7 +649,7 @@ export default function ChatTab({
                 }
               }}
               placeholder={
-                pendingAsk ? 'TUI 模态中：选择选项后按 Enter 提交，普通文本将被丢弃' : '输入消息…（Enter 发送，/ 命令，@ 引用）'
+                pendingAsk ? t('chat.inputPendingAsk') : t('chat.inputPlaceholder')
               }
               rows={1}
               onKeyDown={(e) => {
@@ -696,7 +698,7 @@ export default function ChatTab({
                 type="button"
                 className="chat-image-btn"
                 onClick={() => fileRef.current?.click()}
-                title="附图片（支持粘贴 / 拖拽）"
+                title={t('chat.attachImage')}
               >
                 🖼
               </button>
@@ -707,8 +709,8 @@ export default function ChatTab({
                   <button
                     type="button"
                     className="chat-send-btn"
-                    title="排队发送（Agent 完成当前任务后处理）"
-                    aria-label="排队发送"
+                    title={t('chat.queueSendTitle')}
+                    aria-label={t('chat.queueSend')}
                     onClick={sendWithCheck}
                   >
                     ↑
@@ -717,8 +719,8 @@ export default function ChatTab({
                   <button
                     type="button"
                     className="chat-send-btn"
-                    title="点击中断 agent 当前处理"
-                    aria-label="中断"
+                    title={t('chat.interruptTitle')}
+                    aria-label={t('chat.interrupt')}
                     onClick={() => void interruptNow()}
                   >
                     <span className="send-spinner" aria-hidden />
@@ -729,8 +731,8 @@ export default function ChatTab({
                   type="submit"
                   className="chat-send-btn"
                   disabled={!draft.trim()}
-                  title="发送"
-                  aria-label="发送"
+                  title={t('chat.send')}
+                  aria-label={t('chat.send')}
                 >
                   ↑
                 </button>

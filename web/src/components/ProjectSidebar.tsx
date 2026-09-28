@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 import type { AgentSummary, GitTreeNode } from '../types';
 import GitPanel from './GitPanel';
 import './ProjectSidebar.css';
@@ -29,6 +30,7 @@ export default function ProjectSidebar({
   onAdd,
   onCollapse,
 }: Props): ReactElement {
+  const t = useI18n();
   const tree = useQuery({
     queryKey: ['projectTree'],
     queryFn: api.projectTree,
@@ -52,7 +54,7 @@ export default function ProjectSidebar({
     try {
       await api.openDir(path);
     } catch (e) {
-      setOpenErr(`打开目录失败：${String(e)}`);
+      setOpenErr(t('proj.openFailed', { err: String(e) }));
     } finally {
       setOpenBusy(null);
     }
@@ -78,8 +80,8 @@ export default function ProjectSidebar({
         <button
           type="button"
           className="tree-open"
-          title="在 Finder 打开"
-          aria-label={`打开 ${node.name}`}
+          title={t('proj.openTitle')}
+          aria-label={t('proj.openAria', { name: node.name })}
           disabled={openBusy != null}
           onClick={() => void open(node.path)}
         >
@@ -99,10 +101,10 @@ export default function ProjectSidebar({
   return (
     <nav className="sidebar" aria-label="Projects">
       <div className="sidebar-head">
-        <h2 className="sidebar-title">工程</h2>
+        <h2 className="sidebar-title">{t('proj.title')}</h2>
         {onCollapse ? (
           <button type="button" className="sidebar-collapse" onClick={onCollapse}>
-            ‹ 收起
+            {t('proj.collapse')}
           </button>
         ) : null}
       </div>
@@ -138,8 +140,8 @@ export default function ProjectSidebar({
                     <button
                       type="button"
                       className="tree-open"
-                      title="在 Finder 打开"
-                      aria-label={`打开 ${g.main.name}`}
+                      title={t('proj.openTitle')}
+                      aria-label={t('proj.openAria', { name: g.main.name })}
                       disabled={openBusy != null}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -169,7 +171,7 @@ export default function ProjectSidebar({
           ))}
         </ul>
       ) : projects.length === 0 ? (
-        <p className="sidebar-empty">暂无工程</p>
+        <p className="sidebar-empty">{t('proj.empty')}</p>
       ) : (
         // 树未就绪/为空：回退注册列表平铺（旧行为）
         <ul className="sidebar-tree">
@@ -207,7 +209,7 @@ export default function ProjectSidebar({
       ) : (
         <div className="git-panel">
           <div className="git-title">Git · —</div>
-          <p className="git-empty">点击工程节点查看 git 状态（分支/变更/worktree）</p>
+          <p className="git-empty">{t('proj.gitEmpty')}</p>
         </div>
       )}
     </nav>

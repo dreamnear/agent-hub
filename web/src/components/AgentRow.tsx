@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactElement } from 'react';
+import { t } from '../i18n';
 import type { AgentSummary } from '../types';
 import './AgentRow.css';
 
@@ -6,10 +7,10 @@ import './AgentRow.css';
 function relativeTime(startedAt: number | null): string {
   if (startedAt == null) return '';
   const diff = Date.now() / 1000 - startedAt;
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-  return `${Math.floor(diff / 86400)} 天前`;
+  if (diff < 60) return t('row.justNow');
+  if (diff < 3600) return t('row.minAgo', { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t('row.hourAgo', { n: Math.floor(diff / 3600) });
+  return t('row.dayAgo', { n: Math.floor(diff / 86400) });
 }
 
 /// cwd 尾段作为工程标识（…/dec/.worktree/dec-staging → …/.worktree/dec-staging）。
@@ -86,7 +87,7 @@ export default function AgentRow({
         type="button"
         ref={menuBtnRef}
         className="agent-row-menu-btn"
-        aria-label={`${name} 更多操作`}
+        aria-label={t('row.moreActions', { name })}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         onClick={toggleMenu}
@@ -104,11 +105,11 @@ export default function AgentRow({
               </button>
             ) : null}
             <button type="button" role="menuitem" onClick={() => run('notes')}>
-              工程便签
+              {t('row.notes')}
             </button>
             {!interactive ? (
               <button type="button" role="menuitem" onClick={() => run('interrupt')}>
-                中断
+                {t('row.interrupt')}
               </button>
             ) : null}
             {/* 分组分隔 + 危险操作底部（Stop/Respawn/Remove 全桌聚焦改动避误触；claude 专属） */}
@@ -135,7 +136,7 @@ export default function AgentRow({
             ) : null}
             {!interactive && isClaude ? (
               <button type="button" role="menuitem" className="agent-row-menu-danger" onClick={() => run('remove')}>
-                删除会话
+                {t('row.remove')}
               </button>
             ) : null}
           </div>

@@ -6,7 +6,6 @@
 use std::{
     collections::HashMap,
     net::TcpListener,
-    process::Stdio,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -14,7 +13,10 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use tokio::process::Command;
 
-use crate::instances::{InstanceConfig, InstanceMode, SshAuth};
+use crate::{
+    instances::{InstanceConfig, InstanceMode},
+    ssh_cmd,
+};
 
 /// 重连退避指数基数（秒），上限 MAX_RETRIES 次后放弃
 const MAX_RETRIES: u32 = 5;
@@ -84,72 +86,18 @@ impl TunnelManager {
     }
 
     /// 构造 ssh 命令（返回 Command + 本地端口）。local_port=Some 表示重连复用端口。
-    /// 密码路径 sshpass -e：密码走 env，不进 argv。参数数组传递（无 shell 拼接）。
+    /// 参数构造抽到 `ssh_cmd`（隧道与远端命令共用，禁两处漂移）；本函数只补转发选项。
     fn build_command(inst: &InstanceConfig, local_port: u16) -> Result<Command> {
-        let ssh = inst
-            .ssh
-            .as_ref()
-            .ok_or_else(|| anyhow!("ssh-tunnel 实例缺 ssh 参数"))?;
         let remote_port = inst.remote_port.ok_or_else(|| anyhow!("缺远程目标端口"))?;
-
-        let mut args = vec![
-            "-N".to_string(),
-            "-L".to_string(),
-            format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
-            "-o".to_string(),
-            "ExitOnForwardFailure=yes".into(),
-            "-o".to_string(),
-            "ServerAliveInterval=15".into(),
-            "-o".to_string(),
-            "ServerAliveCountMax=3".into(),
-            "-o".to_string(),
-            "StrictHostKeyChecking=accept-new".into(),
-        ];
-        match ssh.auth {
-            SshAuth::KeyPath => {
-                let kp = ssh
-                    .key_path
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("key-path 认证缺密钥路径"))?;
-                args.push("-i".into());
-                args.push(kp.clone());
-            }
-            SshAuth::Authsock | SshAuth::Password => {}
-        }
-        if ssh.port != 22 {
-            args.push("-p".into());
-            args.push(ssh.port.to_string());
-        }
-        args.push(format!("{user}@{host}", user = ssh.user, host = ssh.host));
-
-        let mut cmd = Command::new("ssh");
-        cmd.args(&args)
-            .process_group(0) // 独立进程组，exit 时 killpg 连坐
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if ssh.auth == SshAuth::Authsock {
-            if let Ok(v) = std::env::var("SSH_AUTH_SOCK") {
-                cmd.env("SSH_AUTH_SOCK", v);
-            }
-        }
-
-        // 密码认证：前置 sshpass（探测缺失 → 引导错误；不阻塞证书/authsock 路径）
-        if ssh.auth == SshAuth::Password {
-            let pass = ssh.password.as_deref().unwrap_or("");
-            if pass.is_empty() {
-                anyhow::bail!("密码认证需配置密码");
-            }
-            if !sshpass_available() {
-                anyhow::bail!(
-                    "密码认证需要 sshpass（本机未安装）。请安装 sshpass 或改用证书路径 / authsock 认证"
-                );
-            }
-            let mut sp = Command::new("sshpass");
-            sp.arg("-e").arg("ssh").args(&args).env("SSHPASS", pass);
-            return Ok(sp);
-        }
-        Ok(cmd)
+        ssh_cmd::command(
+            inst,
+            &[
+                "-N".to_string(),
+                "-L".to_string(),
+                format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+            ],
+            None,
+        )
     }
 
     /// 启动（幂等）：已运行返回已分配端口；否则 spawn + 起重连监督循环。
@@ -336,15 +284,6 @@ impl TunnelManager {
     }
 }
 
-fn sshpass_available() -> bool {
-    // 探测 PATH 中是否存在 sshpass 二进制（只判存，不执行）
-    std::process::Command::new("which")
-        .arg("sshpass")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 async fn port_open(port: u16) -> bool {
     tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
@@ -367,7 +306,7 @@ mod tests {
     /// 密码认证：本机无 sshpass → 必返引导性错误（不阻塞证书/authsock 路径）
     #[tokio::test]
     async fn password_without_sshpass_gives_guidance() {
-        if sshpass_available() {
+        if ssh_cmd::sshpass_available() {
             return;
         }
         let inst = InstanceConfig {
@@ -380,7 +319,7 @@ mod tests {
                 host: "localhost".into(),
                 port: 22,
                 user: "u".into(),
-                auth: SshAuth::Password,
+                auth: crate::instances::SshAuth::Password,
                 key_path: None,
                 password: Some("secret".into()),
             }),

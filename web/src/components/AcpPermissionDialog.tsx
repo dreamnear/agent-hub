@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import { api as localApi, type Api } from '../api';
+import { useI18n } from '../i18n';
 import type { ChatMessage } from '../types';
 import './AcpPermissionDialog.css';
 
@@ -25,12 +26,13 @@ export default function AcpPermissionDialog({
 }): ReactElement {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const t = useI18n();
   const options: PermOption[] = Array.isArray(
     (request.input as { options?: PermOption[] } | null)?.options,
   )
     ? (request.input as { options: PermOption[] }).options
     : [];
-  const title = request.toolName ?? 'Agent 权限请求';
+  const title = request.toolName ?? t('perm.fallbackTitle');
 
   const answer = async (optionId: string | null): Promise<void> => {
     if (busy || request.toolUseId == null) return;
@@ -50,7 +52,7 @@ export default function AcpPermissionDialog({
       className="dialog-backdrop confirm-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={`权限请求：${title}`}
+      aria-label={t('perm.aria', { title })}
       onClick={(e) => {
         if (e.target === e.currentTarget) void answer(null);
       }}
@@ -59,10 +61,10 @@ export default function AcpPermissionDialog({
       }}
     >
       <div className="dialog-card confirm-card acp-perm-card">
-        <h2 className="confirm-title">权限请求</h2>
+        <h2 className="confirm-title">{t('perm.title')}</h2>
         <p className="confirm-desc">{title}</p>
         <div className="confirm-banner confirm-banner--warn" role="note">
-          ⚠ Agent 请求执行需要授权的操作，请选择是否允许
+          {t('perm.banner')}
         </div>
         <div className="dialog-actions acp-perm-actions">
           {options.map((o) => (
@@ -83,7 +85,7 @@ export default function AcpPermissionDialog({
             </button>
           ))}
           <button type="button" className="btn-ghost" disabled={busy} onClick={() => void answer(null)}>
-            取消
+            {t('dialog.cancel')}
           </button>
         </div>
         {err ? <p className="dialog-error">{err}</p> : null}

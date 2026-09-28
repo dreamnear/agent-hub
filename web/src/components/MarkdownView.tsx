@@ -2,6 +2,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ReactElement } from 'react';
 import BuiCodeBlock from './bui/CodeBlock';
+import { useI18n } from '../i18n';
 import './MarkdownView.css';
 
 /// assistant 消息 markdown 渲染（P5 preview 反馈：###/**/列表/代码块正常渲染）。
@@ -19,6 +20,7 @@ function nodeText(node: React.ReactNode): string {
 }
 
 function BuiPre({ children }: { children?: React.ReactNode }) {
+  const t = useI18n();
   const codeEl = (Array.isArray(children) ? children[0] : children) as
     | { props?: { className?: string; children?: React.ReactNode } }
     | undefined;
@@ -28,7 +30,7 @@ function BuiPre({ children }: { children?: React.ReactNode }) {
   const lines = raw.replace(/\n$/, '').split('\n');
   return (
     <div data-bui className="my-2 [&>div]:!max-w-full">
-      <BuiCodeBlock lines={lines} filename={lang} labels={{ copy: '复制', copied: '已复制' }} />
+      <BuiCodeBlock lines={lines} filename={lang} labels={{ copy: t('md.copy'), copied: t('md.copied') }} />
     </div>
   );
 }

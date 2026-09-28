@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useI18n } from '../i18n';
 import type { AgentSummary } from '../types';
 import './QuickChat.css';
 
@@ -12,6 +13,7 @@ interface Props {
 /// 选中即关闭面板并切换主区域到该会话对话（与左栏点选行为一致）。
 /// P3 的浮层内直发表单已废弃（对话入口统一为主区域）。
 export default function QuickChat({ agents, onPick, onClose }: Props): ReactElement {
+  const t = useI18n();
   const [query, setQuery] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
 
@@ -76,7 +78,7 @@ export default function QuickChat({ agents, onPick, onClose }: Props): ReactElem
                 if (a) pick(a);
               }
             }}
-            placeholder="搜索 agent…（↑↓ 选择，Enter 打开对话）"
+            placeholder={t('qc.placeholder')}
             aria-label="search agent"
           />
         </div>
@@ -95,7 +97,7 @@ export default function QuickChat({ agents, onPick, onClose }: Props): ReactElem
                 <span className="qc-name">{a.name ?? a.id.slice(0, 8)}</span>
                 <span className="qc-cwd">{a.cwd ?? ''}</span>
                 <span className="qc-state">{a.rawState ?? ''}</span>
-                {i === activeIdx ? <span className="qc-enter">↵ 打开</span> : null}
+                {i === activeIdx ? <span className="qc-enter">{t('qc.open')}</span> : null}
               </button>
             </li>
           ))}
@@ -108,12 +110,12 @@ export default function QuickChat({ agents, onPick, onClose }: Props): ReactElem
                   <path d="M21 21l-4.3-4.3" />
                 </svg>
               </span>
-              <span className="qc-empty-title">无匹配 agent</span>
-              <span className="qc-empty-hint">调整搜索词后重试</span>
+              <span className="qc-empty-title">{t('qc.emptyTitle')}</span>
+              <span className="qc-empty-hint">{t('qc.emptyHint')}</span>
             </li>
           ) : null}
         </ul>
-        <div className="quickchat-footer">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+        <div className="quickchat-footer">{t('qc.footer')}</div>
       </div>
     </div>
   );

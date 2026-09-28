@@ -37,17 +37,41 @@ function apply(mode: ThemeMode): void {
   }
 }
 
+/// 模块态 + 订阅（agent-hub-settings B3：主题入口迁入设置页后，App 内可能同时有
+/// 设置页与侧栏两处 useTheme 消费方——各持一份 useState 会让侧栏的主题标记不跟随
+/// 设置页的改动。模块态 + 广播，机制（apply/存储口径/系统跟随）完全不变，只把
+/// 「状态在哪」从组件内提到模块内。）
+let current: ThemeMode | null = null;
+const listeners = new Set<(m: ThemeMode) => void>();
+
+function getMode(): ThemeMode {
+  return current ?? readStored();
+}
+
+function commit(m: ThemeMode): void {
+  current = m;
+  apply(m);
+  window.localStorage.setItem(STORAGE_KEY, m);
+  for (const l of listeners) l(m);
+}
+
 export function useTheme(): {
   mode: ThemeMode;
   effective: 'dark' | 'light';
   cycle: () => void;
+  /** 设置页外观分区用：直接落某态（B3 主题三态统一入口） */
+  setMode: (m: ThemeMode) => void;
 } {
   const [mode, setMode] = useState<ThemeMode>(readStored);
 
-  // 初始化 + 模式变化时应用
   useEffect(() => {
+    // 挂载/模式变化即应用（幂等，多消费方同时落同值无害）；首个订阅者确立模块态
+    if (current === null) current = mode;
     apply(mode);
-    window.localStorage.setItem(STORAGE_KEY, mode);
+    listeners.add(setMode);
+    return () => {
+      listeners.delete(setMode);
+    };
   }, [mode]);
 
   // auto 模式下系统主题实时跟随（matchMedia change）
@@ -61,8 +85,11 @@ export function useTheme(): {
   }, []);
 
   const cycle = useCallback((): void => {
-    setMode((m) => (m === 'auto' ? 'dark' : m === 'dark' ? 'light' : 'auto'));
+    const m = getMode();
+    commit(m === 'auto' ? 'dark' : m === 'dark' ? 'light' : 'auto');
   }, []);
 
-  return { mode, effective: resolve(mode), cycle };
+  const set = useCallback((m: ThemeMode): void => commit(m), []);
+
+  return { mode, effective: resolve(mode), cycle, setMode: set };
 }

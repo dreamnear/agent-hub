@@ -8,16 +8,16 @@ import AgentList from './components/AgentList';
 import ChatTab from './components/ChatTab';
 import QuickChat from './components/QuickChat';
 import AgentsConfigPanel from './components/AgentsConfigPanel';
-import InstanceSettings from './components/InstanceSettings';
+import SettingsPage, { type SettingsSectionKey } from './components/SettingsPage';
 import TokenGate from './components/TokenGate';
 import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialog';
 import { api, clearStoredToken, onUnauthorized } from './api';
+import { useI18n } from './i18n';
 import type { AgentSummary } from './types';
 import './App.css';
 import './components/ProjectSidebar.css';
 import './components/StartDialog.css';
 import './components/AgentsConfigPanel.css';
-import './components/InstanceSettings.css';
 
 /// 复合选中 id：`${instanceId}:${agentId}`——跨实例 agentId 可能碰撞（本机与远程
 /// 同 agent id），单一 id 无法定位（任务7）。
@@ -27,6 +27,7 @@ function selectKey(a: AgentSummary): string {
 
 export default function App(): ReactElement {
   const queryClient = useQueryClient();
+  const t = useI18n();
   const { data, registry } = useAgents();
   // 选中只存复合键（`${instanceId}:${agentId}`，任务7：跨实例 agentId 碰撞）——
   // 渲染时按 key 从轮询列表实时取值（快照对象会让 group 停在选中瞬间，
@@ -57,8 +58,11 @@ export default function App(): ReactElement {
   const [showQuickChat, setShowQuickChat] = useState(false);
   // agents 配置管理器入口
   const [showAgentsCfg, setShowAgentsCfg] = useState(false);
-  // 实例管理设置面板入口（任务9）
-  const [showInstCfg, setShowInstCfg] = useState(false);
+  // 设置页（agent-hub-settings B1）：null = 未打开，值 = 打开时落的分区。
+  // 覆盖层渲染，主界面不卸载——关闭后选中会话/抽屉/折叠原样保留。
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionKey | null>(null);
+  const openSettings = (section: SettingsSectionKey): void => setSettingsSection(section);
+  const closeSettings = (): void => setSettingsSection(null);
   // 工程便签悬浮卡（agent-hub-notes）：⋯ 菜单/顶栏切换开；钉住的工程随会话自动展开
   const [notesFor, setNotesFor] = useState<AgentSummary | null>(null);
   // token 门禁：仅 allow_lan 模式遇 401 触发；localhost 不触发
@@ -116,15 +120,16 @@ export default function App(): ReactElement {
         e.preventDefault();
         setLeftCollapsed((v) => !v);
       }
-      // 反馈轮 25-A：移动端抽屉打开时 Esc 关闭（与遮罩点击等价）
-      if (e.key === 'Escape' && leftOpen) {
+      // 反馈轮 25-A：移动端抽屉打开时 Esc 关闭（与遮罩点击等价）；
+      // 设置页打开时 Esc 只关最上层（设置页），抽屉不动（agent-hub-settings B1）
+      if (e.key === 'Escape' && leftOpen && settingsSection === null) {
         setLeftOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- leftOpen 参与 Esc 关抽屉判定，防 stale closure
-  }, [leftOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- leftOpen/settingsSection 参与 Esc 分层判定，防 stale closure
+  }, [leftOpen, settingsSection]);
 
   // token 解锁：重拉全部数据
   const unlock = (): void => {
@@ -165,7 +170,7 @@ export default function App(): ReactElement {
       <button
         type="button"
         className="sidebar-expand"
-        aria-label="展开侧栏"
+        aria-label={t('shell.expandSidebar')}
         onClick={() => {
           setLeftCollapsed(false);
           setLeftOpen(true);
@@ -192,7 +197,7 @@ export default function App(): ReactElement {
             }}
             onOpenProjects={() => setRightOpen(true)}
             onOpenConfig={() => setShowAgentsCfg(true)}
-            onOpenInstances={() => setShowInstCfg(true)}
+            onOpenSettings={openSettings}
             onStart={() => setShowStart(true)}
             onRemoved={(id) => {
               // 复合键与单实例 id 兼容：选中的正是被移除 agent 则清选中
@@ -216,7 +221,7 @@ export default function App(): ReactElement {
             />
           ) : (
             <div className="pane-placeholder">
-              <p>← 从左侧选择一个 agent 开始对话</p>
+              <p>{t('shell.placeholder')}</p>
             </div>
           )}
         </main>
@@ -245,7 +250,9 @@ export default function App(): ReactElement {
         />
       ) : null}
       {showAgentsCfg ? <AgentsConfigPanel onClose={() => setShowAgentsCfg(false)} /> : null}
-      {showInstCfg ? <InstanceSettings onClose={() => setShowInstCfg(false)} /> : null}
+      {settingsSection ? (
+        <SettingsPage section={settingsSection} onClose={closeSettings} />
+      ) : null}
       {/* 工程便签悬浮卡：无 cwd 会话不开启（claude/ACP 条目均带 cwd，防御性兜底） */}
       {notesFor && notesFor.cwd ? (
         <ProjectNotesDialog

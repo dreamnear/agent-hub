@@ -29,7 +29,7 @@ pub fn router() -> Router<SharedState> {
 }
 
 async fn list_acp_agents(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    Json(json!({ "agents": state.cfg.acp.agents }))
+    Json(json!({ "agents": state.acp.agents() }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,11 +76,10 @@ async fn create_session(
             "未知 ACP agent: {}（已配置: {:?}）",
             body.agent,
             state
-                .cfg
                 .acp
-                .agents
+                .agents()
                 .iter()
-                .map(|a| &a.name)
+                .map(|a| a.name.clone())
                 .collect::<Vec<_>>()
         )));
     }

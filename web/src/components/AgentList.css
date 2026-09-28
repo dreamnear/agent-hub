@@ -21,7 +21,7 @@
 
 .sb-brand {
   margin-right: auto;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
   color: var(--c-accent);
 }
@@ -53,7 +53,7 @@
   margin: 0;
   padding: 8px 14px;
   color: var(--c-sidebar-sub);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* ===== Sidebar-v3 可折叠状态分组（反馈轮 18，Penpot Sidebar-v3 板）===== */
@@ -69,7 +69,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 14px 2px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--c-sidebar-text, #e5e7eb);
@@ -84,7 +84,7 @@
 
 .inst-group-offline {
   font-weight: 400;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--c-sidebar-icon, #777777);
 }
 
@@ -110,7 +110,7 @@
   padding: 0;
   font: inherit;
   font-weight: 400;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--c-danger-bright, #f87171);
   cursor: pointer;
 }
@@ -125,7 +125,7 @@
   background: none;
   color: var(--c-sidebar-sub, #9ca3af);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   text-align: left;
   justify-content: flex-start; /* 覆盖全局 button 居中：组头左对齐 */
@@ -133,7 +133,7 @@
 }
 
 .agent-group-caret {
-  font-size: 10px;
+  font-size: 0.625rem;
   flex-shrink: 0;
 }
 
@@ -162,7 +162,7 @@
   border-radius: 6px;
   background: var(--c-sidebar-item);
   color: var(--c-sidebar-text);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   justify-content: flex-start;
   padding: 0 10px;
@@ -190,7 +190,7 @@
   border: none;
   background: #1f1f1f;
   color: #777;
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-align: left;
   cursor: pointer;
   width: 100%;

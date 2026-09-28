@@ -2,9 +2,11 @@ import { useState, type ReactElement } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgents, filterAgents, familyAnchors, type InstanceCtx, type GroupedAgents } from '../hooks/useAgents';
 import { useTheme } from '../hooks/useTheme';
+import { t, useI18n } from '../i18n';
 import type { AgentSummary } from '../types';
 import AgentRow, { type SessionAction } from './AgentRow';
 import ConfirmDialog, { type ConfirmRequest } from './ConfirmDialog';
+import type { SettingsSectionKey } from './SettingsPage';
 import './AgentList.css';
 
 interface Props {
@@ -17,19 +19,21 @@ interface Props {
   onCollapse: () => void;
   onOpenProjects: () => void;
   onOpenConfig: () => void;
-  onOpenInstances: () => void;
   onStart: () => void;
+  /** 打开设置页指定分区（agent-hub-settings B1/B3：底部「设置」项 + 顶栏主题标记跳转） */
+  onOpenSettings: (section: SettingsSectionKey) => void;
   /** 移除会话后回抛被移除 agent 的 id（App 按复合键清选中） */
   onRemoved: (id: string) => void;
   /** 工程便签（agent-hub-notes）：⋯ 菜单入口上抛 App（悬浮卡 + 钉住自动展开归 App 管） */
   onOpenNotes: (a: AgentSummary) => void;
 }
 
-export const GROUP_LABELS: { key: string; label: string }[] = [
-  { key: 'working', label: '工作中' },
-  { key: 'other', label: '空闲' },
-  { key: 'needsInput', label: '等待' },
-  { key: 'completed', label: '已完成' },
+/// 组桶标签（C2 i18n：label 存 key，渲染期翻译——buildInstanceGroups 输出随 locale）
+export const GROUP_LABELS: { key: string; labelKey: string }[] = [
+  { key: 'working', labelKey: 'group.working' },
+  { key: 'other', labelKey: 'group.other' },
+  { key: 'needsInput', labelKey: 'group.needsInput' },
+  { key: 'completed', labelKey: 'group.completed' },
 ];
 
 /// 单个实例分组头可折叠状态（任务6）：键 = `${instanceId}:${groupKey}`，实例间互不影响。
@@ -51,11 +55,11 @@ export function buildInstanceGroups(
     // 未标 instanceId（undefined）视同本机（null）——向后兼容现状数据
     const byInst = (bucket: AgentSummary[]) => bucket.filter((a) => (a.instanceId ?? null) === inst.id);
     const remoteIds = inst.id != null ? new Set([inst.id]) : new Set<string | null>();
-    const groups = GROUP_LABELS.map(({ key, label }) => {
+    const groups = GROUP_LABELS.map(({ key, labelKey }) => {
       const bucket = grouped[key as keyof GroupedAgents] as AgentSummary[];
       return {
         key,
-        label,
+        label: t(labelKey),
         agents: ACTIVE_KEYS.has(key)
           ? byInst(bucket)
           : filterAgents(byInst(bucket), checked, anchors, remoteIds),
@@ -79,14 +83,16 @@ export default function AgentList({
   onCollapse,
   onOpenProjects,
   onOpenConfig,
-  onOpenInstances,
   onStart,
+  onOpenSettings,
   onRemoved,
   onOpenNotes,
 }: Props): ReactElement {
   const { grouped, isLoading, tree, instances, offline, authError, registry } = useAgents();
   const queryClient = useQueryClient();
-  // 主题三态（反馈轮 26-A）：◐ 跟随系统 / ☾ 暗色 / ☀︎ 亮色，localStorage 持久化
+  const t = useI18n(); // 屏蔽模块级 t：组件内随 locale 订阅重渲（C2）
+  // 主题三态（反馈轮 26-A）：◐ 跟随系统 / ☾ 暗色 / ☀︎ 亮色。agent-hub-settings B3
+  // 起唯一切换入口在设置页外观分区，此处只作状态标记（点击跳设置页）
   const theme = useTheme();
   // 工程族锚（反馈轮 23）：各树组主仓根路径，驱动 filterAgents 的 common-root 直查
   const anchors = familyAnchors(tree);
@@ -135,33 +141,33 @@ export default function AgentList({
         return;
       }
       setConfirmReq({
-        title: '停止会话 · Stop agent',
-        message: `即将停止「${a.name ?? a.id}」。`,
-        banner: 'Stop 后会话退出运行状态，之后可用 Respawn 重启',
+        title: t('confirm.stop.title'),
+        message: t('confirm.stop.message', { name: a.name ?? a.id }),
+        banner: t('confirm.stop.banner'),
         variant: 'danger',
-        confirmLabel: 'Stop',
+        confirmLabel: t('confirm.stop.label'),
         action: () => instApi.stopAgent(a.id).catch((e: unknown) => alert(String(e))),
       });
       return;
     }
     if (action === 'respawn') {
       setConfirmReq({
-        title: '重启会话 · Respawn',
-        message: `即将重启「${a.name ?? a.id}」的会话进程。`,
-        banner: 'Respawn 会结束当前会话并以同一 cwd 重新启动，未落盘的上下文会丢失',
+        title: t('confirm.respawn.title'),
+        message: t('confirm.respawn.message', { name: a.name ?? a.id }),
+        banner: t('confirm.respawn.banner'),
         variant: 'warn',
-        confirmLabel: 'Respawn',
+        confirmLabel: t('confirm.respawn.label'),
         action: () => instApi.respawnAgent(a.id).catch((e: unknown) => alert(String(e))),
       });
       return;
     }
     // remove
     setConfirmReq({
-      title: '移除会话 · Remove agent',
-      message: `即将从列表移除「${a.name ?? a.id}」。`,
-      banner: 'Remove 后该 agent 停止并被移出管理列表，操作不可撤销',
+      title: t('confirm.remove.title'),
+      message: t('confirm.remove.message', { name: a.name ?? a.id }),
+      banner: t('confirm.remove.banner'),
       variant: 'danger',
-      confirmLabel: 'Remove',
+      confirmLabel: t('confirm.remove.label'),
       action: () =>
         instApi
           .removeAgent(a.id)
@@ -173,7 +179,7 @@ export default function AgentList({
     });
   };
 
-  if (isLoading) return <div role="status">loading</div>;
+  if (isLoading) return <div role="status">{t('sidebar.loading')}</div>;
 
   // 多实例分组（任务6）：按实例分组头（本机/实例名）→ 组内沿用既有状态桶。
   // 过滤语义：活跃桶恒全显；空闲/已完成 —— 本机套族锚，远程整组保留（远程 cwd
@@ -199,19 +205,21 @@ export default function AgentList({
         <button
           type="button"
           className="sb-icon-btn"
-          aria-label={`主题：${theme.mode === 'auto' ? '跟随系统' : theme.mode === 'dark' ? '暗色' : '亮色'}（点击切换）`}
-          title={`主题：${
-            theme.mode === 'auto' ? '跟随系统' : theme.mode === 'dark' ? '暗色' : '亮色'
-          }（点击切换：跟随系统 → 暗色 → 亮色）`}
-          onClick={theme.cycle}
+          aria-label={t('sidebar.themeAria', {
+            mode: theme.mode === 'auto' ? t('settings.theme.auto') : theme.mode === 'dark' ? t('settings.theme.dark') : t('settings.theme.light'),
+          })}
+          title={t('sidebar.themeTitle', {
+            mode: theme.mode === 'auto' ? t('settings.theme.auto') : theme.mode === 'dark' ? t('settings.theme.dark') : t('settings.theme.light'),
+          })}
+          onClick={() => onOpenSettings('appearance')}
         >
           {theme.mode === 'auto' ? '◐' : theme.mode === 'dark' ? '☾' : '☀︎'}
         </button>
         <button
           type="button"
           className="sb-icon-btn"
-          aria-label="搜索会话"
-          title="搜索会话 ⌘K"
+          aria-label={t('sidebar.search')}
+          title={t('sidebar.searchTitle')}
           onClick={onOpenSearch}
         >
           <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
@@ -222,8 +230,8 @@ export default function AgentList({
         <button
           type="button"
           className="sb-icon-btn"
-          aria-label="折叠侧栏"
-          title="折叠侧栏 ⌘B"
+          aria-label={t('sidebar.collapse')}
+          title={t('sidebar.collapseTitle')}
           onClick={onCollapse}
         >
           <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
@@ -235,7 +243,7 @@ export default function AgentList({
       <div className="sb-list">
         {instGroups.every((inst) => inst.groups.every((g) => g.agents.length === 0)) &&
         !instGroups.some((inst) => offline[inst.instId ?? ''] || authError[inst.instId ?? '']) ? (
-          <p className="sb-empty">暂无会话</p>
+          <p className="sb-empty">{t('sidebar.empty')}</p>
         ) : (
           instGroups.map((inst) => {
             const visible = inst.groups.filter((g) => g.agents.length > 0);
@@ -249,16 +257,16 @@ export default function AgentList({
               <div className="inst-group" key={inst.instId ?? 'local'}>
                 <div className={`inst-group-head ${instOffline && !instAuthErr ? 'inst-group-head--offline' : ''}`}>
                   <span className="inst-group-name">
-                    {inst.instName}
-                    {instOffline && !instAuthErr ? <span className="inst-group-offline">· 离线</span> : null}
+                    {inst.instId == null ? t('inst.local') : inst.instName}
+                    {instOffline && !instAuthErr ? <span className="inst-group-offline">{t('sidebar.offline')}</span> : null}
                     {instAuthErr ? (
                       <button
                         type="button"
                         className="inst-group-autherr"
-                        title="该实例 token 失效，点击前往实例管理重新配置"
-                        onClick={onOpenInstances}
+                        title={t('sidebar.authErrorTitle')}
+                        onClick={() => onOpenSettings('instances')}
                       >
-                        · 凭据失效
+                        {t('sidebar.authError')}
                       </button>
                     ) : null}
                   </span>
@@ -302,25 +310,39 @@ export default function AgentList({
           工程过滤隐藏时显示，点击清空勾选回到全显 */}
       {hiddenCount > 0 ? (
         <button type="button" className="filter-hidden-hint" onClick={onClearFilter}>
-          另有 {hiddenCount} 个会话被工程过滤隐藏 · 点击全部显示
+          {t('sidebar.hiddenHint', { n: hiddenCount })}
         </button>
       ) : null}
       <div className="sb-menu">
         <button type="button" className="sb-menu-item" onClick={onOpenProjects}>
           <span className="sb-menu-icon" aria-hidden="true">▤</span>
-          工程列表
+          {t('menu.projects')}
         </button>
         <button type="button" className="sb-menu-item" onClick={onOpenConfig}>
           <span className="sb-menu-icon" aria-hidden="true">⚙</span>
-          Agent 配置
+          {t('menu.config')}
         </button>
-        <button type="button" className="sb-menu-item" onClick={onOpenInstances}>
+        {/* 实例管理入口（agent-hub-settings D1）：统一指向设置页实例分区，不再有独立弹层 */}
+        <button
+          type="button"
+          className="sb-menu-item"
+          onClick={() => onOpenSettings('instances')}
+        >
           <span className="sb-menu-icon" aria-hidden="true">◫</span>
-          实例管理
+          {t('menu.instances')}
         </button>
         <button type="button" className="sb-menu-item" onClick={onStart}>
           <span className="sb-menu-icon" aria-hidden="true">＋</span>
-          新建 Agent
+          {t('menu.newAgent')}
+        </button>
+        {/* 设置页入口（agent-hub-settings B1）：默认落外观分区 */}
+        <button
+          type="button"
+          className="sb-menu-item"
+          onClick={() => onOpenSettings('appearance')}
+        >
+          <span className="sb-menu-icon" aria-hidden="true">⚒</span>
+          {t('menu.settings')}
         </button>
       </div>
       {confirmReq ? <ConfirmDialog request={confirmReq} onClose={() => setConfirmReq(null)} /> : null}

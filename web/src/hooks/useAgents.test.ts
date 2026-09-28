@@ -1,7 +1,14 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentSummary } from '../types';
-import { filterAgents, filterFinishedSubagents, filterInteractive, groupAgents } from './useAgents';
+import {
+  autoTunnelStart,
+  filterAgents,
+  filterFinishedSubagents,
+  filterInteractive,
+  groupAgents,
+  resetTunnelBackoff,
+} from './useAgents';
 
 function fake(id: string, group: AgentSummary['group']): AgentSummary {
   return {
@@ -118,9 +125,9 @@ describe('filterAgents', () => {
 
   it('keeps sessions in subdirectories of a checked root (r51 claude-view 场景)', () => {
     const g = filterAgents(
-      [withCwd('sub', '/Users/demo/Works/personal/projects/claude-view')],
-      new Set(['/Users/demo/Works/personal']),
-      ['/Users/demo/Works/personal'],
+      [withCwd('sub', '/Users/alice/Works/personal/projects/claude-view')],
+      new Set(['/Users/alice/Works/personal']),
+      ['/Users/alice/Works/personal'],
     );
     expect(g.map((a) => a.id)).toEqual(['sub']);
   });
@@ -146,13 +153,13 @@ describe('filterAgents', () => {
     // 族锚取最短前缀（最外层）：personal 主仓、其下 submodule（src/claude-view）、
     // 未注册中间层 cwd 三者同族——勾任一节点（含 submodule 节点）全族显示
     const anchors = [
-      '/Users/demo/Works/personal',
-      '/Users/demo/Works/personal/projects/claude-view/src/claude-view',
+      '/Users/alice/Works/personal',
+      '/Users/alice/Works/personal/projects/claude-view/src/claude-view',
     ];
     const sessions = [
-      withCwd('middle', '/Users/demo/Works/personal/projects/claude-view'),
-      withCwd('personal-root', '/Users/demo/Works/personal'),
-      withCwd('sub-inner', '/Users/demo/Works/personal/projects/claude-view/src/claude-view/pkg'),
+      withCwd('middle', '/Users/alice/Works/personal/projects/claude-view'),
+      withCwd('personal-root', '/Users/alice/Works/personal'),
+      withCwd('sub-inner', '/Users/alice/Works/personal/projects/claude-view/src/claude-view/pkg'),
       withCwd('far', '/proj/other'),
     ];
     const byPersonalRoot = filterAgents(sessions, new Set([anchors[0]]), anchors);
@@ -180,5 +187,123 @@ describe('filterAgents', () => {
       'sub',
       'other',
     ]);
+  });
+});
+
+// —— autoTunnelStart（r80 自激风暴修复）：退避序列 / 上限 / 手动绕过 / 恢复复位 / 在途去重 ——
+
+function deferred<T>(): { p: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const p = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { p, resolve, reject };
+}
+
+describe('autoTunnelStart（r80 自激风暴修复）', () => {
+  const ID = 'inst-backoff';
+  beforeEach(() => {
+    resetTunnelBackoff(ID); // 模块级 Map 状态按用例隔离
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    resetTunnelBackoff(ID);
+    vi.useRealTimers();
+  });
+
+  /** 拉起可控行为：记录调用、返回未落定 deferred，reject 后排空微任务 */
+  function makeStart() {
+    const starts: ReturnType<typeof deferred>[] = [];
+    const start = vi.fn(() => {
+      const d = deferred<unknown>();
+      starts.push(d);
+      return d.p;
+    });
+    const failLast = async () => {
+      starts[starts.length - 1].reject(new Error('tunnel down'));
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { start, starts, failLast };
+  }
+
+  it('连续失败按 2s/4s/8s 指数退避', async () => {
+    const { start, failLast } = makeStart();
+    // 第 1 次立即发起；失败后 2s 内不放行
+    expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+    await failLast();
+    expect(start).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1_999);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+    // 第 2 次失败后 4s 内不放行
+    await failLast();
+    vi.advanceTimersByTime(3_999);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+    // 第 3 次失败后 8s 内不放行
+    await failLast();
+    vi.advanceTimersByTime(7_999);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+  });
+
+  it('连续 5 次失败后停止自动发起（上限），不再风暴', async () => {
+    const { start, failLast } = makeStart();
+    for (let i = 0; i < 5; i++) {
+      expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+      await failLast();
+      vi.advanceTimersByTime(30_000); // 直接跳过退避窗口，验证触发的是次数上限而非退避
+    }
+    vi.advanceTimersByTime(600_000);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    expect(start).toHaveBeenCalledTimes(5);
+  });
+
+  it('手动启动不受退避/上限限制（InstancesSection 直调 api.tunnelStart，不经本路径）', async () => {
+    const { start, failLast } = makeStart();
+    for (let i = 0; i < 5; i++) {
+      expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+      await failLast();
+      vi.advanceTimersByTime(30_000);
+    }
+    // 自动路径被上限拦截；手动路径 = 直接调用 api.tunnelStart（此处以直调 start 模拟），照常执行
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    const manual = vi.fn(() => Promise.resolve({ localPort: 58111 }));
+    await expect(manual()).resolves.toEqual({ localPort: 58111 });
+    expect(manual).toHaveBeenCalledOnce();
+  });
+
+  it('恢复后正常：agents 成功路径复位退避，自动拉起能力完整还原', async () => {
+    const { start, failLast } = makeStart();
+    for (let i = 0; i < 5; i++) {
+      expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+      await failLast();
+      vi.advanceTimersByTime(30_000);
+    }
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    // queryFn 成功路径调用 resetTunnelBackoff → 下次故障可重新自动拉起
+    resetTunnelBackoff(ID);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+  });
+
+  it('在途去重：拉起未落定不重复发起（react-query retry 重入 catch 不放大）', () => {
+    const start = vi.fn(() => deferred<unknown>().p); // 永不落定
+    expect(autoTunnelStart(ID, start, () => {})).toBe(true);
+    expect(autoTunnelStart(ID, start, () => {})).toBe(false);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it('拉起成功触发 onSuccess（invalidate instances）并清在途标', async () => {
+    const onSuccess = vi.fn();
+    let d!: ReturnType<typeof deferred>;
+    expect(autoTunnelStart(ID, () => ((d = deferred()), d.p), onSuccess)).toBe(true);
+    d.resolve({ localPort: 58111 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onSuccess).toHaveBeenCalledOnce();
   });
 });

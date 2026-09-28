@@ -12,15 +12,15 @@ fn fixture_path() -> std::path::PathBuf {
 
 #[test]
 fn session_dir_maps_path_to_slug() {
-    // 实测规则：'/' → '-'、'.' → '-'、其余保留（-Users-demo--claude-jobs-* 佐证 .claude→-claude）
+    // 实测规则：'/' → '-'、'.' → '-'、其余保留（-Users-alice--claude-jobs-* 佐证 .claude→-claude）
     // tasks.md：projects_dir 是 .claude 根，返回 <root>/projects/<slug>
     let root = Path::new("/home/u/.claude");
     let dir = session_dir(root, Path::new("/Users/demo/proj_alpha")).unwrap();
     assert_eq!(dir, root.join("projects/-Users-demo-proj_alpha"));
-    let dir2 = session_dir(root, Path::new("/Users/demo/.claude/jobs/aa14d3e3-tmp")).unwrap();
+    let dir2 = session_dir(root, Path::new("/Users/alice/.claude/jobs/aa14d3e3-tmp")).unwrap();
     assert_eq!(
         dir2,
-        root.join("projects/-Users-demo--claude-jobs-aa14d3e3-tmp")
+        root.join("projects/-Users-alice--claude-jobs-aa14d3e3-tmp")
     );
 }
 

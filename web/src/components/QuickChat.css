@@ -96,20 +96,20 @@
 .qc-cwd {
   flex: 1;
   color: var(--c-faint);
-  font-size: 11px;
+  font-size: 0.6875rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .qc-state {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-faint);
   flex-shrink: 0;
 }
 
 .qc-enter {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-faint);
   flex-shrink: 0;
 }
@@ -139,18 +139,18 @@
 }
 
 .qc-empty-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--c-text);
 }
 
 .qc-empty-hint {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--c-faint);
 }
 
 .quickchat-footer {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--c-faint);
   text-align: center;
   padding: 0.35rem 0.8rem 0.6rem;

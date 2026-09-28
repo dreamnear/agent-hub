@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
+import { useI18n } from '../i18n';
 import type { AgentSummary } from '../types';
 import ChatTab from './ChatTab';
 import ConfirmDialog, { type ConfirmRequest } from './ConfirmDialog';
@@ -14,6 +15,7 @@ export default function DetailPanel({
   onClose: () => void;
 }): ReactElement {
   const qc = useQueryClient();
+  const t = useI18n();
   const [tab, setTab] = useState<'overview' | 'chat'>('overview');
   const [logs, setLogs] = useState('');
   const [showLogs, setShowLogs] = useState(false);
@@ -33,11 +35,11 @@ export default function DetailPanel({
   const stop = (): void => {
     // 误点即停代价高，与 rm 同级加确认（review-r1 BLOCKER-2）；统一走 ConfirmDialog
     setConfirmReq({
-      title: '停止会话 · Stop agent',
-      message: `即将停止「${agent.name ?? agent.id}」。`,
-      banner: 'Stop 后会话退出运行状态，之后可用 Respawn 重启',
+      title: t('confirm.stop.title'),
+      message: t('confirm.stop.message', { name: agent.name ?? agent.id }),
+      banner: t('confirm.stop.banner'),
       variant: 'danger',
-      confirmLabel: 'Stop',
+      confirmLabel: t('confirm.stop.label'),
       action: () =>
         api
           .stopAgent(agent.id)
@@ -49,11 +51,11 @@ export default function DetailPanel({
   const respawn = (): void => {
     // respawn 会重启会话，加确认（对齐 stop/rm 语义）
     setConfirmReq({
-      title: '重启会话 · Respawn',
-      message: `即将重启「${agent.name ?? agent.id}」的会话进程。`,
-      banner: 'Respawn 会结束当前会话并以同一 cwd 重新启动，未落盘的上下文会丢失',
+      title: t('confirm.respawn.title'),
+      message: t('confirm.respawn.message', { name: agent.name ?? agent.id }),
+      banner: t('confirm.respawn.banner'),
       variant: 'warn',
-      confirmLabel: 'Respawn',
+      confirmLabel: t('confirm.respawn.label'),
       action: () =>
         api
           .respawnAgent(agent.id)
@@ -64,11 +66,11 @@ export default function DetailPanel({
 
   const rm = (): void => {
     setConfirmReq({
-      title: '移除会话 · Remove agent',
-      message: `即将从列表移除「${agent.name ?? agent.id}」。`,
-      banner: 'Remove 后该 agent 停止并被移出管理列表，操作不可撤销',
+      title: t('confirm.remove.title'),
+      message: t('confirm.remove.message', { name: agent.name ?? agent.id }),
+      banner: t('confirm.remove.banner'),
       variant: 'danger',
-      confirmLabel: 'Remove',
+      confirmLabel: t('confirm.remove.label'),
       action: () =>
         api
           .removeAgent(agent.id)
@@ -96,7 +98,7 @@ export default function DetailPanel({
             aria-selected={tab === 'overview'}
             onClick={() => setTab('overview')}
           >
-            概览
+            {t('detail.overview')}
           </button>
           <button
             type="button"
@@ -104,9 +106,9 @@ export default function DetailPanel({
             aria-selected={tab === 'chat'}
             onClick={() => setTab('chat')}
             disabled={agent.sessionId == null}
-            title={agent.sessionId == null ? '该 agent 无关联会话' : undefined}
+            title={agent.sessionId == null ? t('detail.noSession') : undefined}
           >
-            对话
+            {t('detail.chat')}
           </button>
         </div>
       </div>
@@ -149,7 +151,7 @@ export default function DetailPanel({
               disabled={agent.rawState === 'working'}
               title={
                 agent.rawState === 'working'
-                  ? '运行中的会话无需重启；respawn 面向已完成/退出的会话'
+                  ? t('detail.respawnTip')
                   : undefined
               }
             >

@@ -41,7 +41,7 @@
   border-radius: 999px;
   background: var(--c-accent);
   color: var(--c-inverse);
-  font-size: 13px;
+  font-size: 0.8125rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -201,7 +201,7 @@
   padding: 0.5rem 0.7rem;
   border-top: 1px solid var(--c-border);
   background: var(--c-code);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-family: ui-monospace, monospace;
   overflow: auto;
   max-height: 16rem;

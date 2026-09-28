@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from 'react';
+import { useI18n } from '../i18n';
 import './ConfirmDialog.css';
 
 /// 确认请求描述（回调式：调用方 setConfirmReq({...})，确认后执行 action）。
@@ -21,6 +22,7 @@ export default function ConfirmDialog({
   onClose: () => void;
 }): ReactElement {
   const [busy, setBusy] = useState(false);
+  const t = useI18n();
   const close = (): void => {
     if (!busy) onClose();
   };
@@ -53,7 +55,7 @@ export default function ConfirmDialog({
         </div>
         <div className="dialog-actions">
           <button type="button" className="btn-ghost" onClick={close} disabled={busy}>
-            取消
+            {t('dialog.cancel')}
           </button>
           <button
             type="button"
