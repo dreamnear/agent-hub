@@ -25,13 +25,16 @@ case "$1" in
     exit 0
     ;;
   attach)
-    # 注意：真实 claude attach 是 TUI，raw mode 下只认 \r 为提交；本 fake 是 cat 直读，
-    # 不模拟 TUI 语义，仅验证 stdin 透传（\r 语义锚点在 api/messages.rs 发送注释）
+    # 真实 claude attach 是 TUI：raw mode（stdin 由应用接管）+ 回显键入文本。
+    # agent-hub-first-send-ready：首发确认层以「回显可见且终端已 raw」为消费证据，
+    # canonical 态行规程回显不算——故本 fake 必须 stty raw 后自行回显（tee），
+    # 否则等价于黑洞会话，send 会被判失败。
     # 反馈轮 28-A：ensure_tui_ready 以 has_output（drain 读到过字节）为前提——
     # 先打印一行模拟 TUI 启动渲染（真实 TUI 会立即出 banner），否则注入门正确拒绝
     ID="${2:-unknown}"
     echo "[fake-tui ready]"
-    cat > "$(dirname "$0")/attach-stdin-$ID.txt"
+    stty raw -echo
+    tee "$(dirname "$0")/attach-stdin-$ID.txt"
     ;;
   *)
     echo "fake-claude: unknown command $1" >&2
