@@ -39,10 +39,39 @@ export function fuzzyScore(name: string, query: string): number | null {
   return score + (isPrefix ? PREFIX_BONUS : 0);
 }
 
-/** slash 候选的模糊过滤+排序（空查询回落全量原序，调用方后续截 50）。 */
+/**
+ * 求值缓存（agent-hub-commands-perf P1）：键 = 清单数组引用 + query 字符串，
+ * 值 = 结果数组（只存既有元素引用，不复制对象）。外层 WeakMap 挂在清单引用上，
+ * 清单被替换（重新拉取）后旧缓存随引用一起可回收。菜单开着时组件因消息流等
+ * 无关原因重渲染，同 (清单引用, query) 的重复求值退化为一次 Map 查找。
+ *
+ * 取舍（落点 lib 层而非 hook 层 useMemo）：
+ * 1. memo 语义可纯单测证明（同引用+同查询 → 结果引用相等），不依赖 React；
+ * 2. 覆盖一切调用方，未来新入口（命令面板等）自动获得缓存；
+ * 3. hook 层 useMemo 会被 `query == null` 提前返回破坏 hooks 顺序（须重构），
+ *    且 memo 生命周期绑死单个 hook 实例。
+ *
+ * 契约：items 与返回数组视为不可变——原地修改后再查会命中陈旧缓存（现调用点
+ * 每次拉取都替换新数组、消费侧只 filter/slice/map，满足）。每清单缓存查询数
+ * 上限 MAX_CACHED_QUERIES，超限整体清空（防长会话输入膨胀；简单清空即够，
+ * 命中率敏感场景再升级 LRU）。
+ */
+const memoCache = new WeakMap<object, Map<string, unknown[]>>();
+const MAX_CACHED_QUERIES = 32;
+
+/** slash 候选的模糊过滤+排序（空查询回落全量原序，调用方后续截 50）。
+ * 重复求值（同清单引用+同查询）命中缓存直接返回同一结果引用。 */
 export function fuzzyFilter<T extends { name: string }>(items: T[], query: string): T[] {
   if (query === '') return items;
-  return items
+  let queries = memoCache.get(items);
+  if (queries === undefined) {
+    queries = new Map();
+    memoCache.set(items, queries);
+  } else {
+    const hit = queries.get(query);
+    if (hit !== undefined) return hit as T[];
+  }
+  const result = items
     .map((item) => ({ item, score: fuzzyScore(item.name, query) }))
     .filter((x): x is { item: T; score: number } => x.score != null)
     .sort(
@@ -52,4 +81,7 @@ export function fuzzyFilter<T extends { name: string }>(items: T[], query: strin
         a.item.name.localeCompare(b.item.name),
     )
     .map((x) => x.item);
+  if (queries.size >= MAX_CACHED_QUERIES) queries.clear();
+  queries.set(query, result);
+  return result;
 }
