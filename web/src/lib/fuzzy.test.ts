@@ -45,3 +45,52 @@ describe('fuzzyScore（slash 菜单模糊查找，round 2 人审 S5）', () => {
     expect(ranked[0]?.name).toBe('model');
   });
 });
+
+describe('fuzzyFilter 求值缓存（agent-hub-commands-perf P1 memo 语义）', () => {
+  it('memo 命中：相同清单引用 + 相同查询返回同一结果引用（不重算）', () => {
+    const items = [{ name: 'alpha' }, { name: 'alphabet' }, { name: 'beta' }];
+    const first = fuzzyFilter(items, 'al');
+    const second = fuzzyFilter(items, 'al');
+    expect(second).toBe(first); // 引用相等 = 命中缓存，未重算
+    expect(second.map((x) => x.name)).toEqual(['alpha', 'alphabet']);
+  });
+
+  it('memo 键含查询：同清单不同查询各自重算，互不串值', () => {
+    const items = [{ name: 'alpha' }, { name: 'beta' }];
+    const byAl = fuzzyFilter(items, 'al');
+    const byBe = fuzzyFilter(items, 'be');
+    expect(byBe).not.toBe(byAl);
+    expect(byAl.map((x) => x.name)).toEqual(['alpha']);
+    expect(byBe.map((x) => x.name)).toEqual(['beta']);
+  });
+
+  it('memo 键含清单引用：不同清单同查询互不串值', () => {
+    const itemsA = [{ name: 'alpha' }];
+    const itemsB = [{ name: 'beta' }, { name: 'alphabet' }];
+    const fromA = fuzzyFilter(itemsA, 'al');
+    const fromB = fuzzyFilter(itemsB, 'al');
+    expect(fromA).not.toBe(fromB);
+    expect(fromA.map((x) => x.name)).toEqual(['alpha']);
+    expect(fromB.map((x) => x.name)).toEqual(['alphabet']); // beta 无 'l'，不命中
+  });
+
+  it('缓存命中与首次求值语义一致：换新清单引用重算结果内容相等', () => {
+    const items = Array.from({ length: 200 }, (_, i) => ({ name: `cmd-${i}-filter` }));
+    const cold = fuzzyFilter(items, 'cmd');
+    expect(fuzzyFilter(items, 'cmd')).toBe(cold); // 命中
+    expect(fuzzyFilter([...items], 'cmd')).toEqual(cold); // 新引用重算，内容一致
+  });
+
+  it('空查询不进缓存：始终原样返回输入引用（回落语义不变）', () => {
+    const items = [{ name: 'alpha' }];
+    expect(fuzzyFilter(items, '')).toBe(items);
+    expect(fuzzyFilter(items, '')).toBe(items);
+  });
+
+  it('查询数超上限清空缓存后仍正确（防长会话膨胀，不串值）', () => {
+    const items = [{ name: 'alpha' }, { name: 'beta' }];
+    for (let i = 0; i < 40; i += 1) fuzzyFilter(items, `q${i}`); // 超过 MAX_CACHED_QUERIES=32
+    const again = fuzzyFilter(items, 'al'); // 早期条目已被清空 → 重算
+    expect(again.map((x) => x.name)).toEqual(['alpha']);
+  });
+});
