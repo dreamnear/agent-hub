@@ -76,6 +76,10 @@ pub struct AppState {
     pub nodes: StdArc<crate::nodelink::registry::NodeRegistry>,
     /// 节点活连接表（gateway-node P1 任务5）：node_id → 命令通道（代理面查询/注入）
     pub node_conns: crate::nodelink::gateway::NodeConnections,
+    /// slash 指令清单缓存（agent-hub-slash-skills-b）：(claude_root, cwd) →
+    /// { 条目, 来源, 过期时刻 }；SDK 校准源 TTL 300s，文件枚举回退 TTL 60s
+    /// （pub(crate)：缓存类型为 commands 模块内部机制，不外泄）
+    pub(crate) commands_cache: commands::CommandCache,
 }
 
 impl AppState {
@@ -199,6 +203,7 @@ impl AppState {
             tasks: StdArc::new(crate::tasks::TaskManager::new(tasks_dir)),
             nodes: StdArc::new(crate::nodelink::registry::NodeRegistry::new(nodes_file)),
             node_conns: crate::nodelink::gateway::NodeConnections::new(),
+            commands_cache: commands::new_command_cache(),
         }
     }
 }
