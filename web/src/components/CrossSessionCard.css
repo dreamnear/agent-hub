@@ -1,0 +1,113 @@
+/* 跨会话消息卡片：终端注入风格（单行 › Message from @source: … (click to expand)）
+   默认收紧态：等宽字体 + 暗底 + 左色条；点开走 details 展开完整 markdown */
+.cross-card {
+  max-width: 85%;
+  border-left: 3px solid var(--c-working);
+  background: #1e1e24;
+  border-radius: 6px;
+  padding: 0.4rem 0.7rem;
+  margin: 0.3rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  color: #c8ccd0;
+}
+
+.cross-card > summary.cross-head {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+  min-height: 28px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.cross-card > summary.cross-head::-webkit-details-marker {
+  display: none;
+}
+
+.cross-card > summary.cross-head::before {
+  /* 去掉默认三角，用 › 前缀表达“注入” */
+  content: '';
+  width: 0;
+}
+
+.cross-arrow {
+  color: #7a8189;
+  flex-shrink: 0;
+  font-size: 0.9rem;
+}
+
+.cross-label {
+  color: #8b9198;
+  flex-shrink: 0;
+}
+
+.cross-from {
+  color: #7aa7ff;
+  font-weight: 600;
+}
+
+.cross-peek {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8ccd0;
+}
+
+.cross-hint {
+  flex-shrink: 0;
+  color: #6b7075;
+  font-size: 0.72rem;
+}
+
+.cross-body {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #2e3238;
+}
+
+.cross-body .md-root,
+.cross-body pre,
+.cross-body code {
+  /* 展开后恢复常规字体，不与等宽摘要冲突 */
+  font-family: inherit;
+}
+
+.cross-disclaimer {
+  margin-top: 0.4rem;
+  border-top: 1px dashed #2e3238;
+  padding-top: 0.25rem;
+}
+
+.cross-disclaimer summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: #6b7075;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  list-style: none;
+}
+
+.cross-disclaimer summary::-webkit-details-marker {
+  display: none;
+}
+
+.cross-disclaimer summary::before {
+  content: '▸ ';
+}
+
+.cross-disclaimer[open] summary::before {
+  content: '▾ ';
+}
+
+.cross-disclaimer p {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: #6b7075;
+}

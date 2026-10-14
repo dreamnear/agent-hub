@@ -1,0 +1,240 @@
+/* 右工程栏（280px 白底左描边，容器样式在 App.css .pane-right） */
+.sidebar {
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 100%;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.sidebar-collapse {
+  border: none;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.75rem;
+  min-height: 28px;
+  padding: 0 0.3rem;
+}
+
+.sidebar-collapse:hover {
+  color: var(--c-text);
+}
+
+.sidebar-empty {
+  color: var(--c-sub);
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+/* 工程树：主仓行 12px/600 带 ▾，行高 36（两行式） */
+.sidebar-tree {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 统一行网格（2026-10 工程面板重排·两行式）：布局规则上移到行内容承载元素——
+   平铺/子行由 label 承载，组头由 summary 承载，两者吃同一套 flex 行 */
+.tree-row label,
+summary.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 36px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0 0.3rem;
+}
+
+.tree-row label:hover,
+summary.tree-row:hover {
+  background: var(--c-code);
+}
+
+/* 节点两行列：名称主行 + 分支副行（280px 侧栏下单行双列会挤掉名称，改纵向堆叠） */
+.tree-node {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
+.tree-caret {
+  color: var(--c-sub);
+  font-size: 0.625rem;
+  flex-shrink: 0;
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* count 数字列：右对齐窄槽 */
+.tree-count {
+  flex: 0 0 auto;
+  min-width: 1.2rem;
+  text-align: right;
+  color: var(--c-sub);
+  font-weight: 400;
+  font-size: 0.6875rem;
+}
+
+.sidebar-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.sidebar-action {
+  border: none;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.6875rem;
+  min-height: 28px;
+  padding: 0 0.2rem;
+}
+
+.sidebar-action:hover:not(:disabled) {
+  color: var(--c-text);
+}
+
+.sidebar-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.sidebar-add {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.sidebar-add input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.sidebar-add .btn-ghost {
+  min-height: 36px;
+  padding: 0 0.7rem;
+  font-weight: 400;
+}
+
+/* Git 面板：底部固定块容器（P6 前占位，不接假数据） */
+.git-panel {
+  margin-top: auto;
+  border-top: 1px solid var(--c-border);
+  padding-top: 0.6rem;
+}
+
+.git-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.git-empty {
+  margin: 0.35rem 0 0;
+  font-size: 0.6875rem;
+  color: var(--c-sub);
+}
+
+/* ===== P6 B1-B3：git 工程树 ===== */
+
+.tree-group-item {
+  list-style: none;
+}
+
+.tree-group summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.tree-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.tree-group summary .tree-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.tree-group[open] summary .tree-caret {
+  transform: rotate(90deg);
+}
+
+.tree-sub {
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  list-style: none;
+}
+
+.tree-sub-row .tree-name {
+  opacity: 0.85;
+}
+
+/* 分支副行：块级纵排（不参与横向竞争），与名称文字左缘自然对齐 = 行行分支起点一致 */
+.tree-branch {
+  /* ponytail: App.css 无等宽 token（B2 注释明确等宽块各自直写 ui-monospace 栈），故直写 */
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.65rem;
+  font-weight: 400;
+  color: var(--c-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  min-height: 24px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.tree-open:hover {
+  opacity: 1;
+}
+
+.tree-name--select {
+  cursor: pointer;
+}
+
+.tree-name--select:hover {
+  text-decoration: underline;
+}
+
+.sidebar-open-err {
+  margin: 0.2rem 0.6rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: var(--c-warn-bg, #fde8e8);
+  color: var(--c-warn-text, #a33);
+  font-size: 0.75rem;
+}

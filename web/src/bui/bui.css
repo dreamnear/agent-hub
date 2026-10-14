@@ -1,0 +1,19 @@
+/* Tailwind v4 无 preflight 分层引入（Beautiful UI 批1，tasks.md 1.1）。
+   preflight 全局重置会破坏现有手写 CSS——只进 theme + utilities 两层：
+   - theme：@theme 变量声明层（bui/theme.css 的映射经此生效）
+   - utilities：原子类层；在 @layer 内，未分层的手写 CSS 恒优先，
+     故现有样式零冲击（级联规则：layer 样式 < 未分层样式）
+   不 @import "tailwindcss"（等价于含 preflight 的全量入口）。 */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import './theme.css';
+
+@layer base {
+  /* BUI 组件裸 button 防御：官网组件默认透明底，不依赖 UA ButtonFace
+     （color-scheme 修复前 dark 下会漏出 light 表单底，即 dark 芯片白底缺陷）。
+     layer base 低于 utilities，bg-* 类照常覆盖。 */
+  [data-bui] button {
+    background-color: transparent;
+  }
+}

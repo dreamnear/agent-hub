@@ -1,0 +1,259 @@
+/* 设置中心「定时任务」段（agent-hub-daemon-capabilities C3）：
+   全 token 色（bui 扫描门禁），布局复用 set-* 既有约定 */
+
+.task-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.task-new {
+  flex-shrink: 0;
+}
+
+/* 表单（新建/编辑） */
+.task-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+}
+
+.task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+}
+
+.task-field > span {
+  color: var(--c-sub);
+}
+
+.task-field input:not([type='checkbox']),
+.task-field select,
+.task-field textarea {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 6px;
+  background: var(--c-bg);
+  font: inherit;
+  color: var(--c-text);
+  min-width: 0;
+}
+
+.task-field--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.task-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* 列表条目：状态点 + 名称/cron/动作/摘要/下次触发 + 操作排 */
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.task-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+}
+
+.task-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.78rem;
+  flex-wrap: wrap;
+}
+
+.task-item-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-item-cron,
+.task-item-action,
+.task-item-summary,
+.task-item-next {
+  color: var(--c-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-item-summary,
+.task-item-next {
+  margin-left: auto;
+  font-size: 0.72rem;
+}
+
+.task-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.task-btn {
+  min-height: 26px;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* 启停开关（checkbox + 文案） */
+.task-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--c-sub);
+  cursor: pointer;
+}
+
+/* Run 状态点：ok/新增绿、failed 红、skipped/missed/disabled 灰 */
+.task-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--c-working);
+}
+
+.task-dot--ok,
+.task-dot--enabled {
+  background: var(--c-accent-strong); // 文字场景用 strong（accent 白字 3.2:1 不达标，token 注记在案）
+}
+
+.task-dot--failed {
+  background: var(--c-danger);
+}
+
+.task-dot--running {
+  background: var(--c-needs);
+}
+
+.task-dot--skipped,
+.task-dot--missed,
+.task-dot--disabled {
+  background: var(--c-sub);
+}
+
+/* Run 历史展开区 */
+.task-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.4rem 0.5rem;
+  border-top: 1px solid var(--c-border);
+  font-size: 0.72rem;
+}
+
+.task-runs--empty,
+.task-empty {
+  color: var(--c-sub);
+  margin: 0.2rem 0 0;
+}
+
+.task-run {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.task-run-status {
+  font-weight: 600;
+}
+
+.task-run-time,
+.task-run-duration {
+  color: var(--c-sub);
+}
+
+.task-run-session {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--c-accent);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+}
+
+.task-run-error {
+  color: var(--c-danger-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* schedule-lock S2：调度权徽标（横排 chip，token 取色随三态；
+   --on 持锁实例 = 语义色点 + 常规字，--off standby = 灰化） */
+.task-sched-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  height: 22px;
+  padding: 0 9px;
+  margin-right: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  font-size: 0.6875rem;
+  color: var(--c-sub);
+  background: var(--c-panel);
+  vertical-align: middle;
+}
+
+.task-sched-badge::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--c-sub);
+}
+
+.task-sched-badge--on {
+  color: var(--c-text);
+  border-color: var(--c-accent);
+}
+
+.task-sched-badge--on::before {
+  background: var(--c-accent);
+}
+
+/* assistant-cron C4：助手创建任务来源徽标（「助手」）——实底胶囊；底色用
+   accent-strong（文字场景白字 4.98:1 达标，accent 3.2:1 不达标——token 注记在案） */
+.task-item-source {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: var(--c-accent-strong);
+  color: var(--c-inverse);
+}

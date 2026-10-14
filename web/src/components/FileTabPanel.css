@@ -1,0 +1,30 @@
+/* 文件页签面板（agent-hub-files-panel F2 v2）：pane-main 内 flex:1 填充，
+   非聚焦页签 display:none 隐藏不卸载（滚动/查询状态保留）；色值全走 token 三态合规 */
+.file-tab-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-tab-panel--hidden {
+  display: none;
+}
+
+.file-tab-path {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--c-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--c-sub);
+}
+
+.file-tab-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+}

@@ -1,0 +1,5 @@
+/* ACP 权限弹卡（批3 任务11）：复用 ConfirmDialog 的 dialog/confirm 体系，仅补纵向排列 */
+.acp-perm-actions {
+  flex-direction: column;
+  align-items: stretch;
+}

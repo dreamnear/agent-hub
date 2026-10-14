@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Claude View",
+  "version": "0.1.0",
+  "identifier": "app.claude-view.desktop",
+  "build": {
+    "frontendDist": "http://127.0.0.1:7801"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns"],
+    "externalBin": ["binaries/server"]
+  }
+}

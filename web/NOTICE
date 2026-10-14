@@ -1,0 +1,16 @@
+Beautiful UI (https://beautifului.dev)
+Copyright (c) Shane Levine / Turbo
+Licensed under the MIT License
+
+本工程的 web/src/components/bui/ 目录下的组件移植自 Beautiful UI
+（copy-paste 模式）。组件文件头均标注来源注释；组件色值经
+web/src/bui/theme.css 桥接到本工程 --c-* token，未保留原硬编码色值。
+
+Tailwind CSS (https://tailwindcss.com)
+Copyright (c) Tailwind Labs, Inc.
+Licensed under the MIT License
+（依赖基座：@tailwindcss/vite，无 preflight 分层引入）
+
+Motion (https://motion.dev)
+Copyright (c) Matt Perry
+Licensed under the MIT License

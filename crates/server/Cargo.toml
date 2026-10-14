@@ -1,0 +1,46 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+notify = { workspace = true }
+rust-embed = "8"
+portable-pty = "0.9.0"
+libc = "0.2.189"
+uuid.workspace = true
+futures = "0.3.34"
+base64 = "0.23.1"
+# 同源实例代理（设备隔离修复）：hyper-util legacy client 转发 HTTP；
+# tokio-tungstenite 转发 WS（两包均已在依赖树内，不新增编译面）
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+# opencode driver 直用 hyper/http-body-util 类型（响应体收集 + SSE 逐帧读）；
+# 两包均已在依赖树内（hyper-util 传递 / dev 已引），仅提为直接依赖，零新增编译面
+hyper = "1"
+http-body-util = "0.1"
+tokio-tungstenite = "0.29"
+croner = "4.0.1"
+# 平台驱动层 D3 互斥文件锁：unix flock / windows LockFileEx 双平台覆盖
+#（agent-hub-platform-driver；替代业务代码直调 libc::flock 的 unix 专属用法；
+# 0.2.1 为本环境 crates.io 源可见的最新版，类型名 LockFile）
+fslock = "0.2.1"
+# nodelink HTTP-over-mux 回放（gateway-node P1 任务 8）：Router oneshot 需
+# ServiceExt；0.5 与 axum 0.8 依赖同版本（dev 已引），提为直接依赖零新增编译面
+tower = "0.5"
+# {{date}}/{{time}} 本地时区与 RFC3339：chrono 为 croner 传递依赖，显式声明零新增面
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# nodelink 凭据哈希（gateway-node P1 任务 1）：node token / enrollment code 只存哈希
+sha2 = "0.10"
+
+[dev-dependencies]
+tower = "0.5"
+tempfile = "3"

@@ -1,0 +1,68 @@
+/* harness 发现区（agent-hub-settings 批A 需求5/6）：复用 --c-* token 三态体系
+   与 InstanceSettings 的行样式惯例；无全屏/backdrop 假设，可嵌入任意设置容器。 */
+.harness {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--c-border);
+  padding-top: 0.8rem;
+}
+
+.harness-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.harness-title {
+  font-weight: 600;
+}
+
+.harness-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.harness-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+}
+
+.harness-row--dead {
+  opacity: 0.6;
+}
+
+.harness-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.harness-name {
+  font-weight: 500;
+}
+
+.harness-path {
+  color: var(--c-sub);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.harness-dead {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--c-danger-text);
+}
+
+.harness-configured {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--c-green-text);
+}

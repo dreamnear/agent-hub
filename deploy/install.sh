@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+# claude-view server 一键安装（只装服务端二进制，不装桌面壳 / tauri 任何产物）
+#
+# 用法：
+#   ./install.sh                      # 装二进制到 /usr/local/bin（无权限回退 ~/.local/bin）
+#   ./install.sh --with-systemd       # 额外安装并 enable --now systemd 单元（Linux only）
+#   ./install.sh --prefix ~/.local/bin
+#   AGENT_HUB_ENROLL=<code> ./install.sh --node --gateway ws(s)://host:port [--node-name X]
+#                                     # 节点形态（gateway-node-p3 M1）：装二进制 +
+#                                     # systemd node 单元（node.json 由 server 首启自建 0600）
+#                                     # （出站反连，零新增暴露面；code 首连配对后
+#                                     # 由网关签发长效 token 持久化）
+#   RELEASE_BASE_URL=https://example/dl ./install.sh   # 从 URL 前缀下载（无默认源，自建分发时用）
+#
+# sweep S2：enrollment code 一律经环境变量 AGENT_HUB_ENROLL 传递（不再收 --enroll
+# 命令行参数）——argv 会把 code 暴露给 ps(1)/同机进程面；env 只在进程环境里。
+# systemd 单元用 0600 EnvironmentFile 携带（配对成功即消费，后续可删该文件）。
+#
+# 二进制来源优先级：RELEASE_BASE_URL 下载 > 脚本同目录（或 ./dist/）的同名文件。
+# 命名：claude-view-server-{os}-{arch}，os ∈ linux|darwin，arch ∈ x86_64|aarch64。
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEST_BIN_NAME="claude-view-server"
+
+WITH_SYSTEMD=0
+FORCE_PREFIX=""
+NODE_MODE=0
+GATEWAY_URL=""
+# sweep S2：code 只从环境变量来（--enroll 参数已废，解析处 die 引导）
+ENROLL_CODE="${AGENT_HUB_ENROLL:-}"
+NODE_NAME=
+
+die() {
+  echo "错误：$*" >&2
+  exit 1
+}
+
+# 用 while + shift 而非 for arg in "$@"：后者里 shift 不推进迭代列表（--prefix X 空格形式会失效），
+# 且 bash 3.2 零参数时仍执行一次循环体。参数值一律 ${} 包裹——bash 3.2 下 $var 紧贴多字节字符会被
+# 误解析进变量名。
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --with-systemd)
+      WITH_SYSTEMD=1
+      shift
+      ;;
+    --node)
+      NODE_MODE=1
+      shift
+      ;;
+    --gateway)
+      [ "$#" -ge 2 ] || die "--gateway 需要一个 ws(s):// 地址参数"
+      GATEWAY_URL="$2"
+      shift 2
+      ;;
+    --gateway=*)
+      GATEWAY_URL="${1#*=}"
+      shift
+      ;;
+    --enroll)
+      die "--enroll 已废除（sweep S2）：code 改经环境变量传递，防 ps(1) 明文。
+  用法：AGENT_HUB_ENROLL=<code> $0 --node --gateway ws(s)://host:port"
+      ;;
+    --enroll=*)
+      die "--enroll 已废除（sweep S2）：code 改经环境变量传递，防 ps(1) 明文。
+  用法：AGENT_HUB_ENROLL=<code> $0 --node --gateway ws(s)://host:port"
+      ;;
+    --node-name)
+      [ "$#" -ge 2 ] || die "--node-name 需要一个名称参数"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --prefix=*)
+      FORCE_PREFIX="${1#*=}"
+      shift
+      ;;
+    --prefix)
+      [ "$#" -ge 2 ] || die "--prefix 需要一个目录参数"
+      FORCE_PREFIX="$2"
+      shift 2
+      ;;
+    -h | --help)
+      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "未知参数：${1}（--help 看用法）" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# ---------- 探测 OS / 架构 ----------
+detect_os() {
+  case "$(uname -s)" in
+    Linux) echo linux ;;
+    Darwin) echo darwin ;;
+    *) die "不支持的操作系统 $(uname -s)（本脚本仅支持 linux / darwin）" ;;
+  esac
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64 | amd64) echo x86_64 ;;
+    aarch64 | arm64) echo aarch64 ;;
+    *) die "不支持的架构 $(uname -m)（本脚本仅支持 x86_64 / aarch64）" ;;
+  esac
+}
+
+OS="$(detect_os)"
+ARCH="$(detect_arch)"
+ASSET="claude-view-server-${OS}-${ARCH}"
+
+# ---------- 取二进制 ----------
+# SRC 指向来源文件（同目录模式可能是用户产物本身，绝不能在退出时删——只清 DOWNLOAD_TMP）
+SRC=""
+DOWNLOAD_TMP=""
+EMBEDDED_UNIT=""
+cleanup() {
+  [ -n "$DOWNLOAD_TMP" ] && rm -f "$DOWNLOAD_TMP"
+  [ -n "$EMBEDDED_UNIT" ] && rm -f "$EMBEDDED_UNIT"
+}
+trap cleanup EXIT
+
+fetch_binary() {
+  if [ -n "${RELEASE_BASE_URL:-}" ]; then
+    local url="${RELEASE_BASE_URL%/}/${ASSET}"
+    echo "→ 从 ${url} 下载"
+    DOWNLOAD_TMP="$(mktemp)"
+    curl -fL --retry 2 --connect-timeout 15 -o "$DOWNLOAD_TMP" "$url" ||
+      die "下载失败：${url}（检查 RELEASE_BASE_URL 是否指向可公开访问的分发目录）"
+    chmod +x "$DOWNLOAD_TMP"
+    SRC="$DOWNLOAD_TMP"
+    return
+  fi
+  local cand
+  for cand in "$SCRIPT_DIR/$ASSET" "$SCRIPT_DIR/dist/$ASSET"; do
+    if [ -f "$cand" ]; then
+      SRC="$cand"
+      return
+    fi
+  done
+  die "本机需要 ${ASSET}，但脚本目录内没有该文件。
+  二选一：
+  1) 把 dist 整个目录（含 install.sh 与二进制）scp 到本机后在本目录执行
+  2) 设 RELEASE_BASE_URL=<分发 URL 前缀> 由脚本下载
+  已有产物可用时扩展 x86_64：在对应架构的机器上
+  docker run --rm --platform linux/amd64 -v \"\$PWD\":/app -w /app -e CARGO_TARGET_DIR=/tmp/t \\
+    rust:1-alpine sh -c 'cargo build -p server --release --locked &&
+      cp /tmp/t/x86_64-unknown-linux-musl/release/server dist/claude-view-server-linux-x86_64'"
+}
+
+fetch_binary
+
+# ---------- 选安装目录 ----------
+# ---------- 提权方式 ----------
+# root 本身或无 sudo（不少 VPS 默认 root 且不装 sudo）都不加前缀——E2E 实测裸 root
+# Ubuntu 上 `sudo systemctl` 会死于 command not found，装到一半断掉比拒绝执行更糟。
+SUDO=""
+if [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1; then
+  SUDO="sudo"
+fi
+
+# ---------- 选安装目录 ----------
+if [ -n "$FORCE_PREFIX" ]; then
+  PREFIX="$FORCE_PREFIX"
+elif [ -w /usr/local/bin ]; then
+  PREFIX="/usr/local/bin"
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  PREFIX="/usr/local/bin"
+else
+  PREFIX="$HOME/.local/bin"
+  echo "→ /usr/local/bin 不可写且无免密 sudo，回退 ${PREFIX}"
+fi
+mkdir -p "$PREFIX"
+DEST="$PREFIX/$DEST_BIN_NAME"
+
+install_binary() {
+  local src="$SRC"
+  if [ -w "$PREFIX" ]; then
+    install -m 755 "$src" "$DEST"
+  else
+    $SUDO install -m 755 "$src" "$DEST"
+  fi
+  echo "✓ 已安装 $DEST"
+}
+
+install_binary
+
+# ---------- 数据目录（不覆盖已有 token）----------
+mkdir -p "$HOME/.claude-view"
+if [ -f "$HOME/.claude-view/token" ]; then
+  echo "✓ 已有 token 保留未动：$HOME/.claude-view/token"
+fi
+
+# ---------- node 形态（gateway-node-p3 M1）----------
+if [ "$NODE_MODE" = 1 ]; then
+  if [ -z "$GATEWAY_URL" ]; then
+    die "--node 需要 --gateway ws(s)://host:port"
+  fi
+  case "$GATEWAY_URL" in
+    wss://*) : ;;                         # wss 跨网安全
+    ws://127.0.0.1*|ws://localhost*) : ;; # loopback 明文豁免
+    ws://*) echo "⚠ 明文 ws 非 loopback：将需要 --allow-insecure（LAN 测试场景）" >&2 ;;
+    *) die "--gateway 必须是 ws:// 或 wss:// 地址" ;;
+  esac
+  # node.json 不预写：server 首启自建（UUIDv4 身份 + 0600，--gateway 随启动参数、
+  # code 经 env 携带）——比脚本手拼 JSON 更稳，且身份生成单一事实源在 server。
+  if [ -f "$HOME/.claude-view/node.json" ]; then
+    echo "⚠ 已有 node.json：server 将保留既有身份（gateway/enroll 以本次启动为准）"
+  fi
+  if [ -n "$ENROLL_CODE" ]; then
+    echo "✓ enrollment code 已随环境变量携带（一次性，配对成功即消费；不进 ps/不落盘）"
+  else
+    echo "⚠ 未设 AGENT_HUB_ENROLL：节点以待审批形态重试等待（hub 生成 code 后重启本服务配对）"
+  fi
+  echo "✓ node.json 将由 server 首启自建（0600，UUIDv4 身份）"
+fi
+
+# ---------- systemd（Linux，可选）----------
+if [ "$WITH_SYSTEMD" = 1 ]; then
+  if [ "$OS" != linux ]; then
+    echo "⚠ --with-systemd 仅 Linux 生效，${OS} 请改用 launchd（见 docs/deploy-remote-instance.md）"
+  else
+    UNIT_SRC=""
+    for cand in "$SCRIPT_DIR/claude-view-server.service" "$SCRIPT_DIR/../deploy/claude-view-server.service"; do
+      [ -f "$cand" ] && {
+        UNIT_SRC="$cand"
+        break
+      }
+    done
+    EMBEDDED_UNIT=""
+    if [ -z "$UNIT_SRC" ]; then
+      # curl|bash 管道执行时脚本在内存里，永远没有"同目录单元文件"可找
+      # （2026-09-28 E2E 实测：此前 --with-systemd 在管道模式下必死于找不到单元）。
+      # 回退到内置模板——与 deploy/claude-view-server.service 保持一致，改动须双改。
+      UNIT_SRC="$(mktemp)"
+      EMBEDDED_UNIT="$UNIT_SRC"
+      cat >"$UNIT_SRC" <<'UNIT'
+# agent-hub server systemd 常驻单元（Linux arm64/aarch64 远程实例）
+[Unit]
+Description=agent-hub server (claude-view)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 按实际用户改：登录态（~/.claude）与数据目录（~/.claude-view）都归属该用户
+User=pi
+Environment=AGENT_HUB_ALLOW_LAN=1
+# 占位：替换为强随机串（openssl rand -hex 32）；或删除本行，由 server 首启自生成并持久化到 ~/.claude-view/token
+Environment=AGENT_HUB_TOKEN=CHANGE_ME
+# 可选：监听地址（默认 0.0.0.0:7801 时无需设置；allow_lan=1 已强制 0.0.0.0）
+# Environment=AGENT_HUB_BIND=0.0.0.0:7801
+ExecStart=/usr/local/bin/claude-view-server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    fi
+
+    # token：安装环境里给了就写死；没给则注释掉该行，让 server 首启自生成
+    # （不预置弱口令 token 是安全默认）
+    if [ -n "${AGENT_HUB_TOKEN:-}" ]; then
+      TOKEN_LINE="Environment=AGENT_HUB_TOKEN=${AGENT_HUB_TOKEN}"
+    else
+      TOKEN_LINE="# Environment=AGENT_HUB_TOKEN=CHANGE_ME  # 未预置：server 首启自生成到 ~/.claude-view/token"
+    fi
+
+    UNIT_TMP="$(mktemp)"
+    if [ "$NODE_MODE" = 1 ]; then
+      # node 单元：ExecStart 带 --node + gateway；无 hub token 环境行。
+      # sweep S2：code 不进 ExecStart/unit（unit 0644 world-readable）——
+      # 走下方 0600 EnvironmentFile 注入。
+      sed -e "s|^User=.*|User=$(id -un)|" \
+        -e "s|^ExecStart=.*|ExecStart=${DEST} --node --gateway ${GATEWAY_URL}|" \
+        -e "/^Environment=AGENT_HUB_TOKEN=/d" \
+        -e "s|^Description=.*|Description=agent-hub node (claude-view → ${GATEWAY_URL})|" \
+        "$UNIT_SRC" >"$UNIT_TMP"
+      if [ -n "$ENROLL_CODE" ]; then
+        ENROLL_ENV_FILE="$HOME/.claude-view/enroll.env"
+        ( umask 077 && printf 'AGENT_HUB_ENROLL=%s\n' "$ENROLL_CODE" >"$ENROLL_ENV_FILE" )
+        # 紧随 ExecStart 行插 EnvironmentFile（须落 [Service] 段内——尾部追加
+        # 会掉进 [Install] 使单元加载失败）
+        TMP2="$(mktemp)"
+        while IFS= read -r line; do
+          printf '%s\n' "$line"
+          case "$line" in
+            ExecStart=*) printf 'EnvironmentFile=%s\n' "$ENROLL_ENV_FILE" ;;
+          esac
+        done <"$UNIT_TMP" >"$TMP2"
+        mv "$TMP2" "$UNIT_TMP"
+        echo "✓ enrollment code 已写 0600 环境文件 ${ENROLL_ENV_FILE}（配对成功后可删除）"
+      fi
+    else
+      sed -e "s|^User=.*|User=$(id -un)|" \
+        -e "s|^ExecStart=.*|ExecStart=${DEST}|" \
+        -e "s|^Environment=AGENT_HUB_TOKEN=.*|${TOKEN_LINE}|" \
+        "$UNIT_SRC" >"$UNIT_TMP"
+    fi
+
+    if [ -w /etc/systemd/system ]; then
+      install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
+    else
+      $SUDO install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
+    fi
+    rm -f "$UNIT_TMP"
+    echo "✓ 已安装 systemd 单元 /etc/systemd/system/claude-view-server.service"
+
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+      $SUDO systemctl daemon-reload
+      $SUDO systemctl enable --now claude-view-server
+      echo "✓ 已 enable --now，查看状态：systemctl status claude-view-server"
+    else
+      echo "⚠ 未检测到运行中的 systemd，未启动。装完单元后手动："
+      echo "  sudo systemctl daemon-reload && sudo systemctl enable --now claude-view-server"
+    fi
+  fi
+fi
+
+# ---------- 后续指引 ----------
+cat <<EOF
+
+下一步：
+  1) 装 claude CLI 并以 $(id -un) 登录一次（server 依赖它 spawn 会话）：
+       npm install -g @anthropic-ai/claude-code && claude
+  2) token：显式设 AGENT_HUB_TOKEN=<强随机串>（openssl rand -hex 32）；
+     未设时 server 首启自动生成并持久化到 ~/.claude-view/token
+  3) 启动（默认只听 127.0.0.1 安全回环；远程接入才需要放开）：
+       ${DEST}                                   # loopback，免认证
+       AGENT_HUB_ALLOW_LAN=1 AGENT_HUB_TOKEN=<强随机串> ${DEST}   # 监听 0.0.0.0 且强制 token 认证
+EOF

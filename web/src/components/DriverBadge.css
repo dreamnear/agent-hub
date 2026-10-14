@@ -1,0 +1,48 @@
+/* 驱动 monogram 徽标：底/字色走 --c-driver-* 成对 token（亮暗两态 ≥4.5:1），
+   严禁硬编码色值（bui 扫描门禁） */
+.driver-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+.driver-badge--claude {
+  color: var(--c-driver-claude-text);
+  background: var(--c-driver-claude-bg);
+}
+
+.driver-badge--opencode {
+  color: var(--c-driver-opencode-text);
+  background: var(--c-driver-opencode-bg);
+}
+
+.driver-badge--dsh {
+  color: var(--c-driver-dsh-text);
+  background: var(--c-driver-dsh-bg);
+}
+
+.driver-badge--omp {
+  color: var(--c-sub);
+  background: var(--c-panel);
+}
+
+.driver-badge--small {
+  /* 侧栏行/聊天头部 16-17px 规格 */
+}
+
+/* 双字母变体（R8：interactive 的 IC）——17px 盒内缩字号保两字符可辨 */
+.driver-badge--wide {
+  width: auto;
+  min-width: 17px;
+  padding: 0 3px;
+  font-size: 0.5625rem;
+  letter-spacing: 0.02em;
+}

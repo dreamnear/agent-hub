@@ -1,0 +1,50 @@
+/* 面板壳（右侧工具面板单壳用：projects/git 视图共用一个壳，见 App.tsx）：
+   内容槽 + 左缘拖拽手柄（仅桌面）；尺寸由 App 受控
+   （--panel-w / 内联 width 作用于 .pane-right / .pane-right--git，见 App.css 769+ 段） */
+.panel-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 内容槽：占满剩余空间，自身滚动（原 aside overflow 的职责内移） */
+.panel-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 移动抽屉内 git 视图改自然高度：见 App.css ≤768px 段 .pane-right--git .panel-slot */
+
+/* 左缘拖拽手柄：6px 命中区贴面板左缘，指示线用 aside 既有 border-left 位。
+   z-index 10：必须压过面板内容（.sidebar 等会盖住 6px 命中区致事件到不了）；
+   user-select none：拖拽中不选中文本（替代被删的 pointerdown preventDefault——
+   那会抑制 dblclick 兼容事件，双击复位失效） */
+.panel-handle-w {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+  touch-action: none;
+  user-select: none;
+}
+
+.panel-handle-w::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+}
+
+/* hover/键盘聚焦高亮：指示线 --c-border 位换 --c-accent（三态自适应） */
+.panel-handle-w:hover::after,
+.panel-handle-w:focus-visible::after {
+  background: var(--c-accent);
+}

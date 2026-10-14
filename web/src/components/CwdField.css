@@ -1,0 +1,40 @@
+/* cwd 选择器（新建会话/定时任务共用）：输入框唯一事实值 + 工程树回填下拉 + 服务机路径提示。
+   全 token 色；≤768px 纵向布局原生可用 */
+
+.cwd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.cwd-field-label {
+  color: var(--c-sub);
+  font-size: 0.78rem;
+}
+
+.cwd-field-input {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 6px;
+  background: var(--c-bg);
+  font: inherit;
+  color: var(--c-text);
+  min-width: 0;
+}
+
+.cwd-field-pick {
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-panel);
+  color: var(--c-text);
+  font-size: 0.75rem;
+  max-width: 100%;
+}
+
+.cwd-field-hint {
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--c-sub);
+}

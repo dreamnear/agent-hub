@@ -1,0 +1,138 @@
+/* markdown 气泡内排版（紧凑型，适配聊天气泡） */
+
+/* 消息列防溢出（2026-09-23 移动端反馈）：长 token（路径/命令/JSON）列内断行。
+   撑破 .chat-list 会让整个消息流可横向平移，所有工具卡片右缘被推出屏幕
+   （375 实测：跨会话卡内 table right=381、不可断行 code right=428）。 */
+.md-body {
+  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.md-body > :first-child {
+  margin-top: 0;
+}
+
+.md-body > :last-child {
+  margin-bottom: 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 0.6em 0 0.3em;
+  line-height: 1.3;
+}
+
+.md-body h1 {
+  font-size: 1.15rem;
+}
+
+.md-body h2 {
+  font-size: 1.05rem;
+}
+
+.md-body h3 {
+  font-size: 0.95rem;
+}
+
+.md-body h4 {
+  font-size: 0.9rem;
+}
+
+.md-body p {
+  margin: 0.3em 0;
+}
+
+.md-body ul,
+.md-body ol {
+  margin: 0.3em 0;
+  padding-left: 1.2em;
+}
+
+.md-body li {
+  margin: 0.15em 0;
+}
+
+.md-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--c-code);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+/* 代码块（Penpot 规格）：bg.code 圆角 8，等宽 12px，内边距 16 */
+.md-body pre {
+  margin: 0.4em 0;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--c-code);
+  border: 1px solid var(--c-border);
+  color: var(--c-text);
+  overflow-x: auto;
+  font-size: 0.75rem;
+}
+
+.md-body pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.md-body blockquote {
+  margin: 0.4em 0;
+  padding: 0.2em 0.8em;
+  border-left: 3px solid var(--c-border);
+  color: var(--c-sub);
+}
+
+.md-body table {
+  border-collapse: collapse;
+  margin: 0.4em 0;
+  /* 字号随正文（预览反馈：表格字体与正文一致，撤早年 0.85em 紧凑化） */
+  font-size: inherit;
+}
+
+/* 表格横向滚动壳：表格保持 shrink-to-fit，超列宽时壳内滚动（防撑破消息列） */
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.md-body th,
+.md-body td {
+  border: 1px solid var(--c-border);
+  padding: 0.25rem 0.5rem;
+}
+
+.md-body th {
+  background: var(--c-surface);
+}
+
+.md-body a {
+  color: var(--c-accent);
+}
+
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--c-border);
+  margin: 0.6em 0;
+}
+
+.md-body img {
+  max-width: 100%;
+}
+
+/* plantuml 围栏出图（渲染服务可配，设置-文档）：限宽随容器；img 呈现防注入 */
+.md-plantuml {
+  display: block;
+  max-width: 100%;
+  margin: 0.5rem 0;
+}
+
+.md-plantuml-hint {
+  margin: 0.2rem 0 0.6rem;
+  font-size: 0.75rem;
+  color: var(--c-sub);
+}

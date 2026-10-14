@@ -1,0 +1,119 @@
+/* subagent 面板（P5+，2026-10-01 定案形态）：与任务清单（.task-bar）并列同构——
+   基础卡样式沿用 .task-list-card（ChatMessageView.css），此处补头部、chip 列表与
+   Expand/History 切换钮 */
+.subagent-card {
+  width: 100%;
+  max-width: var(--chat-col-w);
+  margin: 0.35rem auto 0;
+  flex-shrink: 0;
+  position: relative; /* 隐藏测量行（.subagent-measure 绝对定位）的包含块 */
+}
+
+.subagent-summary-text {
+  font-weight: 600;
+  color: var(--c-text);
+  font-size: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+/* agent-hub-subagent-strip 单行化：收起态永不换行（S1）——装箱可见子集 + 溢出
+   隐藏（chip 流一行排满为止）；展开态解除单行约束全量 wrap（S2） */
+.subagent-chip-list.is-collapsed {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.subagent-chip-list.is-expanded {
+  flex-wrap: wrap;
+}
+
+.subagent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.6rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 999px;
+  background: var(--c-panel);
+  font-size: 0.8rem;
+  cursor: pointer;
+  max-width: 220px;
+  flex-shrink: 0; /* 单行 chip 流：chip 不被挤压变形，溢出交给 +N 收纳 */
+}
+
+.subagent-chip span.subagent-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-chip--active {
+  border-color: var(--c-text);
+  font-weight: 600;
+}
+
+.subagent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--c-sub);
+  flex-shrink: 0;
+}
+
+.subagent-dot--active {
+  /* sweep S4 主题债清偿：#2e9e5b 硬编码改状态点色 token（dot.completed 同族，
+     与 --c-needs/--c-working 同一令牌族；两主题不变随体系走） */
+  background: var(--c-done);
+}
+
+/* Expand (N active) / History (M) ▸ 切换钮：与 chip 同形态的轻量文字钮 */
+.subagent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.6rem;
+  border: 1px dashed var(--c-border-input);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.subagent-toggle:hover {
+  color: var(--c-text);
+}
+
+/* 历史列表：活跃列表下方独立一行，弱化呈现（已结束条目只在此出现） */
+.subagent-history-list {
+  border-top: 1px dashed var(--c-border-input);
+  padding-top: 0.3rem;
+  opacity: 0.85;
+}
+
+/* 隐藏测量行（装箱数据源）：全量同构节点测自然宽，零视觉占位——脱离流 +
+   不可见 + 高度 0；宽度随内容收缩（abs 收缩包裹），与真实行同 gap 同字号 */
+.subagent-measure {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  flex-wrap: nowrap;
+  margin-top: 0;
+  white-space: nowrap;
+}

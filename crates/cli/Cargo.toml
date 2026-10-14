@@ -1,0 +1,21 @@
+[package]
+name = "ah"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.29"
+# WS 流分割（attach 接收端）；futures 已在 server 依赖树内
+futures-util = "0.3"
+# raw mode termios（attach）；libc 已在 server 依赖树内
+libc = "0.2"
+
+[dev-dependencies]
+axum = { workspace = true, features = ["ws"] }
+tempfile = "3"

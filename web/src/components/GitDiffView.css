@@ -1,0 +1,199 @@
+/* Git diff 主区覆盖视图（GitLab split 版）：覆盖 pane-main（App.css 内
+   position:relative 锚定），≤768px 随主区自然全屏。全 token 色（bui 扫描门禁）。 */
+
+.git-diff-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg);
+}
+
+.git-diff-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-panel);
+  flex-shrink: 0;
+}
+
+.git-diff-overlay-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.git-diff-overlay-head button {
+  flex-shrink: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.875rem;
+}
+
+/* 跳源钮（用户预览反馈）：胶囊横排——原 head 通用 24×24 定宽把文字挤成竖排 */
+.git-diff-overlay-head .git-diff-open-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  height: 24px;
+  padding: 0 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* 关闭钮：24×24 方形（原通用规则的正确归属） */
+.git-diff-overlay-head .git-diff-close {
+  width: 24px;
+  height: 24px;
+}
+
+@media (max-width: 768px) {
+  /* 窄屏图标化：文本藏起（title 提示全称），钮保持横排不折行 */
+  .git-diff-open-source-text {
+    display: none;
+  }
+
+  .git-diff-overlay-head .git-diff-open-source {
+    padding: 0 5px;
+  }
+}
+
+.git-diff-overlay-head button:hover {
+  background: var(--c-code);
+  color: var(--c-text);
+}
+
+/* 双栏对照：单容器网格（旧列号 + 左码 + 新列号 + 右码），minmax(0,1fr) 双码列恒
+   各占一半视宽（初屏即见左右对照，左列长行不再把右列挤出视口）；码格域内折行
+   （pre-wrap + break-all，保持等宽）；overflow:auto 仅作极窄兜底 */
+.git-diff-overlay-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 0;
+  background: var(--c-code);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  display: grid;
+  grid-template-columns: 3.2em minmax(0, 1fr) 3.2em minmax(0, 1fr);
+  align-content: start;
+}
+
+.git-diff-no {
+  padding: 0 6px;
+  color: var(--c-sub);
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
+/* 单占位态（错误/加载/无变更/二进制）：整幅居中，不贴网格左上角（验收反馈） */
+.git-diff-overlay-body.is-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.git-diff-overlay-body.is-empty-state > .git-empty {
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  color: var(--c-sub);
+  max-width: 60ch;
+}
+
+.git-diff-cell {
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0 8px;
+  min-height: 1.5em;
+}
+
+/* 增/删行着色（token 定义在 App.css :root + [data-theme=dark]）；空占位格中性底 */
+.git-diff-cell.is-add {
+  background: var(--c-diff-add-bg);
+  color: var(--c-diff-add-text);
+}
+
+.git-diff-cell.is-del {
+  background: var(--c-danger-bg);
+  color: var(--c-danger-text);
+}
+
+.git-diff-cell.is-empty {
+  background: var(--c-panel);
+}
+
+/* hunk 头/@no-newline：横跨双栏的中性带（长函数名上下文同样域内折行） */
+.git-diff-hunk,
+.git-diff-meta {
+  grid-column: 1 / -1;
+  padding: 0 12px;
+  color: var(--c-sub);
+  background: var(--c-panel);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 图片左右对照（binary+图片扩展）：双窗各按容器缩放；SVG 走 <img> 不 inline 注入 */
+.git-img-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+}
+
+.git-img-pane {
+  margin: 0;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.git-img-pane figcaption {
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  color: var(--c-sub);
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+}
+
+.git-img-pane .git-empty {
+  margin: auto;
+  padding: 12px;
+}
+
+.git-img {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  margin: auto;
+}
+
+/* diff 页签形态（F4 v2 diff 页签化）：pane-slot 内 flex 填充，去遮罩定位与
+   z-index；色值/内部结构沿用 .git-diff-overlay 同源规则 */
+.git-diff-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg);
+}

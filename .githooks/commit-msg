@@ -1,0 +1,13 @@
+#!/bin/sh
+# commit-msg：提交消息必须关联 issue（Issue 驱动，2026-10-13 用户立规）
+# 合法引用形态：#123 或 仓库名前缀形态 agent-hub-mng#123；Merge/Revert/release 类消息豁免。
+msg=$(cat "$1" 2>/dev/null)
+case "$msg" in
+  "Merge "*|"Revert "*|"Reapply "*|fixup!*|amend!*|release:*) exit 0 ;;
+esac
+if printf '%s\n' "$msg" | grep -Eq '(^|[^A-Za-z0-9_/-])([A-Za-z0-9_.-]+)?#[0-9]+'; then
+  exit 0
+fi
+echo "[commit-msg] BLOCKED: 提交消息必须关联 issue（#编号 或 agent-hub-mng#编号）——Issue 驱动规则（2026-10-13）。"
+echo "  需求/BUG 先记 issue：gh issue create -R dreamnear/agent-hub；确需豁免用 --no-verify 并在 issue 留言说明。"
+exit 1

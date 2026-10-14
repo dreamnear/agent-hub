@@ -1,0 +1,121 @@
+/* 统一模型/思考面板（backdrop/card 复用弹窗规范；颜色全走 --c-* token） */
+.model-card {
+  width: min(520px, 92vw);
+  max-height: min(72vh, 660px);
+  display: flex;
+  flex-direction: column;
+}
+
+.model-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.model-row-wrap {
+  border-radius: 8px;
+}
+
+.model-row-wrap:hover {
+  background: var(--c-selected);
+}
+
+.model-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.5rem 0.4rem;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.model-row--cur {
+  cursor: default;
+}
+
+.model-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 免费档小标：panel 底 4.9:1 */
+.model-free {
+  flex: none;
+  padding: 0 0.28rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  border: 1px solid var(--c-accent);
+  color: var(--c-green-text);
+}
+
+.model-provider {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--c-faint);
+}
+
+.model-row--cur .model-name::after {
+  content: '✓';
+  margin-left: 0.35rem;
+  color: var(--c-green-text);
+}
+
+/* 思考档位 chips（会话头部一行 + 面板行内展开两用） */
+.model-variants {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.4rem;
+}
+
+.model-variants--inline {
+  padding: 0 0.4rem 0.5rem 0.4rem;
+}
+
+.model-variants-label {
+  font-size: 0.7rem;
+  color: var(--c-faint);
+}
+
+.model-chip {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  background: transparent;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+  cursor: pointer;
+}
+
+.model-chip--on {
+  border-color: var(--c-accent);
+  color: var(--c-green-text);
+  background: var(--c-panel);
+}
+
+.model-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 设置收场文案（已切换/已排队） */
+.model-outcome {
+  padding: 0.45rem 0.2rem 0;
+  font-size: 0.72rem;
+  color: var(--c-green-text);
+}

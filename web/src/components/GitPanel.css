@@ -1,0 +1,488 @@
+/* ===== P6 批次 3：git 面板（B4-B7） ===== */
+
+.git-panel {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.78rem;
+  overflow-y: auto;
+}
+
+.git-title {
+  font-weight: 600;
+  color: var(--c-text, #222);
+  margin-bottom: 0.25rem;
+}
+
+.git-upstream {
+  color: var(--c-sub, #888);
+  font-weight: 400;
+}
+
+/* git-changes-meta-dedup M1：独立 meta 摘要行（.git-meta/.git-ab）已删——
+   分区头概要是唯一计数入口（分支/↑↓/变更 N），不再两行同文 */
+
+.git-group-title {
+  color: var(--c-sub, #888);
+  margin: 0.4rem 0 0.15rem;
+}
+
+.git-files,
+.git-submods {
+  display: flex;
+  flex-direction: column;
+}
+
+/* git-flat-left-clip F1 → row-unify：平铺容器横滚保留（FileRow 行框撑开滚动区） */
+.git-files {
+  overflow-x: auto;
+}
+
+/* ===== 文件行统一类（agent-hub-git-panel-row-unify：FileRow 组件单一来源，
+   收编原 .git-file / .git-tree-file / .git-commit-file 三套行样式）=====
+   硬口径内建：单行 nowrap、行首左锚（justify flex-start 覆盖全局 button 居中）、
+   行框 max-content 随内容撑开（hover 背景跟随横滚全程）、min-width:100% 对齐线、
+   hover title 全名（组件 props）；层级缩进经组件 indent 内联 padding。全 token。 */
+.git-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.4rem;
+  border: none;
+  background: none;
+  padding: 0.15rem 0.3rem;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  width: max-content;
+  min-width: 100%;
+  font-size: 0.78rem;
+  font-family: inherit;
+  color: var(--c-text, #222);
+}
+
+.git-file-row:hover {
+  background: var(--c-code, #f2f2f2);
+}
+
+.git-file-row-name {
+  flex-shrink: 0;
+}
+
+.git-file-row-name.is-deleted {
+  text-decoration: line-through;
+}
+
+/* 目录路径小字缀后（完整显示——横滚兜底，不 ellipsis 截断） */
+.git-file-row-dir {
+  flex-shrink: 0;
+  color: var(--c-sub, #888);
+  font-size: 0.72rem;
+}
+
+.git-submod {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.3rem;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-size: inherit;
+  color: inherit;
+}
+
+.git-submod:hover {
+  background: var(--c-code, #f2f2f2);
+}
+
+.git-submod-mark {
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--c-warn-text, #a63);
+}
+
+.git-submod-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--c-sub, #888);
+}
+
+.git-submod-sha {
+  color: var(--c-sub, #888);
+}
+
+/* 行内改动徽标（submodule 钻取工单补充）：● N=有变更（warn）、?M=未跟踪（sub） */
+.git-submod-changes {
+  flex-shrink: 0;
+  color: var(--c-warn-text, #a63);
+  font-weight: 600;
+}
+
+.git-submod-untracked {
+  flex-shrink: 0;
+  color: var(--c-sub, #888);
+}
+
+/* diff 渲染已移主区覆盖层（GitDiffView），窄栏不再内嵌 */
+
+/* 面包屑（submodule 钻取）：祖先层可点回跳，当前层只显示 */
+.git-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.72rem;
+  min-width: 0;
+}
+
+.git-crumb {
+  border: none;
+  background: none;
+  padding: 0 0.2rem;
+  border-radius: 4px;
+  color: var(--c-accent, #36c);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 9em;
+}
+
+.git-crumb:hover {
+  background: var(--c-code, #f2f2f2);
+  color: var(--c-text);
+}
+
+/* 层间分隔符（JSX 显式渲染 .git-crumb-sep） */
+.git-crumb-sep {
+  color: var(--c-sub, #888);
+}
+
+.git-crumb-current {
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 9em;
+}
+
+.git-wt-form {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.git-wt-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--c-border-input, #ccc);
+  border-radius: 6px;
+}
+
+.git-wt-form button {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--c-border, #ccc);
+  border-radius: 6px;
+  background: var(--c-bg, #fff);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.git-wt-msg {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--c-sub, #888);
+  word-break: break-all;
+}
+
+/* ===== 双视图（平铺/按目录）+ 状态色标（token 定义均既有：U 绿/--c-green-text、
+   D 红/--c-danger-text、S 灰蓝/--c-driver-opencode-text、M 淡黄/--c-warn-text）===== */
+
+.git-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0.4rem 0 0.15rem;
+}
+
+.git-view-toggle {
+  display: flex;
+  gap: 2px;
+}
+
+.git-view-btn {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-sub, #888);
+  cursor: pointer;
+}
+
+.git-view-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.git-view-btn.is-active {
+  background: var(--c-code, #f2f2f2);
+  color: var(--c-text);
+}
+
+/* 树目录行（文件行已统一为 .git-file-row/FileRow）：
+   git-timeline-nowrap N2 单行不折行 + 行框 max-content（层级 padding 内联计入
+   滚动区）+ git-tree-left-align T1 显式左锚（覆盖全局 button justify 居中——
+   短行内容居中漂浮回归根因） */
+.git-tree-dir {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.3rem;
+  white-space: nowrap;
+  width: max-content;
+  min-width: 100%;
+  border: none;
+  background: none;
+  padding: 0.1rem 0.3rem;
+  border-radius: 6px;
+  color: var(--c-text, #222);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.git-tree-dir:hover {
+  background: var(--c-code, #f2f2f2);
+}
+
+.git-tree-arrow {
+  color: var(--c-sub, #888);
+  display: inline-block;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.git-tree-arrow.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+/* 目录行 name（文件行已走 .git-file-row-name） */
+.git-tree-name {
+  overflow: visible;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.git-tree-kinds,
+.git-tree-count {
+  color: var(--c-sub, #888);
+  flex-shrink: 0;
+}
+
+.git-kind {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.git-kind.is-U {
+  color: var(--c-green-text, #0a7a5c);
+}
+
+.git-kind.is-D {
+  color: var(--c-danger-text, #b42318);
+}
+
+.git-kind.is-S {
+  color: var(--c-driver-opencode-text, #1d4ed8);
+}
+
+.git-kind.is-M {
+  color: var(--c-warn-text, #92400e);
+}
+
+/* 变更计数标签（视图头独立类——不与分区 .git-group-title 计数断言混淆） */
+.git-changes-label {
+  color: var(--c-sub, #888);
+  margin: 0.4rem 0 0.15rem;
+}
+
+/* 文件图标（Material Icon Theme 精选子集，FileIcon.tsx）：色彩为图标本体（徽标先例） */
+.file-icon {
+  flex-shrink: 0;
+  border-radius: 3px;
+}
+
+/* ---- git-timeline：可折叠分区 + Timeline 提交历史 ---- */
+
+.git-section {
+  margin-bottom: 0.35rem;
+}
+
+/* 分区头（git-sections-polish U1/U2：明确的「组」视觉——chevron 旋转 + 通栏底色
+   分隔条 + hover 反馈，VSCode SCM 分区形态；组名显式左对齐不随 UA 居中）。全 token 三态 */
+.git-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  border: 1px solid var(--c-border, #e5e5e5);
+  border-radius: 6px;
+  background: var(--c-code, #f2f2f2);
+  color: var(--c-text, #222);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+  justify-content: flex-start; /* U2：组名左对齐（显式，勿居中） */
+  padding: 0.28rem 0.45rem;
+  cursor: pointer;
+}
+
+.git-section-head:hover {
+  background: var(--c-selected, #efefef);
+  color: var(--c-text, #222);
+}
+
+.git-section-arrow {
+  display: inline-block;
+  transition: transform var(--duration-fast, 120ms) ease;
+}
+
+.git-section-arrow.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.git-section-badge {
+  color: var(--c-warn, #b80);
+  font-weight: 400;
+}
+
+/* 分区头右缘概要（U3：分支/↑↓/计数——收起态信息不丢），弱化右对齐 */
+.git-section-summary {
+  margin-left: auto;
+  color: var(--c-sub, #888);
+  font-weight: 400;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.git-section-body {
+  padding: 0 0.2rem 0.3rem;
+}
+
+/* Timeline 提交行：hash 等宽左列 + subject/作者时间主列；点击复制 hash */
+.git-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Timeline 提交行（TimelineRow 组件单一来源）：row-unify 硬口径内建——
+   justify flex-start 左锚（覆盖全局 button 居中，主/子仓同款）+ 单行 nowrap */
+.git-commit {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--c-text, #222);
+  text-align: left;
+  white-space: nowrap;
+  padding: 0.25rem 0.2rem;
+  cursor: pointer;
+}
+
+.git-commit:hover {
+  background: var(--c-hover, rgba(127, 127, 127, 0.12));
+}
+
+.git-commit-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--c-accent, #36c);
+  flex-shrink: 0;
+}
+
+.git-commit-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.git-commit-subject {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-commit-meta {
+  font-size: 0.7rem;
+  color: var(--c-sub, #888);
+}
+
+.git-load-more {
+  border: none;
+  background: transparent;
+  color: var(--c-accent, #36c);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 0.35rem;
+  cursor: pointer;
+  width: 100%;
+}
+
+.git-load-more:hover {
+  text-decoration: underline;
+}
+
+/* ---- git-timeline-files：选中提交高亮 + 文件维变更清单 ---- */
+
+/* F1 选中提交行（两次点击切换；换条即换清单） */
+.git-commit.is-selected {
+  background: var(--c-selected, #efefef);
+}
+
+/* 提交文件清单：左缩进 + 竖线锚定从属关系（层级可辨——GitLab MR 形态）。
+   git-timeline-nowrap N1：长文件名单行不折行，超宽走容器横滚（行框 max-content
+   随内容撑开、hover 背景跟随；短内容 min-width:100% 保持对齐线） */
+.git-commit-files {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 0.3rem 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--c-border, #e5e5e5);
+  overflow-x: auto;
+}
+
+.git-commit-files-title {
+  color: var(--c-sub, #888);
+  font-size: 0.7rem;
+  margin: 0.1rem 0;
+}
+
+/* 清单文件行已统一为 .git-file-row/FileRow（row-unify 单收编，旧 .git-commit-file 删除） */
+
+.git-commit-files-note {
+  color: var(--c-sub, #888);
+  font-size: 0.72rem;
+  padding: 0.1rem 0.3rem;
+}
+
+/* git-timeline-nowrap N2：树视图容器横滚（行框 max-content 撑开滚动区，层级缩进
+   保持——以左为根；不与折叠区手势冲突：滚动容器仅在树内容层） */
+.git-tree {
+  overflow-x: auto;
+}

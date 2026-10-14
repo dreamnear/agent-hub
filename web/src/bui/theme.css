@@ -1,0 +1,127 @@
+/* Beautiful UI 主题桥接（Beautiful UI 批1，tasks.md 1.2 契约①）
+   —— bui/ 组件唯一色值入口：Tailwind --color-* 全部映射到现有 --c-* token。
+   @theme inline：生成 var(--color-*) 时内联展开为 var(--c-*)，不产生重复变量；
+   未被组件用到的映射不进产物（Tailwind 按需产出）。
+   映射全集对照 App.css :root/[data-theme='dark'] 两套 token（r26），
+   遗漏项在组件替换批次会露馅（白底残留），批2 起每组件复验。 */
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-panel: var(--c-panel);
+  --color-bubble: var(--c-bubble);
+  --color-code: var(--c-code);
+  --color-code-border: var(--c-code-border);
+  --color-selected: var(--c-selected);
+  --color-text: var(--c-text);
+  --color-sub: var(--c-sub);
+  --color-faint: var(--c-faint);
+  --color-inverse: var(--c-inverse);
+  --color-line: var(--c-border);
+  --color-input-border: var(--c-border-input);
+  --color-accent: var(--c-accent);
+  --color-needs: var(--c-needs);
+  --color-working: var(--c-working);
+  --color-done: var(--c-done);
+  --color-danger: var(--c-danger);
+  --color-danger-bg: var(--c-danger-bg);
+  --color-danger-border: var(--c-danger-border);
+  --color-danger-text: var(--c-danger-text);
+  --color-warn-bg: var(--c-warn-bg);
+  --color-warn-border: var(--c-warn-border);
+  --color-warn-text: var(--c-warn-text);
+  --color-sidebar: var(--c-sidebar);
+  --color-sidebar-hover: var(--c-hover);
+  --color-sidebar-hover-strong: var(--c-hover-strong);
+  --color-sidebar-border: var(--c-sidebar-border);
+  --color-sidebar-top: var(--c-sidebar-top);
+  --color-sidebar-line: var(--c-sidebar-line);
+  --color-sidebar-item: var(--c-sidebar-item);
+  --color-sidebar-text: var(--c-sidebar-text);
+  --color-sidebar-text-sel: var(--c-sidebar-text-sel);
+  --color-sidebar-icon: var(--c-sidebar-icon);
+
+  /* ===== Beautiful UI 官网 token 名（批2 起组件照搬保真）→ --c-* =====
+     组件源码原样使用官网类名（text-ink/bg-hover/rounded-chip 等），
+     此处把官网 token 语义接到现有 --c-*；官网色值不落地（唯一色值入口）。
+     hover 用 color-mix 从前景派生，亮/暗自动适配。 */
+  --color-ink: var(--c-text);
+  --color-ink-2: var(--c-sub);
+  --color-ink-3: var(--c-faint);
+  --color-canvas: var(--c-bg);
+  --color-inset: var(--c-code);
+  --color-field: var(--c-panel);
+  --color-surface: var(--c-panel);
+  --color-hover: color-mix(in srgb, var(--c-text) 4%, transparent);
+  --color-hover-2: color-mix(in srgb, var(--c-text) 8%, transparent);
+  --color-line-strong: var(--c-border-input);
+  --color-green: var(--c-green-text); /* 文字态深绿（对比度红线：light #10a37f 点色对白 3.2:1 不达标） */
+  --color-red: var(--c-danger-text);
+  --color-orange: var(--c-needs);
+  --color-accent-ink: var(--c-inverse);
+  --color-green-tint: color-mix(in srgb, var(--c-done) 14%, transparent);
+  --color-red-tint: color-mix(in srgb, var(--c-danger) 14%, transparent);
+
+  /* 官网形态值（radius 为官网原值；shadow 拆运行时变量分主题取值，
+     定义见下方 :root/[data-theme='dark'] 块——官网 light/dark 的环方向相反：
+     dark 白色发丝环 / light 深色 tone-on-tone 环，不能单值写死） */
+  --shadow-hairline: var(--bui-ring-hairline);
+  --shadow-btn: var(--bui-elev-btn);
+  --shadow-overlay: var(--bui-elev-overlay);
+  --shadow-card: var(--bui-elev-card);
+  --shadow-raised: var(--bui-elev-raised);
+  --radius-control: 8px;
+  --radius-cont: 8px;
+  --radius-chip: 6px;
+  --radius-card: 10px;
+  --radius-window: 14px;
+}
+
+/* 暗色 variant 对齐 useTheme：documentElement.dataset.theme（auto 态也写实际值）。
+   组件内 dark: 前缀类在 data-theme='dark' 下生效（tasks.md 1.2 契约②） */
+@custom-variant dark ([data-theme='dark'] &);
+
+/* 组件源码内联 style 引用的官网原始名变量（var(--ink) 等）——
+   引用现有 --c-*，随 data-theme 三态自动跟随 */
+:root {
+  --ink: var(--c-text);
+  --ink-2: var(--c-sub);
+  --ink-3: var(--c-faint);
+  --line: var(--c-border);
+  --line-strong: var(--c-border-input);
+  --accent: var(--c-accent);
+  --accent-ink: var(--c-inverse);
+  --orange: var(--c-needs);
+  --green: var(--c-done);
+  --red: var(--c-danger);
+  --canvas: var(--c-bg);
+  --inset: var(--c-code);
+  --field: var(--c-panel);
+  --surface: var(--c-panel);
+  --hover: color-mix(in srgb, var(--c-text) 4%, transparent);
+  --hover-2: color-mix(in srgb, var(--c-text) 8%, transparent);
+}
+
+/* ===== shadow 运行时值（视觉评审 r1 修复，2026-09-23 实测 beautifului.dev 基准）=====
+   色环一律从 --c-panel 用 color-mix(in oklab) 派生（tone-on-tone：dark 比底浅、
+   light 比底深，ΔL 均对齐官网 ±0.015 ≈ 2%）；纯黑白 alpha 下沉阴影为 BUI 官方原样。
+   light 的 overlay/raised 官网未单独取值，按同族 card 环 + 原 drop 值处理。 */
+:root {
+  /* tone-on-tone 微调色（环/分隔线共用）：相对 --c-panel ΔL ±0.015（对齐官网） */
+  --bui-tone: color-mix(in oklab, var(--c-panel) 98%, black 2%);
+  --bui-ring-hairline: 0 0 0 1px var(--bui-tone);
+  --bui-elev-btn: 0 0 0 1px color-mix(in oklab, var(--c-panel) 91%, black 9%), 0 0 4px rgb(0 0 0 / 0.04);
+  --bui-elev-card: 0 0 0 1px var(--bui-tone);
+  --bui-elev-overlay: 0 0 0 1px var(--bui-tone), 0 8px 28px rgb(0 0 0 / 0.34);
+  --bui-elev-raised:
+    0 0 0 1px var(--bui-tone), 0 1px 2px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.2),
+    0 8px 24px rgb(0 0 0 / 0.12);
+}
+[data-theme='dark'] {
+  --bui-tone: color-mix(in oklab, var(--c-panel) 98%, white 2%);
+  --bui-ring-hairline: 0 0 0 1px var(--bui-tone);
+  --bui-elev-btn: 0 0 0 1px rgb(255 255 255 / 0.1), 0 1px 2px rgb(0 0 0 / 0.3);
+  --bui-elev-card: 0 0 0 1px rgb(255 255 255 / 0.11), 0 1px 2px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.2);
+  --bui-elev-overlay: 0 0 0 1px rgb(255 255 255 / 0.11), 0 8px 28px rgb(0 0 0 / 0.34);
+  --bui-elev-raised:
+    0 0 0 1px rgb(255 255 255 / 0.11), 0 1px 2px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.2),
+    0 8px 24px rgb(0 0 0 / 0.12);
+}

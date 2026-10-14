@@ -1,0 +1,305 @@
+[
+  {
+    "info": {
+      "id": "msg_TEST",
+      "sessionID": "ses_TEST",
+      "role": "user",
+      "time": {
+        "created": 1790831553056
+      },
+      "summary": {
+        "diffs": [
+          {
+            "file": "target.txt",
+            "patch": "Index: target.txt\n===================================================================\n--- target.txt\t\n+++ target.txt\t\n@@ -1,3 +1,3 @@\n line1\n-line2\n+LINE2\n line3\n",
+            "additions": 1,
+            "deletions": 1,
+            "status": "modified"
+          }
+        ]
+      },
+      "agent": "build",
+      "model": {
+        "providerID": "opencode",
+        "modelID": "space-bunny-free"
+      }
+    },
+    "parts": [
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "text",
+        "text": "Use the edit tool to change line2 in target.txt to LINE2. Then reply done."
+      }
+    ]
+  },
+  {
+    "info": {
+      "id": "msg_TEST",
+      "sessionID": "ses_TEST",
+      "role": "assistant",
+      "time": {
+        "created": 1790831553336,
+        "completed": 1790831558658
+      },
+      "parentID": "msg_TEST",
+      "modelID": "space-bunny-free",
+      "providerID": "opencode",
+      "mode": "build",
+      "agent": "build",
+      "path": {
+        "cwd": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test",
+        "root": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test"
+      },
+      "cost": 0,
+      "tokens": {
+        "total": 33688,
+        "input": 31737,
+        "output": 49,
+        "reasoning": 0,
+        "cache": {
+          "read": 1902,
+          "write": 0
+        }
+      },
+      "finish": "tool-calls"
+    },
+    "parts": [
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "step-start",
+        "snapshot": "98b577a775f0323c61ee2a3f0370da38554b640a"
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "tool",
+        "callID": "call_TEST_qauao6s31j1a_1",
+        "tool": "read",
+        "state": {
+          "status": "completed",
+          "input": {
+            "filePath": "/repo/target.txt"
+          },
+          "output": "<path>/repo/target.txt</path>\n<type>file</type>\n<content>\n1: line1\n2: line2\n3: line3\n\n(End of file - total 3 lines)\n</content>",
+          "title": "target.txt",
+          "metadata": {
+            "preview": "line1\nline2\nline3",
+            "truncated": false,
+            "loaded": [],
+            "display": {
+              "type": "file",
+              "path": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test/target.txt",
+              "text": "line1\nline2\nline3",
+              "lineStart": 1,
+              "lineEnd": 3,
+              "totalLines": 3,
+              "truncated": false
+            }
+          },
+          "time": {
+            "start": 1790831558569,
+            "end": 1790831558575
+          }
+        }
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "step-finish",
+        "reason": "tool-calls",
+        "snapshot": "98b577a775f0323c61ee2a3f0370da38554b640a",
+        "cost": 0,
+        "tokens": {
+          "total": 33688,
+          "input": 31737,
+          "output": 49,
+          "reasoning": 0,
+          "cache": {
+            "read": 1902,
+            "write": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "info": {
+      "id": "msg_TEST",
+      "sessionID": "ses_TEST",
+      "role": "assistant",
+      "time": {
+        "created": 1790831558659,
+        "completed": 1790831561331
+      },
+      "parentID": "msg_TEST",
+      "modelID": "space-bunny-free",
+      "providerID": "opencode",
+      "mode": "build",
+      "agent": "build",
+      "path": {
+        "cwd": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test",
+        "root": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test"
+      },
+      "cost": 0,
+      "tokens": {
+        "total": 33841,
+        "input": 82,
+        "output": 73,
+        "reasoning": 0,
+        "cache": {
+          "read": 33686,
+          "write": 0
+        }
+      },
+      "finish": "tool-calls"
+    },
+    "parts": [
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "step-start",
+        "snapshot": "98b577a775f0323c61ee2a3f0370da38554b640a"
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "tool",
+        "callID": "call_TEST_32cgt0akb83v_1",
+        "tool": "edit",
+        "state": {
+          "status": "completed",
+          "input": {
+            "filePath": "/repo/target.txt",
+            "oldString": "line2",
+            "newString": "LINE2"
+          },
+          "output": "Edit applied successfully.",
+          "title": "target.txt",
+          "metadata": {
+            "diagnostics": {},
+            "diff": "Index: /repo/target.txt\n===================================================================\n--- /repo/target.txt\n+++ /repo/target.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+LINE2\n line3\n",
+            "filediff": {
+              "file": "/repo/target.txt",
+              "patch": "Index: /repo/target.txt\n===================================================================\n--- /repo/target.txt\n+++ /repo/target.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+LINE2\n line3\n",
+              "additions": 1,
+              "deletions": 1
+            },
+            "truncated": false
+          },
+          "time": {
+            "start": 1790831561091,
+            "end": 1790831561102
+          }
+        }
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "step-finish",
+        "reason": "tool-calls",
+        "snapshot": "9f6fc7ede94404bd0be981e629a168ea4846c2e1",
+        "cost": 0,
+        "tokens": {
+          "total": 33841,
+          "input": 82,
+          "output": 73,
+          "reasoning": 0,
+          "cache": {
+            "read": 33686,
+            "write": 0
+          }
+        }
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "patch",
+        "hash": "98b577a775f0323c61ee2a3f0370da38554b640a",
+        "files": [
+          "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test/target.txt"
+        ]
+      }
+    ]
+  },
+  {
+    "info": {
+      "id": "msg_TEST",
+      "sessionID": "ses_TEST",
+      "role": "assistant",
+      "time": {
+        "created": 1790831561332,
+        "completed": 1790831563321
+      },
+      "parentID": "msg_TEST",
+      "modelID": "space-bunny-free",
+      "providerID": "opencode",
+      "mode": "build",
+      "agent": "build",
+      "path": {
+        "cwd": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test",
+        "root": "/Users/kevin/.claude/jobs/a8de32a1/tmp/oc-driver-test"
+      },
+      "cost": 0,
+      "tokens": {
+        "total": 33862,
+        "input": 21,
+        "output": 2,
+        "reasoning": 0,
+        "cache": {
+          "read": 33839,
+          "write": 0
+        }
+      },
+      "finish": "stop"
+    },
+    "parts": [
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "step-start",
+        "snapshot": "9f6fc7ede94404bd0be981e629a168ea4846c2e1"
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "text",
+        "text": "done",
+        "time": {
+          "start": 1790831563248,
+          "end": 1790831563249
+        }
+      },
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "step-finish",
+        "reason": "stop",
+        "snapshot": "9f6fc7ede94404bd0be981e629a168ea4846c2e1",
+        "cost": 0,
+        "tokens": {
+          "total": 33862,
+          "input": 21,
+          "output": 2,
+          "reasoning": 0,
+          "cache": {
+            "read": 33839,
+            "write": 0
+          }
+        }
+      }
+    ]
+  }
+]

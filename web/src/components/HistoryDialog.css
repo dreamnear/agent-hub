@@ -1,0 +1,109 @@
+/* 历史会话面板（backdrop/card 复用 App.css 弹窗规范；颜色全走 --c-* token，
+   三态主题自适应） */
+.history-card {
+  width: min(560px, 92vw);
+  max-height: min(70vh, 640px);
+  display: flex;
+  flex-direction: column;
+}
+
+.history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.history-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.history-sub {
+  font-size: 0.7rem;
+  color: var(--c-faint);
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.history-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name time'
+    'cwd time';
+  gap: 0.1rem 0.75rem;
+  align-items: center;
+  text-align: left;
+  padding: 0.5rem 0.4rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  background: var(--c-selected);
+}
+
+.history-name {
+  grid-area: name;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 驱动小标（不写教学文案，两字符即辨识）：panel 底上 4.9:1 */
+.history-driver {
+  flex: none;
+  padding: 0 0.28rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  color: var(--c-faint);
+}
+
+.history-cwd {
+  grid-area: cwd;
+  font-size: 0.7rem;
+  color: var(--c-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 长路径截尾留尾部（最近段更有辨识度） */
+  text-align: left;
+}
+
+.history-time {
+  grid-area: time;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+  white-space: nowrap;
+}
+
+.history-empty {
+  padding: 2rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--c-faint);
+}

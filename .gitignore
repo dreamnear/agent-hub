@@ -1,0 +1,15 @@
+/target
+# 交叉编译隔离目录（agent-hub-platform-driver：跨 target 构建不与 host 构建共
+# CARGO_TARGET_DIR，防污染既有教训）
+/target-win
+/target-linux
+node_modules
+dist
+*.tsbuildinfo
+attach-stdin-*.txt
+respawn-calls.log
+
+# playwright 运行期产物（MCP 快照 / CLI 会话目录）
+.playwright-cli/
+.playwright-mcp/
+.DS_Store

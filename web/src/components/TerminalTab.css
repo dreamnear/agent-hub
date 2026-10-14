@@ -1,0 +1,52 @@
+/* 纯工具终端页签（agent-hub-terminal）：pane-main 内 flex:1 填充；
+   色值全走 --c-* token 三态（xterm 画布色经 termTheme() 采样，见 TerminalTab.tsx） */
+.terminal-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg);
+}
+
+.terminal-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.terminal-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--c-sub);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.terminal-close {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--c-sub);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.terminal-close:hover {
+  background: var(--c-panel);
+  color: var(--c-text);
+}
+
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px;
+  overflow: hidden;
+}

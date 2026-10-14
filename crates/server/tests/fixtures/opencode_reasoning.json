@@ -1,0 +1,24 @@
+[
+  {
+    "info": {
+      "id": "msg_TEST",
+      "sessionID": "ses_TEST",
+      "role": "assistant",
+      "modelID": "x",
+      "providerID": "y",
+      "agent": "build",
+      "time": {
+        "created": 1
+      }
+    },
+    "parts": [
+      {
+        "id": "prt_TEST",
+        "sessionID": "ses_TEST",
+        "messageID": "msg_TEST",
+        "type": "reasoning",
+        "text": "Thinking about the plan for the demo."
+      }
+    ]
+  }
+]

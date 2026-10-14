@@ -1,0 +1,72 @@
+/* 底部工具栏（Zed 式面板显隐 toggle）：细条、低调，token 色系（bui 扫描门禁） */
+
+.bottom-bar {
+  flex-shrink: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-bg);
+  color: var(--c-sub);
+  font-size: 0.6875rem;
+  user-select: none;
+}
+
+.bottom-bar-toggles {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bottom-bar-toggle {
+  height: 22px;
+  padding: 0 6px;
+  gap: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-sub);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.bottom-bar-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.bottom-bar-toggle:hover:not(:disabled) {
+  background: var(--c-panel);
+  color: var(--c-text);
+}
+
+/* 激活态用绿文字 token：--c-accent 直用作文字两主题均不达 4.5:1（App.css 取色注） */
+.bottom-bar-toggle.is-on {
+  color: var(--c-green-text);
+}
+
+.bottom-bar-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bottom-bar-status {
+  white-space: nowrap;
+  color: var(--c-sub);
+}
+
+/* ≤768px 不渲染（React 侧挂载期也返回 null；此处兜底活体拉伸） */
+@media (max-width: 768px) {
+  .bottom-bar {
+    display: none;
+  }
+}
+
+/* 左右分组（用户预览反馈）：右面板三开关组贴右边；中间 status 弹性占位不变 */
+.bottom-bar-toggles--right {
+  margin-left: auto;
+}

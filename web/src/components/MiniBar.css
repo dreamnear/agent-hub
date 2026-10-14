@@ -1,0 +1,40 @@
+/* 手机迷你底栏（≤768px）：会话/Git 两直达按钮。fixed 底部会盖内容底缘，
+   故 .layout 同步让出等高 padding（下方媒体查询）；z-index 20 在抽屉（22）之下。
+   桌面 ≥769px 不渲染（App 按条件挂载）+ CSS 兜底双保险。全 token 色。 */
+
+.mini-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 32px;
+  display: flex;
+  align-items: stretch;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-panel);
+  z-index: 20;
+}
+
+.mini-bar-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--c-text);
+  font-size: 0.75rem;
+}
+
+.mini-bar-btn:active {
+  background: var(--c-code);
+}
+
+@media (max-width: 768px) {
+  .layout {
+    padding-bottom: 32px; /* 迷你底栏高度让位：composer/内容底缘不被盖 */
+  }
+}
+
+@media (min-width: 769px) {
+  .mini-bar {
+    display: none;
+  }
+}

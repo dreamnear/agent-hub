@@ -1,0 +1,13 @@
+/* token 全量定义移至 App.css（:root 唯一来源，避免双处维护漂移） */
+* {
+  box-sizing: border-box;
+}
+
+/* html/body 基础样式同样只在 App.css 维护一份（agent-hub-settings B2）：
+   根字号 = 100% × --ui-scale、字体族 = var(--font-ui)，两处各写一份必漂移 */
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
