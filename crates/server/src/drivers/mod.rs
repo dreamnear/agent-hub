@@ -73,6 +73,10 @@ pub struct StartSpec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub cwd: String,
+    /// 恢复目标 session id（agent-hub-session-history）：claude = `--bg --resume <id>`
+    /// （prompt 可省）；其余驱动无此语义，构造方一律填 None（resume-session 端点
+    /// 已按 driver 特判，非 claude 不会带此字段）。
+    pub resume_session_id: Option<String>,
 }
 
 /// 轨二 A：会话控制面（MessageSender 的加法扩展，签名对齐其现有方法）。

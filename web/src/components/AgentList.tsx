@@ -24,6 +24,8 @@ interface Props {
   onRemoved: (id: string) => void;
   /** 工程便签（agent-hub-notes）：⋯ 菜单入口上抛 App（悬浮卡 + 钉住自动展开归 App 管） */
   onOpenNotes: (a: AgentSummary) => void;
+  /** CLI 历史会话弹窗（agent-hub-session-history）：⋯ 菜单入口上抛 App（覆盖层挂载归 App 管） */
+  onOpenSessions: (a: AgentSummary) => void;
 }
 
 /// 组桶标签（C2 i18n：label 存 key，渲染期翻译——buildInstanceGroups 输出随 locale）。
@@ -96,6 +98,7 @@ export default function AgentList({
   onOpenSettings,
   onRemoved,
   onOpenNotes,
+  onOpenSessions,
 }: Props): ReactElement {
   const { grouped, isLoading, tree, instances, offline, authError, registry } = useAgents();
   // 驱动级降级（急修第二刀）：dsh 收编带认证实例且未配 token → 侧栏「认证失效」banner
@@ -146,6 +149,11 @@ export default function AgentList({
     }
     if (action === 'notes') {
       onOpenNotes(a);
+      return;
+    }
+    // CLI 历史会话（agent-hub-session-history）：仅 claude 行有入口（AgentRow 已限）
+    if (action === 'sessions') {
+      onOpenSessions(a);
       return;
     }
     if (action === 'interrupt') {

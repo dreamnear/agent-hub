@@ -268,6 +268,168 @@ pub async fn sample_quiet_mtime(
     baseline
 }
 
+/// 工程历史会话条目（agent-hub-session-history）：CLI `--resume` 选择器同口径的
+/// 行内信息投影。session_id 来自服务端目录扫描（非用户输入）；resume 回传时由
+/// 端点按 find_session_path 同款白名单复验。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListEntry {
+    pub session_id: String,
+    /// 最近写入时刻（秒级 epoch；相对时间口径，CLI 选择器同款排序基准）
+    pub mtime_secs: i64,
+    /// jsonl 字节体积（CLI 选择器显示体积的原始数）
+    pub size_bytes: u64,
+    /// 会话 git 分支（转录行 `gitBranch`；无 → None）
+    pub branch: Option<String>,
+    /// 会话发生时的工作目录（转录行 `cwd`；与工程 cwd 不同即 worktree 会话，
+    /// 前端比对后显示 worktree 尾段）
+    pub cwd: Option<String>,
+    /// 摘要：头部 `type:"summary"` 行优先（CLI resume 列表标题同源），
+    /// 否则首条用户消息截断
+    pub summary: Option<String>,
+}
+
+/// 头部读取窗口：summary 行与首条用户消息都在对话开头，64KB 足够；超长注入场景
+/// 窗口切半的尾行按完整行边界丢弃（raw.lines 对切半行解析失败自然跳过）。
+const LIST_HEAD_WINDOW: u64 = 64 * 1024;
+
+/// 摘要文本上限（chars 计；前端单行省略，超长截断即可辨识）
+const SUMMARY_MAX_CHARS: usize = 120;
+
+/// 工程历史会话枚举（agent-hub-session-history）：只读列
+/// `<projects_dir>/projects/<slug>/`（cwd → slug 走 session_dir 同款编码，防穿越），
+/// mtime 倒序。目录不存在/不可读 → 空集（前端空态语义）；单文件 metadata 失败
+/// 跳过（宽松，坏条目不拖垮整表）。
+pub async fn list_project_sessions(projects_dir: &Path, cwd: &Path) -> Vec<SessionListEntry> {
+    let Some(dir) = session_dir(projects_dir, cwd) else {
+        return Vec::new();
+    };
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let mtime_secs = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let (branch, cwd_row, summary) = peek_session_head(&path).await;
+        out.push(SessionListEntry {
+            session_id: name.to_string(),
+            mtime_secs,
+            size_bytes: meta.len(),
+            branch,
+            cwd: cwd_row,
+            summary,
+        });
+    }
+    out.sort_by(|a, b| {
+        b.mtime_secs
+            .cmp(&a.mtime_secs)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+    out
+}
+
+/// 头部窗口读取（有限读不整文件）：提取 (gitBranch, cwd, summary)。
+/// 文件打不开/读失败 → 三 None（fail-soft，条目仍列出行内缺项显示）。
+async fn peek_session_head(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
+    let mut f = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(_) => return (None, None, None),
+    };
+    let len = f.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let end = len.min(LIST_HEAD_WINDOW) as usize;
+    let mut buf = vec![0u8; end];
+    if f.read_exact(&mut buf).await.is_err() {
+        return (None, None, None);
+    }
+    let raw = String::from_utf8_lossy(&buf);
+    let (mut branch, mut cwd, mut summary) = (None, None, None);
+    for line in raw.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue; // 坏行/窗口切半行
+        };
+        if branch.is_none() {
+            branch = v
+                .get("gitBranch")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        if cwd.is_none() {
+            cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
+        }
+        if summary.is_none() {
+            summary = head_summary_of(&v);
+        }
+        if branch.is_some() && cwd.is_some() && summary.is_some() {
+            break;
+        }
+    }
+    (branch, cwd, summary)
+}
+
+/// 单行摘要提取：`type:"summary"` 行的 summary 字段优先；否则首条非 isMeta
+/// user 行的消息文本（字符串或 text 块数组）截断。task-notification 等 meta 行
+/// 不作摘要（与 parse_line 的 harness 元注入口径同源）。
+fn head_summary_of(v: &Value) -> Option<String> {
+    let row_type = v.get("type").and_then(Value::as_str).unwrap_or("");
+    if row_type == "summary" {
+        return v
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(|s| truncate_chars(s, SUMMARY_MAX_CHARS));
+    }
+    if row_type != "user" || v.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let text = match v.pointer("/message/content") {
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(Value::Array(blocks)) => blocks.iter().find_map(|b| {
+            if b.get("type").and_then(Value::as_str) == Some("text") {
+                b.get("text").and_then(Value::as_str)
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }?
+    .trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(text, SUMMARY_MAX_CHARS))
+}
+
+/// chars 边界安全截断（超长加 …）
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// 逐行解析：仅 user/assistant 行是对话；message.content 字符串或块数组，一块展开一条 ChatMessage。
 fn parse_session_lines(raw: &str) -> Vec<ChatMessage> {
     let mut out = Vec::new();
@@ -717,6 +879,147 @@ mod tests {
     /// ancestors()[0] 是路径自身：file→proj→projects→根，取 nth(3)。
     fn dir_for(path: &std::path::Path) -> &std::path::Path {
         path.ancestors().nth(3).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    /// `<projects_root>/projects/<slug>/` 目录（session_dir 同构布局）；
+    /// slug 由 cwd 编码而来（PROJ_CWD → "-w-proj"），保证枚举路径与 fixture 对齐。
+    const PROJ_CWD: &str = "/w/proj";
+    const PROJ_SLUG: &str = "-w-proj";
+
+    async fn list_fixture(case: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("hub-sesslist-{}-{}", case, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let proj = dir.join("projects").join(PROJ_SLUG);
+        tokio::fs::create_dir_all(&proj).await.unwrap();
+        (dir, proj)
+    }
+
+    /// 枚举：只收 .jsonl、mtime 倒序、行内字段（branch/cwd/summary/size）提取正确。
+    #[tokio::test]
+    async fn lists_jsonl_sorted_by_mtime_desc_with_metadata() {
+        let (root, proj) = list_fixture("sorted").await;
+        // mtime 显式钉时间戳（文件系统精度不可靠，sleep 间隔在部分卷上会并列）
+        let set_mtime = |name: &str, epoch_secs: u64| {
+            let f = std::fs::File::options()
+                .append(true)
+                .open(proj.join(name))
+                .unwrap();
+            f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(epoch_secs))
+                .unwrap();
+        };
+        // 旧会话（summary 行在头）→ 早写 + 早 mtime
+        tokio::fs::write(
+            proj.join("aaaa-old.jsonl"),
+            concat!(
+                r#"{"type":"summary","summary":"Old session about widgets","leafUuid":"x"}"#, "\n",
+                r#"{"type":"user","timestamp":"2026-01-01T00:00:00Z","cwd":"/w/old","gitBranch":"main","message":{"content":"hi"}}"#,
+            ),
+        )
+        .await
+        .unwrap();
+        // 新会话（无 summary 行 → 首条 user 消息兜底）
+        tokio::fs::write(
+            proj.join("bbbb-new.jsonl"),
+            concat!(
+                r#"{"type":"user","timestamp":"2026-01-02T00:00:00Z","cwd":"/w/new","gitBranch":"feat/x","message":{"content":"修复登录页"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"content":"好的"}}"#,
+            ),
+        )
+        .await
+        .unwrap();
+        // 噪声条目：非 jsonl 文件 + 同名目录 + 空名防御不适用（文件系统保证有 stem），
+        // 都必须被排除
+        tokio::fs::write(proj.join("notes.txt"), "x").await.unwrap();
+        tokio::fs::create_dir_all(proj.join("cccd-dir.jsonl"))
+            .await
+            .unwrap();
+        set_mtime("aaaa-old.jsonl", 1_000_000);
+        set_mtime("bbbb-new.jsonl", 1_000_060);
+
+        let list = list_project_sessions(&root, Path::new(PROJ_CWD)).await;
+
+        assert_eq!(list.len(), 2, "非 jsonl 文件与同名目录必须排除");
+        assert_eq!(list[0].session_id, "bbbb-new");
+        assert_eq!(list[0].branch.as_deref(), Some("feat/x"));
+        assert_eq!(list[0].cwd.as_deref(), Some("/w/new"));
+        assert_eq!(list[0].summary.as_deref(), Some("修复登录页"));
+        assert!(list[0].size_bytes > 0);
+        assert!(list[0].mtime_secs >= list[1].mtime_secs, "mtime 倒序");
+        assert_eq!(list[1].session_id, "aaaa-old");
+        assert_eq!(
+            list[1].summary.as_deref(),
+            Some("Old session about widgets"),
+            "summary 行优先于首条用户消息"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// slug 编码实测口径回归：`/` 与 `.` 一律映射 `-`（含 `..` 分量被一并编码成
+    /// `--`，不存在目录穿越形态）；空 cwd → None。
+    #[tokio::test]
+    async fn session_dir_encoding_matches_recorded_slug_rules() {
+        let root = Path::new("/root/.claude");
+        let dir = session_dir(root, Path::new("/Users/kevin/.claude/jobs/aa14d3e3-tmp")).unwrap();
+        assert_eq!(
+            dir,
+            root.join("projects/-Users-kevin--claude-jobs-aa14d3e3-tmp"),
+            "佐证样本：session.rs 头注释 2026-09-16 实测记录"
+        );
+        // `..` 分量被编码，不产生 ParentDir 分量（防穿越）；整段编码进单层 slug
+        let dir = session_dir(root, Path::new("/a/../../etc")).unwrap();
+        assert!(!dir
+            .components()
+            .any(|c| c == std::path::Component::ParentDir));
+        assert_eq!(
+            dir.parent().unwrap(),
+            root.join("projects"),
+            "必须仍是 projects 下的单层 slug 目录"
+        );
+        assert!(dir.to_str().unwrap().ends_with("etc"));
+        // 空 cwd → None（调用方空集语义）
+        assert!(session_dir(root, Path::new("")).is_none());
+    }
+
+    /// 目录缺失 / cwd 空：空集而非错误（前端空态语义）。
+    #[tokio::test]
+    async fn missing_dir_and_empty_cwd_return_empty_list() {
+        let root =
+            std::env::temp_dir().join(format!("hub-sesslist-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(list_project_sessions(&root, Path::new("/no/such/proj"))
+            .await
+            .is_empty());
+        assert!(list_project_sessions(&root, Path::new("")).await.is_empty());
+    }
+
+    /// 摘要兜底：无 summary 行取首条非 isMeta user 文本并截 120 chars（chars 边界
+    /// 安全，不 panic）；isMeta（含 task-notification）不作摘要。
+    #[tokio::test]
+    async fn summary_falls_back_to_first_human_user_message_truncated() {
+        let (root, proj) = list_fixture("summary").await;
+        let long = "长".repeat(300);
+        let meta_line =
+            r#"{"type":"user","isMeta":true,"message":{"content":"<task-notification>注入正文"}}"#;
+        let user_line = format!(
+            r#"{{"type":"user","message":{{"content":[{{"type":"text","text":"{long}"}}]}}}}"#
+        );
+        tokio::fs::write(proj.join("summ.jsonl"), format!("{meta_line}\n{user_line}"))
+            .await
+            .unwrap();
+        let list = list_project_sessions(&root, Path::new("/w/proj")).await;
+        assert_eq!(list.len(), 1);
+        let s = list[0].summary.as_deref().unwrap();
+        assert_eq!(s.chars().count(), 121, "120 chars + …");
+        assert!(s.ends_with('…'));
+        assert!(!s.contains("task-notification"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

@@ -34,6 +34,7 @@ export type SessionAction =
   | 'remove'
   | 'logs'
   | 'notes'
+  | 'sessions'
   | 'unlist';
 
 export default function AgentRow({
@@ -79,9 +80,9 @@ export default function AgentRow({
     }
     const r = menuBtnRef.current?.getBoundingClientRect();
     if (r) {
-      // 贴视口右/下缘内收，防溢出（菜单 6 项 ≈ 200px 高）
+      // 贴视口右/下缘内收，防溢出（菜单 claude 行 7 项 ≈ 230px 高）
       setMenuPos({
-        top: Math.min(r.bottom + 4, window.innerHeight - 210),
+        top: Math.min(r.bottom + 4, window.innerHeight - 240),
         left: Math.max(4, Math.min(r.left, window.innerWidth - 160)),
       });
     }
@@ -116,10 +117,16 @@ export default function AgentRow({
         <>
           <div className="agent-row-menu-backdrop" onClick={() => setMenuOpen(false)} />
           <div className="agent-row-menu" role="menu" style={menuPos ?? undefined}>
-            {/* 非危险操作：Logs（claude 专属）/ 工程便签（agent-hub-notes）/ 中断 */}
+            {/* 非危险操作：Logs（claude 专属）/ 历史会话（agent-hub-session-history，
+                claude 专属）/ 工程便签（agent-hub-notes）/ 中断 */}
             {isClaude ? (
               <button type="button" role="menuitem" onClick={() => run('logs')}>
                 Logs
+              </button>
+            ) : null}
+            {isClaude ? (
+              <button type="button" role="menuitem" onClick={() => run('sessions')}>
+                {t('row.sessions')}
               </button>
             ) : null}
             <button type="button" role="menuitem" onClick={() => run('notes')}>

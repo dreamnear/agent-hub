@@ -2750,6 +2750,7 @@ mod tests {
             model: None,
             effort: None,
             cwd: "/repo".into(),
+            resume_session_id: None,
         };
         let id = AgentCatalog::start(&d, &spec).await.unwrap();
         assert_eq!(id, "session-new");
@@ -3041,6 +3042,7 @@ mod tests {
             model: None,
             effort: None,
             cwd: "/tmp".into(),
+            resume_session_id: None,
         };
         let id = AgentCatalog::start(&d, &spec).await.unwrap();
         assert_eq!(id, "session-fresh");

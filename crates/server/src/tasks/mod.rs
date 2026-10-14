@@ -350,6 +350,7 @@ pub async fn execute_action(
                     model: None,
                     effort: None,
                     cwd: cwd.clone(),
+                    resume_session_id: None,
                 })
                 .await?;
             Ok(Some(id))

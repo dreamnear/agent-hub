@@ -33,6 +33,11 @@ pub fn router() -> Router<SharedState> {
         .route("/api/agents/{driver}/{id}/rm", post(remove_agent))
         .route("/api/agents/{driver}/{id}/respawn", post(respawn_agent))
         .route("/api/agents/{driver}/{id}/ignore", post(ignore_agent))
+        .route("/api/agents/{driver}/{id}/cli-sessions", get(cli_sessions))
+        .route(
+            "/api/agents/{driver}/{id}/resume-session",
+            post(resume_session),
+        )
 }
 
 /// interactive「从列表移除」（R8）：按 sessionId 追加忽略记录，幂等；仅 claude
@@ -132,6 +137,7 @@ async fn start_agent(
         model: body.model,
         effort: body.effort,
         cwd: body.cwd,
+        resume_session_id: None,
     };
     let id = d.start(&spec).await.map_err(app_err)?;
     Ok(Json(json!({ "id": id })))
@@ -163,6 +169,99 @@ async fn respawn_agent(
     let d = driver_of(&state, &driver)?;
     d.respawn(&id).await.map_err(app_err)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// —— CLI 历史会话（agent-hub-session-history）：claude 特有能力，数据源为本机
+// `~/.claude/projects/`（非驱动抽象面），ignore_agent（R8）同款 api 层特判先例 ——
+
+/// 工程历史会话枚举：该 agent cwd 对应 `<claude_root>/projects/<slug>/` 只读列表
+/// （编码复用 session_dir，防穿越）。cwd 从 driver.get 权威取（不信前端）；
+/// agent 无 cwd → 空集（前端空态）。
+async fn cli_sessions(
+    State(state): State<SharedState>,
+    AxumPath((driver, id)): AxumPath<(String, String)>,
+) -> Result<Json<Vec<crate::drivers::claude::session::SessionListEntry>>, AppError> {
+    if driver != "claude" {
+        return Err(AppError::bad("cli-sessions 仅支持 claude 驱动"));
+    }
+    let d = driver_of(&state, &driver)?;
+    let agent = d
+        .get(&id)
+        .await
+        .map_err(app_err)?
+        .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
+    let Some(cwd) = agent.cwd else {
+        return Ok(Json(Vec::new()));
+    };
+    let list = crate::drivers::claude::session::list_project_sessions(
+        &state.cfg.claude_root,
+        Path::new(&cwd),
+    )
+    .await;
+    Ok(Json(list))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeSessionBody {
+    pub session_id: String,
+}
+
+/// 恢复历史会话：选中一条 CLI 会话 → hub 中成为可继续会话。
+/// 三态返回（前端据此分流选中动作）：
+/// - `current`：目标即该 agent 当前会话，无动作
+/// - `active`：活跃清单已有该 session_id 的实例（任意驱动条目）→ 复用，不 spawn
+///   （防 `--bg --resume` 对活会话产生 CLI 副本，需求功能点 6 重复保护）
+/// - `resumed`：`claude --bg --resume <sid>` spawn 新条目（StartSpec.resume_session_id
+///   透传；death 会话 CLI 侧 same-ID 继续，转录 jsonl 同文件 → 消息视图按既有
+///   sessionId 分页端点天然呈现历史）
+async fn resume_session(
+    State(state): State<SharedState>,
+    AxumPath((driver, id)): AxumPath<(String, String)>,
+    Json(body): Json<ResumeSessionBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if driver != "claude" {
+        return Err(AppError::bad("resume-session 仅支持 claude 驱动"));
+    }
+    // session id 白名单（find_session_path 同款纪律：禁路径分量）
+    if body.session_id.is_empty()
+        || body.session_id.contains('/')
+        || body.session_id.contains('\\')
+        || body.session_id.contains("..")
+    {
+        return Err(AppError::bad("sessionId 非法"));
+    }
+    let d = driver_of(&state, &driver)?;
+    let agent = d
+        .get(&id)
+        .await
+        .map_err(app_err)?
+        .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
+    if agent.session_id.as_deref() == Some(body.session_id.as_str()) {
+        return Ok(Json(json!({ "status": "current" })));
+    }
+    // 重复保护：活跃清单（含 interactive）session_id 命中即复用
+    let active = state.drivers.list_all(false).await.unwrap_or_default();
+    if let Some(existing) = active
+        .into_iter()
+        .find(|a| a.session_id.as_deref() == Some(body.session_id.as_str()))
+    {
+        return Ok(Json(json!({ "status": "active", "agent": existing })));
+    }
+    let Some(cwd) = agent.cwd else {
+        return Err(AppError::bad("agent 无 cwd，无法定位恢复目标工程"));
+    };
+    validate_cwd(&cwd).await?;
+    let spec = StartSpec {
+        prompt: String::new(),
+        name: None,
+        model: None,
+        effort: None,
+        cwd,
+        resume_session_id: Some(body.session_id),
+    };
+    let new_id = d.start(&spec).await.map_err(app_err)?;
+    Ok(Json(json!({ "status": "resumed", "id": new_id })))
 }
 
 /// ensure_driver 的注册表替身：按名取驱动；未知名 → 404（行为与批前 ensure_driver 一致）。

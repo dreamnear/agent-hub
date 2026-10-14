@@ -225,8 +225,21 @@ export const en: Record<string, string> = {
   'row.dayAgo': '{n} d ago',
   'row.moreActions': '{name} actions',
   'row.notes': 'Project notes',
+  'row.sessions': 'Session history',
   'row.interrupt': 'Interrupt',
   'row.remove': 'Delete session',
+
+  // CLI session history dialog (agent-hub-session-history)
+  'sesshist.title': 'CLI session history',
+  'sesshist.subtitle': 'Claude sessions in this project · recent first',
+  'sesshist.search': 'Type to filter (summary / branch / id)',
+  'sesshist.searchLabel': 'Filter session history',
+  'sesshist.empty': 'No sessions in this project yet',
+  'sesshist.running': 'running',
+  'sesshist.current': 'current',
+  'sesshist.resuming': 'Resuming…',
+  'sesshist.resumeFailed': 'Resume failed',
+  'sesshist.filterEmpty': 'No matching sessions',
 
   // Right project sidebar
   'proj.title': 'Projects',

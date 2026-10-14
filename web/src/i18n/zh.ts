@@ -226,8 +226,21 @@ export const zh: Record<string, string> = {
   'row.dayAgo': '{n} 天前',
   'row.moreActions': '{name} 更多操作',
   'row.notes': '工程便签',
+  'row.sessions': '历史会话',
   'row.interrupt': '中断',
   'row.remove': '删除会话',
+
+  // CLI 历史会话弹窗（agent-hub-session-history）
+  'sesshist.title': 'CLI 历史会话',
+  'sesshist.subtitle': '该工程的 claude 会话 · 最近优先',
+  'sesshist.search': '输入即过滤（摘要 / 分支 / 会话 id）',
+  'sesshist.searchLabel': '过滤历史会话',
+  'sesshist.empty': '该工程暂无历史会话',
+  'sesshist.running': '运行中',
+  'sesshist.current': '当前会话',
+  'sesshist.resuming': '恢复中…',
+  'sesshist.resumeFailed': '恢复失败',
+  'sesshist.filterEmpty': '没有匹配的会话',
 
   // 右工程栏
   'proj.title': '工程',

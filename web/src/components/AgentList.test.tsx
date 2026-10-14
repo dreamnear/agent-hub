@@ -120,6 +120,7 @@ const renderList = (overrides: Partial<Parameters<typeof AgentList>[0]> = {}) =>
       onOpenSettings={vi.fn()}
       onRemoved={vi.fn()}
       onOpenNotes={vi.fn()}
+      onOpenSessions={vi.fn()}
       {...overrides}
     />,
     { wrapper },

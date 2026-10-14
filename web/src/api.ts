@@ -1,4 +1,4 @@
-import type { AgentSummary, ChatMessage, DocEntry, DocFile, GitCommitFiles, GitLog, GitStatus, GitTreeGroup, InstanceConfig, SubagentEntry, SubmoduleInfo, TaskSpecWithAction, TaskRun, GitDiffResult , NodeView } from './types';
+import type { AgentSummary, ChatMessage, CliSessionEntry, DocEntry, DocFile, GitCommitFiles, GitLog, GitStatus, GitTreeGroup, InstanceConfig, SubagentEntry, SubmoduleInfo, TaskSpecWithAction, TaskRun, GitDiffResult , NodeView } from './types';
 import { t } from './i18n';
 
 /** 历史分页信封（P6 B12/B13）：firstLine 为向前翻页游标，hasMore 标识还有更早消息 */
@@ -357,6 +357,11 @@ export interface Api {
   sendMessage: (id: string, text: string, driver?: string) => Promise<void>;
   respawnAgent: (id: string, driver?: string) => Promise<void>;
   interruptAgent: (id: string, driver?: string) => Promise<void>;
+  /** CLI 历史会话（agent-hub-session-history）：agent cwd 对应工程的只读枚举（claude 专属） */
+  cliSessions: (id: string, driver?: string) => Promise<CliSessionEntry[]>;
+  /** 恢复历史会话：status = current（已是当前会话）/ active（复用既有实例，agent 回传）/
+   * resumed（新 bg 条目 id）；claude 专属 */
+  resumeSession: (id: string, sessionId: string, driver?: string) => Promise<{ status: 'current' | 'active' | 'resumed'; id?: string; agent?: AgentSummary }>;
   uploadImage: (filename: string, dataBase64: string) => Promise<{ path: string }>;
   /** / 补全候选（agent-hub-slash-skills）：cwd 提供时追加项目级命令/技能（S2）；
    * 各实例 server 各自枚举本机文件系统，老版本实例忽略 cwd 自动降级内置集 */
@@ -672,6 +677,17 @@ export function makeApi(baseUrl: string, instanceId: string | null): Api {
     sendMessage: (id, text, driver = 'claude') => post(`/api/agents/${driver}/${id}/message`, { text }),
     respawnAgent: (id, driver = 'claude') => post(`/api/agents/${encodeURIComponent(driver)}/${id}/respawn`),
     interruptAgent: (id, driver = 'claude') => post(`/api/agents/${driver}/${id}/interrupt`),
+    cliSessions: (id, driver = 'claude') =>
+      json<CliSessionEntry[]>(`/api/agents/${encodeURIComponent(driver)}/${encodeURIComponent(id)}/cli-sessions`),
+    resumeSession: (id, sessionId, driver = 'claude') =>
+      json<{ status: 'current' | 'active' | 'resumed'; id?: string; agent?: AgentSummary }>(
+        `/api/agents/${encodeURIComponent(driver)}/${encodeURIComponent(id)}/resume-session`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        },
+      ),
     uploadImage: (filename, dataBase64) => json('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

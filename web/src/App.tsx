@@ -26,6 +26,7 @@ import QuickChat from './components/QuickChat';
 import SettingsPage, { lastSettingsSection, type SettingsSectionKey } from './components/SettingsPage';
 import TokenGate from './components/TokenGate';
 import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialog';
+import SessionHistoryDialog from './components/SessionHistoryDialog';
 import { api, clearStoredToken, onUnauthorized } from './api';
 import { useI18n } from './i18n';
 import type { AgentSummary } from './types';
@@ -183,6 +184,8 @@ export default function App(): ReactElement {
   const closeSettings = (): void => setSettingsSection(null);
   // 工程便签悬浮卡（agent-hub-notes）：⋯ 菜单/顶栏切换开；钉住的工程随会话自动展开
   const [notesFor, setNotesFor] = useState<AgentSummary | null>(null);
+  // CLI 历史会话弹窗（agent-hub-session-history）：⋯ 菜单开；恢复成功 onSelect 切选中
+  const [sessionsFor, setSessionsFor] = useState<AgentSummary | null>(null);
   // token 门禁：仅 allow_lan 模式遇 401 触发；localhost 不触发
   const [needToken, setNeedToken] = useState(false);
   // 面板宽度（工程 + Git + 文件三视图各自持久化 hub_panel_right_w /
@@ -489,6 +492,7 @@ export default function App(): ReactElement {
               );
             }}
             onOpenNotes={setNotesFor}
+            onOpenSessions={setSessionsFor}
           />
           </aside>
         ) : null}
@@ -817,6 +821,20 @@ export default function App(): ReactElement {
           api={registry.apiFor(notesFor.instanceId ?? null)}
           instanceId={notesFor.instanceId ?? null}
           onClose={() => setNotesFor(null)}
+        />
+      ) : null}
+      {/* CLI 历史会话弹窗（agent-hub-session-history）：恢复成功 = 快照兜底 + 切选中
+          （selectAgent 走复合键；新 bg 条目未进轮询清单时 historySel 承接，同 HistoryDialog 语义） */}
+      {sessionsFor ? (
+        <SessionHistoryDialog
+          agent={sessionsFor}
+          agents={data}
+          api={registry.apiFor(sessionsFor.instanceId ?? null) ?? api}
+          onSelect={(a) => {
+            setHistorySel(a);
+            selectAgent(a);
+          }}
+          onClose={() => setSessionsFor(null)}
         />
       ) : null}
       {needToken ? <TokenGate onUnlocked={unlock} /> : null}
