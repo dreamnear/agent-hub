@@ -25,6 +25,18 @@ pub fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// 最近 PTY 输出的有界环形缓冲（agent-hub-first-send-ready 首发确认层）：
+/// 「写入的文本是否被 CLI 消费」在 hub 侧唯一可得的证据是它出现在 TUI 渲染流里，
+/// 故 drain 需保留最近一段输出供增量检索。`start` = 缓冲首字节对应的累计序号
+/// （缓冲满后前移），`seq()` 返回累计 drain 字节数，调用方按 seq 取增量。
+/// 上限 64KB 防内存膨胀（单 session 常驻，量级远小于一屏渲染的多轮刷新）。
+struct OutputRing {
+    start: u64,
+    data: std::collections::VecDeque<u8>,
+}
+
+const OUTPUT_RING_CAP: usize = 64 * 1024;
+
 pub struct AttachSession {
     /// PTY master，保活防止 slave 写端 EIO；resize 抖动可触发 TUI 重绘（WINCH）
     master: Box<dyn portable_pty::MasterPty + Send>,
@@ -35,6 +47,8 @@ pub struct AttachSession {
     /// drain 是否读到过任何输出（反馈轮 28-A）：last_output_ms 初值是 attach 时刻
     /// 而非 0，「从未渲染」与「渲染后静默」无法靠 last 区分；此标志补上该判别
     saw_output: Arc<std::sync::atomic::AtomicBool>,
+    /// 最近输出环形缓冲（首发确认层）：锁内只做字节搬移，不含 await
+    output_ring: Arc<Mutex<OutputRing>>,
     /// PTY 输出字节广播（P4 终端保真视图订阅；无订阅者时 send 错误即丢弃）
     output_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     /// 后台 drain PTY 输出的任务（不读会撑满 slave 缓冲区卡死 TUI）
@@ -71,6 +85,11 @@ pub fn attach_sync(bin: &Path, id: &str) -> Result<AttachSession> {
     let saw_for_drain = saw_output.clone();
     let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
     let output_for_drain = output_tx.clone();
+    let ring = Arc::new(Mutex::new(OutputRing {
+        start: 0,
+        data: std::collections::VecDeque::new(),
+    }));
+    let ring_for_drain = ring.clone();
     let drain = tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -79,6 +98,16 @@ pub fn attach_sync(bin: &Path, id: &str) -> Result<AttachSession> {
                 Ok(n) => {
                     last_for_drain.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
                     saw_for_drain.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // 环形缓冲追加（首发确认层）：毒化锁不 panic——drain 一挂整条
+                    // PTY 输出就没人读，slave 缓冲满会卡死 TUI，比丢一段缓冲严重得多
+                    {
+                        let mut r = ring_for_drain.lock().unwrap_or_else(|e| e.into_inner());
+                        r.data.extend(&buf[..n]);
+                        while r.data.len() > OUTPUT_RING_CAP {
+                            r.data.pop_front();
+                            r.start += 1;
+                        }
+                    }
                     let _ = output_for_drain.send(buf[..n].to_vec());
                 }
             }
@@ -92,6 +121,7 @@ pub fn attach_sync(bin: &Path, id: &str) -> Result<AttachSession> {
         child: Mutex::new(child),
         last_output_ms,
         saw_output,
+        output_ring: ring,
         output_tx,
         _drain: drain,
     })
@@ -127,6 +157,41 @@ impl AttachSession {
     /// 此时 write_stdin 进黑洞（r28 取证：text written 成功但消息零落盘零回显）。
     pub fn has_output(&self) -> bool {
         self.saw_output.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 累计 drain 字节数（首发确认层的增量读取基准）。缓冲前移不影响该值单调性。
+    pub fn output_seq(&self) -> u64 {
+        let r = self.output_ring.lock().unwrap_or_else(|e| e.into_inner());
+        r.start + r.data.len() as u64
+    }
+
+    /// `seq` 之后新到的输出字节（增量）；缓冲已前移掉的部分取不到，返回仍保留的尾部。
+    pub fn output_since(&self, seq: u64) -> Vec<u8> {
+        let r = self.output_ring.lock().unwrap_or_else(|e| e.into_inner());
+        let from = seq.max(r.start);
+        let skip = (from - r.start) as usize;
+        r.data.iter().skip(skip).copied().collect()
+    }
+
+    /// 终端是否已被 CLI 接管为 raw 模式（ICANON/ECHO 均已清）。
+    /// 首发确认层用：canonical 态下行规程会自行回显键入字节（`Some(false)`）——
+    /// 那不是「应用消费了输入」的证据，且此时写入可能在 CLI 转 raw 时被 flush
+    /// （实测见 reports/agent-hub-first-send-ready/experiments.md §A）。
+    /// `None` = 本平台查询不可用（非 unix / ioctl 失败）：调用方按「未知」保守处理。
+    pub fn raw_mode(&self) -> Option<bool> {
+        #[cfg(unix)]
+        {
+            let fd = self.master.as_raw_fd()?;
+            let mut t: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut t) } != 0 {
+                return None;
+            }
+            Some(t.c_lflag & (libc::ICANON | libc::ECHO) == 0)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
     }
 
     /// 终端保真视图订阅 PTY 输出字节流（P4）。
@@ -175,5 +240,16 @@ impl AttachSession {
         // wait 回收 zombie；SIGKILL 后必然快速返回
         let _ = child.wait();
         Ok(())
+    }
+}
+
+/// 析构兜底：未经 `release()`/`kill()` 的 drop（异常路径 / server 关停）也要回收
+/// attach 子进程——否则子进程活着时 drain 任务会永远阻塞在 master read 上，
+/// 连带挂死 tokio blocking pool（首发单测曾以 8 分钟挂起实证此路径）。
+impl Drop for AttachSession {
+    fn drop(&mut self) {
+        if !self.is_finished() {
+            let _ = self.kill();
+        }
     }
 }
