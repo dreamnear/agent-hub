@@ -278,14 +278,14 @@ describe('AgentList Sidebar-v2', () => {
 
   it('行 ⋯ 菜单：不允许打开终端（无此入口）+ 序列化会话操作（Logs/工程便签/中断/Stop/Respawn/Remove）', () => {
     const onSelect = vi.fn();
-    const { container } = renderList({ onSelect });
+    renderList({ onSelect });
     fireEvent.click(screen.getByRole('button', { name: /运行中的会话 更多操作/ }));
     expect(screen.queryByRole('menuitem', { name: '打开终端' })).toBeNull();
     // bg 会话（kind=background）全部会话操作可用
     for (const item of ['Logs', '工程便签', '中断', 'Stop', 'Respawn', '删除会话']) {
       expect(screen.getByRole('menuitem', { name: item })).not.toBeNull();
     }
-    expect(container.querySelector('.agent-row-menu-sep')).not.toBeNull();
+    expect(document.querySelector('.agent-row-menu-sep')).not.toBeNull();
   });
 
   it('行 ⋯ 菜单：工程便签入口上抛 onOpenNotes（agent-hub-notes，悬浮卡归 App 层）', async () => {
@@ -317,7 +317,7 @@ describe('AgentList Sidebar-v2', () => {
     // Logs 仍可用；unlist 属危险区 → claude 行恒有分隔线
     expect(screen.getByRole('menuitem', { name: 'Logs' })).not.toBeNull();
     expect(screen.getByRole('menuitem', { name: '从列表移除' })).not.toBeNull();
-    expect(container.querySelector('.agent-row-menu-sep')).not.toBeNull();
+    expect(document.querySelector('.agent-row-menu-sep')).not.toBeNull();
     // bg 行徽标仍为单字母 C
     const bg = render(<AgentRow agent={FIXTURE[1]} onSelect={vi.fn()} onAction={vi.fn()} />, {
       wrapper,
