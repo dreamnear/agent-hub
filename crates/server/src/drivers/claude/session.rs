@@ -289,9 +289,14 @@ pub struct SessionListEntry {
     pub summary: Option<String>,
 }
 
-/// 头部读取窗口：summary 行与首条用户消息都在对话开头，64KB 足够；超长注入场景
-/// 窗口切半的尾行按完整行边界丢弃（raw.lines 对切半行解析失败自然跳过）。
-const LIST_HEAD_WINDOW: u64 = 64 * 1024;
+/// 头部读取块大小（R3 扩展读）：customTitle/summary 行与首条用户输入通常在文件
+/// 开头，但 attachment / file-history-snapshot 巨行可把首条对话行推到很后面
+/// （实测：380KB 的会话前 64KB 全是附件行 → 旧固定窗口取不到名）。
+const LIST_HEAD_CHUNK: u64 = 256 * 1024;
+
+/// 扩展读上限（防超大转录（实测 6MB+）为摘要整读拖慢整表）：读满仍未命中
+/// → 名候选 None（前端回退「日期 · 分支」可辨识形式）。
+const LIST_HEAD_MAX: u64 = 2 * 1024 * 1024;
 
 /// 摘要文本上限（chars 计；前端单行省略，超长截断即可辨识）
 const SUMMARY_MAX_CHARS: usize = 120;
@@ -352,59 +357,129 @@ pub async fn list_project_sessions(
     Ok(out)
 }
 
-/// 头部窗口读取（有限读不整文件）：提取 (gitBranch, cwd, summary)。
-/// 文件打不开/读失败 → 三 None（fail-soft，条目仍列出行内缺项显示）。
+/// 头部探测累积器（分块读与收尾残段共用同一吸收逻辑）。
+#[derive(Default)]
+struct HeadProbe {
+    branch: Option<String>,
+    cwd: Option<String>,
+    /// 名源三级（R3 用户口径「最可理解的名称」）：customTitle > summary 行 >
+    /// 首条可读用户文本
+    custom_title: Option<String>,
+    summary_line: Option<String>,
+    first_user: Option<String>,
+}
+
+impl HeadProbe {
+    /// 完整行批吸收（块边界切半行由调用方保证只传完整行）。
+    fn absorb_lines(&mut self, bytes: &[u8]) {
+        for line in String::from_utf8_lossy(bytes).lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue; // 坏行
+            };
+            if self.branch.is_none() {
+                self.branch = v
+                    .get("gitBranch")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            if self.cwd.is_none() {
+                self.cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
+            }
+            if let Some(ct) = custom_title_of(&v) {
+                self.custom_title = Some(ct); // 改名 append：后者（更新）胜
+            }
+            if self.summary_line.is_none() {
+                self.summary_line = summary_line_of(&v);
+            }
+            if self.first_user.is_none() {
+                self.first_user = readable_user_text_of(&v);
+            }
+        }
+    }
+
+    /// 命中足量（有名候选 + 分支/目录）即早停，不再扩读。
+    fn hit(&self) -> bool {
+        (self.custom_title.is_some() || self.summary_line.is_some() || self.first_user.is_some())
+            && self.branch.is_some()
+            && self.cwd.is_some()
+    }
+
+    /// 最终会话名（三级回退；全无 → None，前端给「日期 · 分支」可辨识形式）。
+    fn name(self) -> (Option<String>, Option<String>, Option<String>) {
+        (
+            self.branch,
+            self.cwd,
+            self.custom_title.or(self.summary_line).or(self.first_user),
+        )
+    }
+}
+
+/// 头部读取：提取 (gitBranch, cwd, 会话名)。分块扩展读（LIST_HEAD_CHUNK/MAX），
+/// 命中足量即早停；块边界切半行以字节 carry 拼接，只在完整行边界解析
+/// （多字节字符不会被切坏）。文件打不开/读失败 → 三 None（fail-soft）。
 async fn peek_session_head(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
     let mut f = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(_) => return (None, None, None),
     };
     let len = f.metadata().await.map(|m| m.len()).unwrap_or(0);
-    let end = len.min(LIST_HEAD_WINDOW) as usize;
-    let mut buf = vec![0u8; end];
-    if f.read_exact(&mut buf).await.is_err() {
-        return (None, None, None);
-    }
-    let raw = String::from_utf8_lossy(&buf);
-    let (mut branch, mut cwd, mut summary) = (None, None, None);
-    for line in raw.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue; // 坏行/窗口切半行
+    let mut probe = HeadProbe::default();
+    let mut carry: Vec<u8> = Vec::new();
+    let mut offset: u64 = 0;
+    while offset < len && offset < LIST_HEAD_MAX {
+        let want = LIST_HEAD_CHUNK.min(len - offset) as usize;
+        let mut buf = vec![0u8; want];
+        if f.read_exact(&mut buf).await.is_err() {
+            break;
+        }
+        offset += want as u64;
+        carry.extend_from_slice(&buf);
+        // 只在完整行边界切分；尾部残段留 carry 与下一块拼接
+        let Some(split_at) = carry.iter().rposition(|b| *b == b'\n').map(|i| i + 1) else {
+            continue;
         };
-        if branch.is_none() {
-            branch = v
-                .get("gitBranch")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-        }
-        if cwd.is_none() {
-            cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
-        }
-        if summary.is_none() {
-            summary = head_summary_of(&v);
-        }
-        if branch.is_some() && cwd.is_some() && summary.is_some() {
+        let complete: Vec<u8> = carry.drain(..split_at).collect();
+        probe.absorb_lines(&complete);
+        if probe.hit() {
             break;
         }
     }
-    (branch, cwd, summary)
+    // 文件尾无换行的最后一行（carry 残段）补吸收
+    if !carry.is_empty() {
+        probe.absorb_lines(&carry);
+    }
+    probe.name()
 }
 
-/// 单行摘要提取：`type:"summary"` 行的 summary 字段优先；否则首条非 isMeta
-/// user 行的消息文本（字符串或 text 块数组）截断。task-notification 等 meta 行
-/// 不作摘要（与 parse_line 的 harness 元注入口径同源）。
-fn head_summary_of(v: &Value) -> Option<String> {
-    let row_type = v.get("type").and_then(Value::as_str).unwrap_or("");
-    if row_type == "summary" {
-        return v
-            .get("summary")
-            .and_then(Value::as_str)
-            .map(|s| truncate_chars(s, SUMMARY_MAX_CHARS));
-    }
-    if row_type != "user" || v.get("isMeta").and_then(Value::as_bool) == Some(true) {
+/// 名源 1：`type:"custom-title"` 行的 `customTitle`（CLI/用户显式命名，实测值如
+/// "agent-hub-mng"）——最贴合「人能理解的会话名」。空串不作名。
+fn custom_title_of(v: &Value) -> Option<String> {
+    if v.get("type").and_then(Value::as_str) != Some("custom-title") {
         return None;
     }
-    // 文本候选：字符串形态，或数组内首个「可读」text 块（块内跳过包装块）
+    let t = v.get("customTitle").and_then(Value::as_str)?.trim();
+    (!t.is_empty()).then(|| truncate_chars(t, SUMMARY_MAX_CHARS))
+}
+
+/// 名源 2：`type:"summary"` 行的 summary（CLI 生成的会话摘要）。
+fn summary_line_of(v: &Value) -> Option<String> {
+    if v.get("type").and_then(Value::as_str) != Some("summary") {
+        return None;
+    }
+    v.get("summary")
+        .and_then(Value::as_str)
+        .map(|s| truncate_chars(s, SUMMARY_MAX_CHARS))
+}
+
+/// 名源 3：首条可读用户文本。task-notification 等 isMeta 行不作候选
+/// （与 parse_line 的 harness 元注入口径同源）；文本取字符串形态或数组内首个
+/// 可读 text 块（包装块跳过）。
+fn readable_user_text_of(v: &Value) -> Option<String> {
+    if v.get("type").and_then(Value::as_str) != Some("user")
+        || v.get("isMeta").and_then(Value::as_bool) == Some(true)
+    {
+        return None;
+    }
     let text = match v.pointer("/message/content") {
         Some(Value::String(s)) => {
             let t = s.trim();
@@ -427,7 +502,7 @@ fn head_summary_of(v: &Value) -> Option<String> {
 /// 斜杠命令展开（`<command-name>/clear</command-name><command-message>…`）、各类
 /// hook 注入。这些行 isMeta 常常未标（实录截图两类形态），光靠 isMeta 筛不掉。
 ///
-/// 判据：trim 后以 `<` 开头 → 不作摘要候选。会话名用途下尖括号开头的文本从不可读；
+/// 判据：trim 后以 `<` 开头 → 不作名候选。会话名用途下尖括号开头的文本从不可读；
 /// 误判代价极小——跳过即继续扫后续行，全无可读行 → None → 前端回退「日期 · 分支」
 /// 的可辨识形式（功能点：实在取不到可读文本时给可辨识形式，不以原始标签示人）。
 fn is_readable_session_name(text: &str) -> bool {
@@ -1107,6 +1182,81 @@ mod list_tests {
         );
         let blk = list.iter().find(|e| e.session_id == "blocks").unwrap();
         assert_eq!(blk.summary.as_deref(), Some("同行可读块"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 名源优先级（R3）：customTitle > summary 行 > 首条可读用户文本。
+    #[tokio::test]
+    async fn name_source_precedence_custom_title_over_summary_over_user() {
+        let (root, proj) = list_fixture("namesrc").await;
+        // 三者齐备 → customTitle 胜（改名 append 时后者胜）
+        tokio::fs::write(
+            proj.join("all.jsonl"),
+            concat!(
+                r#"{"type":"custom-title","customTitle":"初始名"}"#, "\n",
+                r#"{"type":"summary","summary":"CLI 摘要"}"#, "\n",
+                r#"{"type":"user","gitBranch":"main","cwd":"/w/proj","message":{"content":"用户输入"}}"#, "\n",
+                r#"{"type":"custom-title","customTitle":"改名后"}"#, "\n",
+                r#"{"type":"user","message":{"content":"第二条"}}"#, "\n",
+            ),
+        )
+        .await
+        .unwrap();
+        // 无 customTitle → summary 行胜
+        tokio::fs::write(
+            proj.join("nosum.jsonl"),
+            concat!(
+                r#"{"type":"summary","summary":"CLI 摘要"}"#,
+                "\n",
+                r#"{"type":"user","message":{"content":"用户输入"}}"#,
+                "\n",
+            ),
+        )
+        .await
+        .unwrap();
+        let list = list_project_sessions(&root, Path::new(PROJ_CWD))
+            .await
+            .unwrap();
+        let all = list.iter().find(|e| e.session_id == "all").unwrap();
+        assert_eq!(
+            all.summary.as_deref(),
+            Some("改名后"),
+            "customTitle 优先，且改名 append 后者胜"
+        );
+        assert_eq!(all.branch.as_deref(), Some("main"));
+        let nosum = list.iter().find(|e| e.session_id == "nosum").unwrap();
+        assert_eq!(
+            nosum.summary.as_deref(),
+            Some("CLI 摘要"),
+            "无 customTitle 时 summary 行胜"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 扩展读（R3 根因修复）：首块被巨行（attachment 形态）占满时，可读用户文本
+    /// 落在其后仍要取到——旧 64KB 固定窗口在此形态下取不到名（实测 380KB 会话）。
+    #[tokio::test]
+    async fn extended_read_finds_name_after_huge_attachment_lines() {
+        let (root, proj) = list_fixture("bighead").await;
+        // 造 >256KB 的附件巨行（单行超一块），可读 user 行在其后
+        let filler = "x".repeat(300 * 1024);
+        let huge = format!(
+            r#"{{"type":"attachment","attachment":{{"type":"file-history-snapshot","blob":"{filler}"}},"sessionKind":"bg"}}"#
+        );
+        let user = r#"{"type":"user","gitBranch":"feat/big","cwd":"/w/proj","message":{"content":"巨行之后的真实输入"}}"#;
+        tokio::fs::write(proj.join("big.jsonl"), format!("{huge}\n{user}\n"))
+            .await
+            .unwrap();
+        let list = list_project_sessions(&root, Path::new(PROJ_CWD))
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(
+            list[0].summary.as_deref(),
+            Some("巨行之后的真实输入"),
+            "扩展读须越过巨行取到可读名"
+        );
+        assert_eq!(list[0].branch.as_deref(), Some("feat/big"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
