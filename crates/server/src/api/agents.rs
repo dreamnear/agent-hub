@@ -193,11 +193,18 @@ async fn cli_sessions(
     let Some(cwd) = agent.cwd else {
         return Ok(Json(Vec::new()));
     };
+    // R1 tester AC8 回修：只把“目录不存在”当作合法空集（工程尚无会话），
+    // 权限等其他 IO 错误原样上抛 → 前端错误态 + 重试可达
     let list = crate::drivers::claude::session::list_project_sessions(
         &state.cfg.claude_root,
         Path::new(&cwd),
     )
     .await;
+    let list = match list {
+        Ok(v) => v,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(anyhow::Error::new(e).into()),
+    };
     Ok(Json(list))
 }
 

@@ -224,7 +224,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  /* 层级：抽屉 overlay 21 / drawer 22（移动端），顶栏 expand 30；弹窗须在最上层
+     （agent-hub-session-history 回修：375px 抽屉内开弹窗被覆盖需两击） */
+  z-index: 40;
 }
 
 .dialog-card {

@@ -298,15 +298,18 @@ const SUMMARY_MAX_CHARS: usize = 120;
 
 /// 工程历史会话枚举（agent-hub-session-history）：只读列
 /// `<projects_dir>/projects/<slug>/`（cwd → slug 走 session_dir 同款编码，防穿越），
-/// mtime 倒序。目录不存在/不可读 → 空集（前端空态语义）；单文件 metadata 失败
+/// mtime 倒序。R1 tester AC8 回修：read_dir 错误不再一律吞成空集——目录不存在
+/// （NotFound）= 工程尚无会话（合法空集，端点转 200 `[]`）；权限等其他 IO 错误
+/// 原样上抛（端点转错误响应，前端错误态 + 重试可达）。单文件 metadata 失败仍
 /// 跳过（宽松，坏条目不拖垮整表）。
-pub async fn list_project_sessions(projects_dir: &Path, cwd: &Path) -> Vec<SessionListEntry> {
+pub async fn list_project_sessions(
+    projects_dir: &Path,
+    cwd: &Path,
+) -> std::io::Result<Vec<SessionListEntry>> {
     let Some(dir) = session_dir(projects_dir, cwd) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
-        return Vec::new();
-    };
+    let mut entries = tokio::fs::read_dir(&dir).await?;
     let mut out = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
@@ -346,7 +349,7 @@ pub async fn list_project_sessions(projects_dir: &Path, cwd: &Path) -> Vec<Sessi
             .cmp(&a.mtime_secs)
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
-    out
+    Ok(out)
 }
 
 /// 头部窗口读取（有限读不整文件）：提取 (gitBranch, cwd, summary)。
@@ -943,7 +946,9 @@ mod list_tests {
         set_mtime("aaaa-old.jsonl", 1_000_000);
         set_mtime("bbbb-new.jsonl", 1_000_060);
 
-        let list = list_project_sessions(&root, Path::new(PROJ_CWD)).await;
+        let list = list_project_sessions(&root, Path::new(PROJ_CWD))
+            .await
+            .unwrap();
 
         assert_eq!(list.len(), 2, "非 jsonl 文件与同名目录必须排除");
         assert_eq!(list[0].session_id, "bbbb-new");
@@ -987,16 +992,30 @@ mod list_tests {
         assert!(session_dir(root, Path::new("")).is_none());
     }
 
-    /// 目录缺失 / cwd 空：空集而非错误（前端空态语义）。
+    /// 目录缺失 / cwd 空：端点口径为“空集”（NotFound → 200 `[]`）；权限错误则上抛
+    /// 500。本测试盘上直接调用 list_project_sessions，验证 NotFound 按端点语义
+    /// 解释为空集（修复 AC8 的回修用例形态）。
     #[tokio::test]
     async fn missing_dir_and_empty_cwd_return_empty_list() {
         let root =
             std::env::temp_dir().join(format!("hub-sesslist-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        assert!(list_project_sessions(&root, Path::new("/no/such/proj"))
+        // NotFound → 按端点语义解释为空集；空 cwd 为快路径 Ok([]) 不受 NotFound 影响
+        let res1 = list_project_sessions(&root, Path::new("/no/such/proj"))
             .await
+            .or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(Vec::new())
+                } else {
+                    Err(e)
+                }
+            })
+            .expect("NotFound 应按空集语义解释、无其他错误");
+        assert!(res1.is_empty());
+        assert!(list_project_sessions(&root, Path::new(""))
+            .await
+            .unwrap()
             .is_empty());
-        assert!(list_project_sessions(&root, Path::new("")).await.is_empty());
     }
 
     /// 摘要兜底：无 summary 行取首条非 isMeta user 文本并截 120 chars（chars 边界
@@ -1013,7 +1032,9 @@ mod list_tests {
         tokio::fs::write(proj.join("summ.jsonl"), format!("{meta_line}\n{user_line}"))
             .await
             .unwrap();
-        let list = list_project_sessions(&root, Path::new("/w/proj")).await;
+        let list = list_project_sessions(&root, Path::new("/w/proj"))
+            .await
+            .unwrap();
         assert_eq!(list.len(), 1);
         let s = list[0].summary.as_deref().unwrap();
         assert_eq!(s.chars().count(), 121, "120 chars + …");

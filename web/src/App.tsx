@@ -491,8 +491,14 @@ export default function App(): ReactElement {
                 Object.fromEntries(Object.entries(g).filter(([k]) => !k.endsWith(`:${id}`))),
               );
             }}
-            onOpenNotes={setNotesFor}
-            onOpenSessions={setSessionsFor}
+            onOpenNotes={(a) => {
+              setNotesFor(a);
+              setLeftOpen(false);
+            }}
+            onOpenSessions={(a) => {
+              setSessionsFor(a);
+              setLeftOpen(false);
+            }}
           />
           </aside>
         ) : null}
