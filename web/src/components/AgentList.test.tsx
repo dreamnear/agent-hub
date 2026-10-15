@@ -120,6 +120,7 @@ const renderList = (overrides: Partial<Parameters<typeof AgentList>[0]> = {}) =>
       onOpenSettings={vi.fn()}
       onRemoved={vi.fn()}
       onOpenNotes={vi.fn()}
+      onOpenSessions={vi.fn()}
       {...overrides}
     />,
     { wrapper },
@@ -277,14 +278,14 @@ describe('AgentList Sidebar-v2', () => {
 
   it('行 ⋯ 菜单：不允许打开终端（无此入口）+ 序列化会话操作（Logs/工程便签/中断/Stop/Respawn/Remove）', () => {
     const onSelect = vi.fn();
-    const { container } = renderList({ onSelect });
+    renderList({ onSelect });
     fireEvent.click(screen.getByRole('button', { name: /运行中的会话 更多操作/ }));
     expect(screen.queryByRole('menuitem', { name: '打开终端' })).toBeNull();
     // bg 会话（kind=background）全部会话操作可用
     for (const item of ['Logs', '工程便签', '中断', 'Stop', 'Respawn', '删除会话']) {
       expect(screen.getByRole('menuitem', { name: item })).not.toBeNull();
     }
-    expect(container.querySelector('.agent-row-menu-sep')).not.toBeNull();
+    expect(document.querySelector('.agent-row-menu-sep')).not.toBeNull();
   });
 
   it('行 ⋯ 菜单：工程便签入口上抛 onOpenNotes（agent-hub-notes，悬浮卡归 App 层）', async () => {
@@ -293,6 +294,15 @@ describe('AgentList Sidebar-v2', () => {
     fireEvent.click(screen.getByRole('button', { name: /运行中的会话 更多操作/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: '工程便签' }));
     await waitFor(() => expect(onOpenNotes).toHaveBeenCalledWith(FIXTURE[1]));
+  });
+
+  it('AgentRow ⋯ 菜单：pi 行不显示 Logs/历史会话（R4：两者均为 claude 专属，其余驱动点开必败）', () => {
+    const pi: AgentSummary = { ...mk('hub', 'Hub 助手', 'other'), driver: 'pi', kind: 'assistant' };
+    render(<AgentRow agent={pi} onSelect={vi.fn()} onAction={vi.fn()} />, { wrapper });
+    fireEvent.click(screen.getByRole('button', { name: /Hub 助手 更多操作/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Logs' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: '历史会话' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: '工程便签' })).not.toBeNull();
   });
 
   it('AgentRow ⋯ 菜单：interactive 会话隐藏中断/Stop/Respawn/删除，保留「从列表移除」（R8）+ IC 徽标', () => {
@@ -316,7 +326,7 @@ describe('AgentList Sidebar-v2', () => {
     // Logs 仍可用；unlist 属危险区 → claude 行恒有分隔线
     expect(screen.getByRole('menuitem', { name: 'Logs' })).not.toBeNull();
     expect(screen.getByRole('menuitem', { name: '从列表移除' })).not.toBeNull();
-    expect(container.querySelector('.agent-row-menu-sep')).not.toBeNull();
+    expect(document.querySelector('.agent-row-menu-sep')).not.toBeNull();
     // bg 行徽标仍为单字母 C
     const bg = render(<AgentRow agent={FIXTURE[1]} onSelect={vi.fn()} onAction={vi.fn()} />, {
       wrapper,

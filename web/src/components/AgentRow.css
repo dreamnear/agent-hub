@@ -102,6 +102,9 @@
   justify-content: flex-start;
   padding: 0 10px;
   width: 100%;
+  /* Portal 后菜单宽度仍收缩自适应（min-width 兜底）；nowrap 保证任何宽度下
+     菜单项文字完整可读不折行（R4 用户截图首字符竖条教训） */
+  white-space: nowrap;
 }
 
 .agent-row-menu button:hover {

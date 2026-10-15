@@ -386,6 +386,7 @@ impl AgentCatalog for ClaudeDriver {
                 name: spec.name.clone(),
                 model: spec.model.clone(),
                 effort: spec.effort.clone(),
+                resume: spec.resume_session_id.clone(),
             };
             cli::start_bg(&self.bin, Path::new(&spec.cwd), &req).await
         })

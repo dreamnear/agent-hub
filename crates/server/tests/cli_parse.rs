@@ -60,6 +60,7 @@ async fn fake_cli_integration() {
             name: Some("test".into()),
             model: None,
             effort: None,
+            resume: None,
         },
     )
     .await

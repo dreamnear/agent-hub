@@ -33,6 +33,37 @@ pub struct StartReq {
     pub name: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// 恢复目标 session id（agent-hub-session-history）：`--bg --resume <id>`。
+    /// 实测（2026-10-15）：prompt 可省（空串即不尾随）；CLI 对活会话自动走
+    /// 「start a copy」分支、死会话走「continues under the same ID」。恢复路径
+    /// 不传 --name（CLI 自动带原会话 saved options，见 woke 输出实测）。
+    pub resume: Option<String>,
+}
+
+/// 启动参数构造（纯函数便于单测）：`--bg` 打头 → `--resume`（恢复）→
+/// `--name` → `--model` → `--effort` → prompt 尾随（空 = 不追加）。
+fn build_start_args(req: &StartReq) -> Vec<String> {
+    let mut args: Vec<String> = vec!["--bg".into()];
+    if let Some(sid) = &req.resume {
+        args.push("--resume".into());
+        args.push(sid.clone());
+    }
+    if let Some(n) = &req.name {
+        args.push("--name".into());
+        args.push(n.clone());
+    }
+    if let Some(m) = &req.model {
+        args.push("--model".into());
+        args.push(m.clone());
+    }
+    if let Some(e) = &req.effort {
+        args.push("--effort".into());
+        args.push(e.clone());
+    }
+    if !req.prompt.is_empty() {
+        args.push(req.prompt.clone());
+    }
+    args
 }
 
 /// spawn 子进程并收集 stdout；参数数组传递、超时保护、非零退出带 stderr。
@@ -130,23 +161,10 @@ pub async fn respawn(bin: &Path, id: &str) -> Result<()> {
 }
 
 pub async fn start_bg(bin: &Path, cwd: &Path, req: &StartReq) -> Result<String> {
-    let mut args: Vec<String> = vec!["--bg".into()];
-    if let Some(n) = &req.name {
-        args.push("--name".into());
-        args.push(n.clone());
-    }
-    if let Some(m) = &req.model {
-        args.push("--model".into());
-        args.push(m.clone());
-    }
-    if let Some(e) = &req.effort {
-        args.push("--effort".into());
-        args.push(e.clone());
-    }
-    args.push(req.prompt.clone());
+    let args = build_start_args(req);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = run(bin, &refs, Some(cwd), START_TIMEOUT).await?;
-    let id = out.lines().next().map(parse_bg_id).unwrap_or_default();
+    let id = extract_bg_id(&out);
     if id.is_empty() {
         bail!("claude --bg 未返回任务 id");
     }
@@ -188,6 +206,36 @@ pub fn parse_bg_id(line: &str) -> String {
     line.to_string()
 }
 
+/// 短 hex id 判据（parse_bg_id 同口径）：非空、≤16 位、全 ASCII hex。
+fn is_hex_id(tok: &str) -> bool {
+    !tok.is_empty() && tok.len() <= 16 && tok.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// 从 `claude --bg` 全量 stdout 提取任务 id（agent-hub-session-history 扩展）。
+/// 实测（2026-10-15）resume 输出首行是 note 行、backgrounded 行在后：
+/// - 死会话：`note: woke session <sid> with its saved options (--name, --model).`
+///   + `backgrounded · <id> · <name> (idle — send a prompt to start)`（bg id = sid 前 8）
+/// - 活会话：`note: session <sid> is already running ..., so this started a copy as <id>.`
+///   + `backgrounded · <id> (idle — ...)`（hub 侧重复保护应先拦住此分支，竞态窗口才到达）
+///
+/// 现有 parse_bg_id 对这些形态取首行必错（note 行 / 尾 token 非 hex 回退整行）。
+///
+/// 策略：逐行倒序找 backgrounded 行，strip ANSI 后按 `·`/空白切 token 取首个
+/// 短 hex（`· <id> · <name>` 与 `· <id> (idle…)` 两种排布都命中 id）；无
+/// backgrounded 行回退首行 parse_bg_id（旧 CLI / fixture 兼容）。
+pub fn extract_bg_id(stdout: &str) -> String {
+    for line in stdout.lines().rev() {
+        if !line.contains("backgrounded") {
+            continue;
+        }
+        let clean = strip_ansi(line);
+        if let Some(tok) = clean.split(['·', ' ', '\t']).find(|t| is_hex_id(t)) {
+            return tok.to_string();
+        }
+    }
+    stdout.lines().next().map(parse_bg_id).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_bg_id;
@@ -204,6 +252,93 @@ mod tests {
             parse_bg_id("\x1b[2mlaunching\x1b[22m \x1b[32mab12cd34\x1b[0m"),
             "ab12cd34"
         );
+    }
+
+    // —— agent-hub-session-history：启动参数构造与 resume 输出解析 ——
+
+    use super::{build_start_args, extract_bg_id, StartReq};
+
+    fn req(prompt: &str, name: Option<&str>, resume: Option<&str>) -> StartReq {
+        StartReq {
+            prompt: prompt.into(),
+            name: name.map(Into::into),
+            model: None,
+            effort: None,
+            resume: resume.map(Into::into),
+        }
+    }
+
+    /// 恢复参数构造：`--resume <sid>` 紧随 `--bg`；不传 --name（CLI 自动带原会话
+    /// saved options，且规避 #10 的 --name 解析错位）；空 prompt 不尾随。
+    #[test]
+    fn resume_args_carry_resume_without_name_or_prompt() {
+        let args = build_start_args(&req("", None, Some("15c9e382-1658-4703-bdcb-2d236739943f")));
+        assert_eq!(
+            args,
+            vec![
+                "--bg".to_string(),
+                "--resume".to_string(),
+                "15c9e382-1658-4703-bdcb-2d236739943f".to_string()
+            ]
+        );
+    }
+
+    /// 普通 start 参数序保持原行为：--bg [--name] [--model] [--effort] prompt。
+    #[test]
+    fn plain_start_args_keep_legacy_order() {
+        let mut r = req("hello", Some("myname"), None);
+        r.model = Some("opus".into());
+        r.effort = Some("high".into());
+        let args = build_start_args(&r);
+        assert_eq!(
+            args,
+            vec![
+                "--bg".to_string(),
+                "--name".to_string(),
+                "myname".to_string(),
+                "--model".to_string(),
+                "opus".to_string(),
+                "--effort".to_string(),
+                "high".to_string(),
+                "hello".to_string()
+            ]
+        );
+    }
+
+    /// 死会话 resume 实测形态（2026-10-15）：首行 note（woke），backgrounded 行
+    /// 在后且带 `· <name> (idle — …)` 尾巴——提取必须命中 bg id（= sid 前 8），
+    /// 不得被 note 行或非 hex 尾 token 带偏。
+    #[test]
+    fn extract_id_from_woke_resume_output() {
+        let out = concat!(
+            "note: woke session e5b57ea3-986f-4bd6-bba7-57e0eb7c6b84 with its saved options (--name, --model).\n",
+            "backgrounded \u{b7} e5b57ea3 \u{b7} hub-test-sesshist-probe2 (idle \u{2014} send a prompt to start)\n",
+            "  claude agents             list sessions\n",
+        );
+        assert_eq!(extract_bg_id(out), "e5b57ea3");
+    }
+
+    /// 活会话 resume 实测形态（copy 分支）：note 行里也出现 8hex（as <id>.），
+    /// 但提取只认 backgrounded 行——两行都含目标 id，结果一致不歧义。
+    #[test]
+    fn extract_id_from_copy_resume_output() {
+        let out = concat!(
+            "note: session 15c9e382-1658-4703-bdcb-2d236739943f is already running in the background, so this started a copy as a2b4de6c. `claude attach 15c9e382` opens the original.\n",
+            "backgrounded \u{b7} a2b4de6c (idle \u{2014} send a prompt to start)\n",
+        );
+        assert_eq!(extract_bg_id(out), "a2b4de6c");
+    }
+
+    /// 普通 start 新形态（ANSI 色码 backgrounded 行）与旧形态（首行纯 id）兼容。
+    #[test]
+    fn extract_id_falls_back_to_legacy_first_line() {
+        assert_eq!(
+            extract_bg_id("backgrounded \u{b7} \x1b[36m92d38ecf\x1b[39m\n  claude agents ...\n"),
+            "92d38ecf"
+        );
+        assert_eq!(extract_bg_id("abc123\n"), "abc123");
+        // 无任何可解析行 → 空串（start_bg bail）
+        assert_eq!(extract_bg_id(""), "");
     }
 
     /// 旧 CLI / fixture 输出纯 id，行为不变。

@@ -1,0 +1,171 @@
+/* CLI 历史会话弹窗（agent-hub-session-history）：backdrop/card/dialog-error 复用
+   App.css 弹窗规范，history-head/title/sub 复用 HistoryDialog.css 族样式；
+   本文件只定义弹窗自有条目样式。颜色全走 --c-* token，三态主题自适应。 */
+.sesshist-card {
+  width: min(560px, 92vw);
+  max-height: min(72vh, 640px);
+  display: flex;
+  flex-direction: column;
+}
+
+.sesshist-search {
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  background: var(--c-panel);
+  font-size: 0.8rem;
+}
+
+.sesshist-search:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+.sesshist-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.sesshist-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  /* 几何左对齐的关键（R4 用户二次反馈）：button 全局规则 align-items:center 会让
+     column 容器的行 shrink-to-fit 后整行水平居中——text-align/justify-content
+     均管不到这一层（text-align 对 flex item 无效、column 主轴是垂直方向）。
+     stretch 让 line1/line2 占满内容宽，行内 space-between 才能把体积推到右侧 */
+  align-items: stretch;
+  gap: 0.2rem;
+  text-align: left;
+  justify-content: flex-start;
+  padding: 0.5rem 0.45rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sesshist-item:hover {
+  background: var(--c-selected);
+}
+
+.sesshist-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sesshist-line1 {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-width: 0;
+  text-align: left;
+}
+
+/* 名称：最多 2 行、超出省略号（R3 用户口径）；长串强制折行不撑破布局 */
+.sesshist-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--c-text);
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.sesshist-time {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+  text-align: right;
+}
+
+/* 次级行：左组（分支 · worktree）与右组（徽标 · 体积）两端对齐 */
+.sesshist-line2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+  text-align: left;
+}
+
+.sesshist-l2-left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.sesshist-l2-right {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: none;
+}
+
+.sesshist-branch {
+  font-size: 0.68rem;
+  color: var(--c-green-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.sesshist-size {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--c-faint);
+}
+
+.sesshist-wt {
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--c-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 运行中/当前会话徽标：文字态走既有语义 token（绿文字/默认徽标灰），两态对比达标 */
+.sesshist-badge {
+  flex: none;
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  line-height: 1.6;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  color: var(--c-faint);
+}
+
+.sesshist-badge--running {
+  color: var(--c-green-text);
+}
+
+.sesshist-badge--current {
+  color: var(--c-text);
+}
+
+/* ≤375px：次级行允许换行（左右组各占一行时仍各自贴边） */
+@media (max-width: 375px) {
+  .sesshist-line2 {
+    flex-wrap: wrap;
+  }
+
+  .sesshist-l2-right {
+    margin-left: auto;
+  }
+}

@@ -106,6 +106,17 @@ export interface SubagentEntry {
   lastActiveAt: string | null;
 }
 
+/// CLI 历史会话条目（agent-hub-session-history，镜像 server SessionListEntry）。
+/// cwd 为会话发生时的工作目录：与所在 agent 的 cwd 不同即 worktree 会话。
+export interface CliSessionEntry {
+  sessionId: string;
+  mtimeSecs: number;
+  sizeBytes: number;
+  branch: string | null;
+  cwd: string | null;
+  summary: string | null;
+}
+
 /// git 工程树节点（P6 B1，镜像 server GitTreeNode）。branch 为短分支名，detached 为 null。
 export interface GitTreeNode {
   path: string;
