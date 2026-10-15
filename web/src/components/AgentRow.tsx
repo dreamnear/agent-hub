@@ -67,6 +67,9 @@ export default function AgentRow({
   // ocr-review 中：Logs/Stop/Respawn/删除是 claude 专属端点（/api/agents/claude/...），
   // ACP 行隐藏（中断在 AgentList.handleAction 分流 cancelAcpSession）
   const isClaude = agent.driver !== 'acp';
+  // R4 自验修正：历史会话的数据源是 claude CLI 转录目录，仅 claude 行显示
+  // （isClaude 判据含 pi 等其他驱动，点开必然 400——需求口径「claude agent 行」）
+  const isClaudeDriver = agent.driver === 'claude';
 
   const run = (action: SessionAction): void => {
     setMenuOpen(false);
@@ -124,7 +127,7 @@ export default function AgentRow({
                 Logs
               </button>
             ) : null}
-            {isClaude ? (
+            {isClaudeDriver ? (
               <button type="button" role="menuitem" onClick={() => run('sessions')}>
                 {t('row.sessions')}
               </button>

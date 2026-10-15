@@ -34,8 +34,12 @@
   width: 100%;
   display: flex;
   flex-direction: column;
+  /* 几何左对齐的关键（R4 用户二次反馈）：button 全局规则 align-items:center 会让
+     column 容器的行 shrink-to-fit 后整行水平居中——text-align/justify-content
+     均管不到这一层（text-align 对 flex item 无效、column 主轴是垂直方向）。
+     stretch 让 line1/line2 占满内容宽，行内 space-between 才能把体积推到右侧 */
+  align-items: stretch;
   gap: 0.2rem;
-  /* 行内容左对齐（R3 用户口径）；button 全局规则是居中，此处与各子元素显式覆盖 */
   text-align: left;
   justify-content: flex-start;
   padding: 0.5rem 0.45rem;
