@@ -404,22 +404,34 @@ fn head_summary_of(v: &Value) -> Option<String> {
     if row_type != "user" || v.get("isMeta").and_then(Value::as_bool) == Some(true) {
         return None;
     }
+    // 文本候选：字符串形态，或数组内首个「可读」text 块（块内跳过包装块）
     let text = match v.pointer("/message/content") {
-        Some(Value::String(s)) => Some(s.as_str()),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            (!t.is_empty() && is_readable_session_name(t)).then_some(t)
+        }
         Some(Value::Array(blocks)) => blocks.iter().find_map(|b| {
-            if b.get("type").and_then(Value::as_str) == Some("text") {
-                b.get("text").and_then(Value::as_str)
-            } else {
-                None
+            if b.get("type").and_then(Value::as_str) != Some("text") {
+                return None;
             }
+            let t = b.get("text").and_then(Value::as_str)?.trim();
+            (!t.is_empty() && is_readable_session_name(t)).then_some(t)
         }),
         _ => None,
-    }?
-    .trim();
-    if text.is_empty() {
-        return None;
-    }
+    }?;
     Some(truncate_chars(text, SUMMARY_MAX_CHARS))
+}
+
+/// 会话名可读性判据（R3 用户口径：会话名必须人能看懂）：jsonl 里大量 user 行实为
+/// 结构化包装而非人类输入——任务通知（`<task-id>…</task-id><tool-use-id>…`）、
+/// 斜杠命令展开（`<command-name>/clear</command-name><command-message>…`）、各类
+/// hook 注入。这些行 isMeta 常常未标（实录截图两类形态），光靠 isMeta 筛不掉。
+///
+/// 判据：trim 后以 `<` 开头 → 不作摘要候选。会话名用途下尖括号开头的文本从不可读；
+/// 误判代价极小——跳过即继续扫后续行，全无可读行 → None → 前端回退「日期 · 分支」
+/// 的可辨识形式（功能点：实在取不到可读文本时给可辨识形式，不以原始标签示人）。
+fn is_readable_session_name(text: &str) -> bool {
+    !text.starts_with('<')
 }
 
 /// chars 边界安全截断（超长加 …）
@@ -1040,6 +1052,61 @@ mod list_tests {
         assert_eq!(s.chars().count(), 121, "120 chars + …");
         assert!(s.ends_with('…'));
         assert!(!s.contains("task-notification"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// R3 用户口径：会话名必须可理解——实录两类结构化包装行（未标 isMeta 的
+    /// task-id XML、斜杠命令展开）不得成为会话名，须跳到后续真实用户输入。
+    #[tokio::test]
+    async fn xml_wrapper_rows_are_skipped_for_readable_user_text() {
+        let (root, proj) = list_fixture("xmlwrap").await;
+        let task_xml = r#"{"type":"user","message":{"content":"<id>ad721106088d77a9b</task-id><tool-use-id>call_6759bef</tool-use-id>"}}"#;
+        let cmd_xml = r#"{"type":"user","message":{"content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}"#;
+        let real = r#"{"type":"user","message":{"content":"帮我修一下登录页的样式问题"}}"#;
+        let block_wrap = r#"{"type":"user","message":{"content":[{"type":"text","text":"<task-id>t-1</task-id>"},{"type":"text","text":"块数组里的真实输入"}]}}"#;
+        tokio::fs::write(
+            proj.join("wrap.jsonl"),
+            format!("{task_xml}\n{cmd_xml}\n{real}\n{block_wrap}"),
+        )
+        .await
+        .unwrap();
+        let list = list_project_sessions(&root, Path::new(PROJ_CWD))
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(
+            list[0].summary.as_deref(),
+            Some("帮我修一下登录页的样式问题"),
+            "包装行须跳过，取后续真实用户输入"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 全为包装行（无可读文本）→ summary None（前端回退「日期 · 分支」可辨识形式，
+    /// 不得以原始标签示人）；块数组内包装块被跳过后取到同行的可读块。
+    #[tokio::test]
+    async fn only_wrapper_rows_yield_none_summary() {
+        let (root, proj) = list_fixture("wraponly").await;
+        let task_xml = r#"{"type":"user","message":{"content":"<task-id>t-9</task-id>"}}"#;
+        let cmd_xml =
+            r#"{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}"#;
+        tokio::fs::write(proj.join("only.jsonl"), format!("{task_xml}\n{cmd_xml}"))
+            .await
+            .unwrap();
+        let blocks = r#"{"type":"user","message":{"content":[{"type":"text","text":"<task-id>x</task-id>"},{"type":"text","text":"同行可读块"}]}}"#;
+        tokio::fs::write(proj.join("blocks.jsonl"), blocks)
+            .await
+            .unwrap();
+        let list = list_project_sessions(&root, Path::new(PROJ_CWD))
+            .await
+            .unwrap();
+        let only = list.iter().find(|e| e.session_id == "only").unwrap();
+        assert_eq!(
+            only.summary, None,
+            "无可读文本 → None（前端回退可辨识形式）"
+        );
+        let blk = list.iter().find(|e| e.session_id == "blocks").unwrap();
+        assert_eq!(blk.summary.as_deref(), Some("同行可读块"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

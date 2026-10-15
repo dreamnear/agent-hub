@@ -100,6 +100,34 @@ describe('SessionHistoryDialog（agent-hub-session-history）', () => {
     expect(screen.getByText('3.0MB')).toBeTruthy();
   });
 
+  it('无摘要回退「日期 · 分支」可辨识形式（R3：不以原始标签/裸 id 示人）', async () => {
+    const api = mkApi(
+      vi.fn().mockResolvedValue([
+        entry({ summary: null, branch: 'feat/x', mtimeSecs: 1_791_500_000 }),
+      ]),
+    );
+    renderDialog(api);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    // 日期由本地时区渲染，断言语义形态（YYYY-MM-DD · 分支）而非具体日
+    expect(screen.getByText(/^\d{4}-\d{2}-\d{2} · feat\/x$/)).toBeTruthy();
+  });
+
+  it('无摘要且无分支回退纯日期', async () => {
+    const api = mkApi(
+      vi.fn().mockResolvedValue([entry({ summary: null, branch: null, mtimeSecs: 1_791_500_000 })]),
+    );
+    renderDialog(api);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    expect(screen.getByText(/^\d{4}-\d{2}-\d{2}$/)).toBeTruthy();
+  });
+
+  it('错误态不显示陈旧计数（reviewer MINOR 1）', async () => {
+    const api = mkApi(vi.fn().mockRejectedValue(new Error('目录不可读')));
+    renderDialog(api);
+    await waitFor(() => expect(screen.getByText(/目录不可读/)).toBeTruthy());
+    expect(screen.queryByText(/0 个会话/)).toBeNull();
+  });
+
   it('worktree 会话显示 cwd 尾段（与 agent cwd 不同才显示）', async () => {
     const api = mkApi(
       vi.fn().mockResolvedValue([entry({ cwd: '/repo/.worktree/dec-staging' })]),

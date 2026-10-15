@@ -39,6 +39,16 @@ function pathTail(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+/// 无摘要时的可辨识回退（R3 用户口径：实在取不到可读文本时给可辨识形式）：
+/// 「日期 · 分支」（无分支则纯日期）。不用 sessionId 前缀——不可辨识。
+function fallbackName(r: CliSessionEntry): string {
+  const d = new Date(r.mtimeSecs * 1000);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+  return r.branch ? `${date} · ${r.branch}` : date;
+}
+
 /// CLI 历史会话弹窗（agent-hub-session-history）：某 agent cwd 对应工程的
 /// `~/.claude/projects/<slug>/*.jsonl` 只读枚举 + `--bg --resume` 恢复。
 /// 与全局 HistoryDialog 并存不合并——那边是「hub 已知非活跃会话」（hub 注册表），
@@ -121,7 +131,11 @@ export default function SessionHistoryDialog({
         <div className="history-head">
           <h2 className="history-title">{t('sesshist.title')}</h2>
           <span className="history-sub">
-            {t('sesshist.subtitle')} · {t('history.count', { n: filtered.length })}
+            {t('sesshist.subtitle')}
+            {/* 计数仅取数成功后显示（reviewer MINOR 1）：错误/加载态挂 0 是陈旧值 */}
+            {!list.isLoading && !list.isError
+              ? ` · ${t('history.count', { n: filtered.length })}`
+              : ''}
           </span>
         </div>
         <input
@@ -152,6 +166,8 @@ export default function SessionHistoryDialog({
               const isCurrent = agent.sessionId === r.sessionId;
               // worktree 会话：转录 cwd 与工程 cwd 不同 → 显示尾段辨识名
               const wt = r.cwd && agent.cwd && r.cwd !== agent.cwd ? pathTail(r.cwd) : null;
+              // 名称：清洗后的可读摘要；无可读文本 → 「日期 · 分支」可辨识回退
+              const name = r.summary ?? fallbackName(r);
               return (
                 <li key={r.sessionId}>
                   <button
@@ -161,27 +177,37 @@ export default function SessionHistoryDialog({
                     onClick={() => void resume(r)}
                   >
                     <span className="sesshist-line1">
-                      <span className="sesshist-summary" title={r.summary ?? r.sessionId}>
-                        {r.summary ?? r.sessionId.slice(0, 12)}
+                      <span className="sesshist-summary" title={name}>
+                        {name}
                       </span>
                       <span className="sesshist-time">{relativeTime(r.mtimeSecs)}</span>
                     </span>
                     <span className="sesshist-line2">
-                      {r.branch ? <span className="sesshist-branch">{r.branch}</span> : null}
-                      <span className="sesshist-size">{fmtSize(r.sizeBytes)}</span>
-                      {wt ? <span className="sesshist-wt" title={r.cwd ?? ''}>{wt}</span> : null}
-                      {resuming === r.sessionId ? (
-                        <span className="sesshist-badge">{t('sesshist.resuming')}</span>
-                      ) : null}
-                      {isCurrent ? (
-                        <span className="sesshist-badge sesshist-badge--current">
-                          {t('sesshist.current')}
-                        </span>
-                      ) : running ? (
-                        <span className="sesshist-badge sesshist-badge--running">
-                          {t('sesshist.running')}
-                        </span>
-                      ) : null}
+                      {/* 左组：分支 · worktree 名（R3 用户口径：行内容左对齐） */}
+                      <span className="sesshist-l2-left">
+                        {r.branch ? <span className="sesshist-branch">{r.branch}</span> : null}
+                        {wt ? (
+                          <span className="sesshist-wt" title={r.cwd ?? ''}>
+                            {wt}
+                          </span>
+                        ) : null}
+                      </span>
+                      {/* 右组：状态徽标 + 体积（R3：大小向右对齐） */}
+                      <span className="sesshist-l2-right">
+                        {resuming === r.sessionId ? (
+                          <span className="sesshist-badge">{t('sesshist.resuming')}</span>
+                        ) : null}
+                        {isCurrent ? (
+                          <span className="sesshist-badge sesshist-badge--current">
+                            {t('sesshist.current')}
+                          </span>
+                        ) : running ? (
+                          <span className="sesshist-badge sesshist-badge--running">
+                            {t('sesshist.running')}
+                          </span>
+                        ) : null}
+                        <span className="sesshist-size">{fmtSize(r.sizeBytes)}</span>
+                      </span>
                     </span>
                   </button>
                 </li>

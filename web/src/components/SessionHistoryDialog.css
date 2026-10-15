@@ -34,14 +34,15 @@
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.2rem;
+  /* 行内容左对齐（R3 用户口径）；button 全局规则是居中，此处与各子元素显式覆盖 */
   text-align: left;
+  justify-content: flex-start;
   padding: 0.5rem 0.45rem;
   border: 0;
   border-radius: 8px;
   background: transparent;
   cursor: pointer;
-  justify-content: flex-start;
 }
 
 .sesshist-item:hover {
@@ -55,33 +56,59 @@
 
 .sesshist-line1 {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 0.75rem;
   min-width: 0;
+  text-align: left;
 }
 
+/* 名称：最多 2 行、超出省略号（R3 用户口径）；长串强制折行不撑破布局 */
 .sesshist-summary {
   flex: 1;
   min-width: 0;
   font-size: 0.8rem;
+  line-height: 1.35;
   color: var(--c-text);
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .sesshist-time {
   flex: none;
   font-size: 0.7rem;
   color: var(--c-sub);
+  text-align: right;
 }
 
+/* 次级行：左组（分支 · worktree）与右组（徽标 · 体积）两端对齐 */
 .sesshist-line2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+  text-align: left;
+}
+
+.sesshist-l2-left {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   min-width: 0;
-  flex-wrap: wrap;
+  flex: 1;
+}
+
+.sesshist-l2-right {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: none;
 }
 
 .sesshist-branch {
@@ -90,7 +117,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 40%;
+  max-width: 100%;
 }
 
 .sesshist-size {
@@ -111,7 +138,6 @@
 /* 运行中/当前会话徽标：文字态走既有语义 token（绿文字/默认徽标灰），两态对比达标 */
 .sesshist-badge {
   flex: none;
-  margin-left: auto;
   padding: 0 0.3rem;
   border-radius: 4px;
   font-size: 0.62rem;
@@ -129,8 +155,13 @@
   color: var(--c-text);
 }
 
+/* ≤375px：次级行允许换行（左右组各占一行时仍各自贴边） */
 @media (max-width: 375px) {
-  .sesshist-branch {
-    max-width: 100%;
+  .sesshist-line2 {
+    flex-wrap: wrap;
+  }
+
+  .sesshist-l2-right {
+    margin-left: auto;
   }
 }
