@@ -80,6 +80,10 @@ export default function AgentRow({
   // R4 自验修正：历史会话的数据源是 claude CLI 转录目录，仅 claude 行显示
   // （isClaude 判据含 pi 等其他驱动，点开必然 400——需求口径「claude agent 行」）
   const isClaudeDriver = agent.driver === 'claude';
+  // R4 追加（tester 观察 1 查证）：所有非 claude 驱动的 AgentCatalog::logs 均返回
+  // unsupported（pi 1078/opencode 401/dsh 863/omp 627/acp 584 各处）——Logs 项只有
+  // claude 行有意义，判据与「历史会话」同源收紧
+  const hasLogs = isClaudeDriver;
 
   const run = (action: SessionAction): void => {
     setMenuOpen(false);
@@ -118,9 +122,10 @@ export default function AgentRow({
     if (left + mw > window.innerWidth - 8) {
       left = Math.max(8, menuAnchor.btnRight - mw);
     }
-    // 贴视口底部 → 向上翻转：菜单底缘在按钮顶缘上方
+    // 贴视口底部 → 向上翻转：菜单底缘在按钮顶缘上方；翻转后仍越界（极端矮视口）
+    // → 贴视口下缘 8px 兜底，保证 bottom 恒不出视口（tester R4 观察项 2）
     if (top + mh > window.innerHeight - 8) {
-      top = Math.max(8, menuAnchor.btnBottom - mh - 4);
+      top = Math.max(8, Math.min(menuAnchor.btnBottom - mh - 4, window.innerHeight - mh - 8));
     }
     setMenuPos((cur) => (cur && cur.top === top && cur.left === left ? cur : { top, left }));
   }, [menuOpen, menuAnchor, menuPos]);
@@ -154,9 +159,10 @@ export default function AgentRow({
             <>
               <div className="agent-row-menu-backdrop" onClick={() => setMenuOpen(false)} />
               <div className="agent-row-menu" ref={menuRef} role="menu" style={menuPos ?? undefined}>
-                {/* 非危险操作：Logs（claude 专属）/ 历史会话（agent-hub-session-history，
-                    claude 专属）/ 工程便签（agent-hub-notes）/ 中断 */}
-                {isClaude ? (
+                {/* 非危险操作：Logs（claude 专属，其余驱动 logs 端点均 unsupported）/
+                    历史会话（agent-hub-session-history，claude 专属）/ 工程便签
+                    （agent-hub-notes）/ 中断 */}
+                {hasLogs ? (
                   <button type="button" role="menuitem" onClick={() => run('logs')}>
                     Logs
                   </button>

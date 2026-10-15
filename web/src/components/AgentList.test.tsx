@@ -296,6 +296,15 @@ describe('AgentList Sidebar-v2', () => {
     await waitFor(() => expect(onOpenNotes).toHaveBeenCalledWith(FIXTURE[1]));
   });
 
+  it('AgentRow ⋯ 菜单：pi 行不显示 Logs/历史会话（R4：两者均为 claude 专属，其余驱动点开必败）', () => {
+    const pi: AgentSummary = { ...mk('hub', 'Hub 助手', 'other'), driver: 'pi', kind: 'assistant' };
+    render(<AgentRow agent={pi} onSelect={vi.fn()} onAction={vi.fn()} />, { wrapper });
+    fireEvent.click(screen.getByRole('button', { name: /Hub 助手 更多操作/ }));
+    expect(screen.queryByRole('menuitem', { name: 'Logs' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: '历史会话' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: '工程便签' })).not.toBeNull();
+  });
+
   it('AgentRow ⋯ 菜单：interactive 会话隐藏中断/Stop/Respawn/删除，保留「从列表移除」（R8）+ IC 徽标', () => {
     const inter: AgentSummary = {
       ...mk('ai', '交互会话', 'working'),
