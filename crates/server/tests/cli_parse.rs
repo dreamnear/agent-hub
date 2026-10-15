@@ -71,3 +71,52 @@ async fn fake_cli_integration() {
     assert!(stop(&fake, "abc123").await.is_ok());
     assert!(remove(&fake, "abc123").await.is_ok());
 }
+
+/// agent-hub#10 端到端（函数级）：mock CLI 回放真实 `claude --bg` stdout 形态，
+/// start_bg 返回的 id 必须能直接驱动 logs/stop/rm——返回整行或返回名字时
+/// mock CLI 会非零退出（模拟真实下游「id 不可用」）。三形态逐条覆盖：
+/// 带名（#10 症状）/ 不带名 / resume（#11 路径不回归）。
+#[tokio::test]
+async fn bg_start_parses_usable_id_for_every_output_shape() {
+    let fake = fixture_path("fake-claude-bg.sh");
+    let cwd = std::env::temp_dir().join("agent-hub-cli-test-cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let req = |name: Option<&str>, resume: Option<&str>| StartReq {
+        prompt: "say ok".into(),
+        name: name.map(Into::into),
+        model: None,
+        effort: None,
+        resume: resume.map(Into::into),
+    };
+
+    // 用例非空证：污染 id（整行 / 名字）确实会被 mock 拒绝，红了才算数
+    assert!(logs(&fake, "backgrounded · 96bad8a7 · hub-test-x")
+        .await
+        .is_err());
+    assert!(logs(&fake, "hub-test-x").await.is_err());
+
+    // 带名（#10 症状形态）：`backgrounded · <id> · <name>`
+    let named = start_bg(&fake, &cwd, &req(Some("hub-test-bgid-probe"), None))
+        .await
+        .unwrap();
+    assert_eq!(named, "96bad8a7");
+    assert!(logs(&fake, &named).await.is_ok());
+    assert!(stop(&fake, &named).await.is_ok());
+    assert!(remove(&fake, &named).await.is_ok());
+
+    // 不带名：`backgrounded · <id>`
+    let plain = start_bg(&fake, &cwd, &req(None, None)).await.unwrap();
+    assert_eq!(plain, "96bad8a7");
+    assert!(logs(&fake, &plain).await.is_ok());
+
+    // resume（#11 路径）：note 首行 + backgrounded 行在后
+    let resumed = start_bg(
+        &fake,
+        &cwd,
+        &req(None, Some("15c9e382-1658-4703-bdcb-2d236739943f")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resumed, "e5b57ea3");
+    assert!(logs(&fake, &resumed).await.is_ok());
+}
