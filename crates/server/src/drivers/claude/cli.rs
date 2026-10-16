@@ -193,17 +193,54 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// 从 `claude --bg` stdout 首行提取任务 id：strip ANSI 后取最后一个非空 token，
-/// 全 hex 且 ≤16 位才认作 id；否则回退整行 trim（兼容旧 CLI 纯 id 输出与 fixture）。
+/// `claude --bg` 成功行的结构锚点（claude 2.1.300 实测，2026-10-15）。
+const BG_MARKER: &str = "backgrounded";
+
+/// 整行即单一 token（无分隔符）——旧 CLI 纯 id 行形态。
+fn is_single_token(line: &str) -> bool {
+    !line.contains([' ', '\t', '\u{b7}'])
+}
+
+/// 按 `·`/空白切 token，取**首个**短 hex id：id 恒紧跟 `backgrounded ·`，
+/// 名字/提示语即便含 hex 形 token 也在 id 之后，故首个命中即 id。
+fn first_hex_token(s: &str) -> Option<&str> {
+    s.split(['\u{b7}', ' ', '\t']).find(|t| is_hex_id(t))
+}
+
+/// 从 `claude --bg` stdout 首行提取任务 id（agent-hub#10 修复）。
+///
+/// 输出形态（claude 2.1.300 实测，2026-10-15 字节级）：
+/// - 带名：`backgrounded \xc2\xb7 <id> \xc2\xb7 <name>`（+ 4 行提示尾巴）
+/// - 不带名：`backgrounded \xc2\xb7 <id>`
+/// - legacy：整行即纯 id（旧 CLI / fixture）
+///
+/// **按结构锚定，禁位置切片**：旧实现取**末** token（`--name X` 时末 token 是
+/// 名字非 hex）→ 回退整行 → 含空格整行被当 id（下游 `/message` http 000）。
+/// 现按 `backgrounded` 标记锚定其后首个短 hex token；无标记行则在整行找首个
+/// 短 hex token；整行单一 token 原样返回（legacy 纯 id，任意字符集/长度）。
+///
+/// 取不到 id **明确失败**：返回空串 → `start_bg` bail 报错。绝不回退整行把
+/// 不可用 id 静默交给下游（#10 根因：坏 id 只会伪装成难查的下游错误）。
 pub fn parse_bg_id(line: &str) -> String {
     let clean = strip_ansi(line);
     let line = clean.trim();
-    if let Some(tok) = line.rsplit([' ', '\t', '·']).find(|t| !t.is_empty()) {
-        if tok.len() <= 16 && tok.chars().all(|c| c.is_ascii_hexdigit()) {
-            return tok.to_string();
-        }
+    if line.is_empty() {
+        return String::new();
     }
-    line.to_string()
+    // 锚点一：`backgrounded` 标记之后（当前 CLI 形态；标记后仍无短 hex = 格式
+    // 变更 → 明确失败，不做整行兜底）
+    if let Some(rest) = line.find(BG_MARKER).map(|p| &line[p + BG_MARKER.len()..]) {
+        return first_hex_token(rest).unwrap_or_default().to_string();
+    }
+    // 锚点二：无标记行的首个短 hex token
+    if let Some(tok) = first_hex_token(line) {
+        return tok.to_string();
+    }
+    // 兜底：整行即单一 token（旧 CLI 纯 id）→ 原样；多 token 却取不到 id → 失败
+    if is_single_token(line) {
+        return line.to_string();
+    }
+    String::new()
 }
 
 /// 短 hex id 判据（parse_bg_id 同口径）：非空、≤16 位、全 ASCII hex。
@@ -348,10 +385,99 @@ mod tests {
         assert_eq!(parse_bg_id("  abc123  "), "abc123");
     }
 
-    /// 非 hex 尾 token：回退整行 trim（不猜 id，保守兼容未知输出形态）。
+    /// agent-hub#10 主修复：`claude --bg --name X` 实测输出（claude 2.1.300，
+    /// 2026-10-15 实测字节 `backgrounded \xc2\xb7 <id> \xc2\xb7 <name>`）——
+    /// 末 token 是**名字**而非 hex，旧「取末 token，否则回退整行」逻辑把整行
+    /// 当 id（下游 /message 拿含空格 id，http 000）。
     #[test]
-    fn falls_back_to_whole_line_when_tail_not_hex() {
-        assert_eq!(parse_bg_id("job created: x9y"), "job created: x9y");
+    fn parses_id_from_named_backgrounded_line() {
+        assert_eq!(
+            parse_bg_id("backgrounded \u{b7} 96bad8a7 \u{b7} hub-test-fs-23837"),
+            "96bad8a7"
+        );
+        // 名字恰为 hex 形（旧逻辑取末 token 会直接返回名字本身）
+        assert_eq!(
+            parse_bg_id("backgrounded \u{b7} 0ad5b1ac \u{b7} dead"),
+            "0ad5b1ac"
+        );
+        assert_eq!(
+            parse_bg_id("backgrounded \u{b7} 0ad5b1ac \u{b7} 123"),
+            "0ad5b1ac"
+        );
+        // 数字开头 / 全数字名字（hexdigit 子集）
+        assert_eq!(
+            parse_bg_id("backgrounded \u{b7} 12ab34cd \u{b7} 42"),
+            "12ab34cd"
+        );
+    }
+
+    /// 结构锚定而非位置切片：ANSI 色码、额外 token、尾随提示语、顺序变化、
+    /// 无 `backgrounded` 标记的变体都只认「首个短 hex token」。
+    #[test]
+    fn anchors_on_structure_not_token_position() {
+        // 带名 + ANSI 色码（真机两特征叠加）
+        assert_eq!(
+            parse_bg_id(
+                "\x1b[36mbackgrounded\x1b[39m \u{b7} \x1b[36m92d38ecf\x1b[39m \u{b7} \x1b[2mhub-test-x\x1b[22m"
+            ),
+            "92d38ecf"
+        );
+        // 尾随 (idle — …) 提示语
+        assert_eq!(
+            parse_bg_id(
+                "backgrounded \u{b7} 96bad8a7 \u{b7} hub-test-x (idle \u{2014} send a prompt to start)"
+            ),
+            "96bad8a7"
+        );
+        // 额外 token 混入（提示词回声等）
+        assert_eq!(
+            parse_bg_id("backgrounded \u{b7} 96bad8a7 \u{b7} hub-test-x \u{b7} say ok"),
+            "96bad8a7"
+        );
+        // 无标记变体：id 位置变化仍按 hex 判据命中
+        assert_eq!(parse_bg_id("note: started as abc12345"), "abc12345");
+        assert_eq!(parse_bg_id("backgrounded \u{b7} ab12cd34"), "ab12cd34");
+    }
+
+    /// 解析失败必须明确（空串 → `start_bg` bail 报错），禁回退整行——含空格的
+    /// 整行是不可用 id，静默交给下游只会变成 http 000 一类难查错误（#10 根因）。
+    /// 例外：整行即单一 token 的旧 CLI 纯 id 形态原样保留（任意字符集/长度）。
+    #[test]
+    fn refuses_unusable_id_instead_of_falling_back_to_whole_line() {
+        assert_eq!(parse_bg_id("job created: x9y"), "");
+        assert_eq!(
+            parse_bg_id("backgrounded \u{b7} not-hex \u{b7} also-not"),
+            ""
+        );
+        assert_eq!(parse_bg_id("backgrounded"), "");
+        assert_eq!(parse_bg_id(""), "");
+        assert_eq!(parse_bg_id("   "), "");
+        // 单 token 行：整行即 id（旧 CLI 形态 / 非 hex 长 id）
+        assert_eq!(parse_bg_id("job-9f8e7d6c5b4a3928"), "job-9f8e7d6c5b4a3928");
+        assert_eq!(
+            parse_bg_id("  job-9f8e7d6c5b4a3928  "),
+            "job-9f8e7d6c5b4a3928"
+        );
+    }
+
+    /// #10 端到端（函数级）：真实 `claude --bg --name X` 全量 stdout（claude
+    /// 2.1.300，2026-10-15 实测 5 行）→ `start_bg` 所用的 extract_bg_id 返回
+    /// 短 hex id；不带名形态同批实测。（带名/不带名的 id 均须可直接用于
+    /// logs/attach/stop/rm。）
+    #[test]
+    fn extract_id_from_real_named_start_output() {
+        let out = concat!(
+            "backgrounded \u{b7} 96bad8a7 \u{b7} hub-test-fs-23837\n",
+            "  claude agents             list sessions\n",
+            "  claude attach 96bad8a7    open in this terminal\n",
+            "  claude logs 96bad8a7      show recent output\n",
+            "  claude stop 96bad8a7      stop this session\n",
+        );
+        assert_eq!(extract_bg_id(out), "96bad8a7");
+        assert_eq!(
+            extract_bg_id("backgrounded \u{b7} 96bad8a7\n  claude agents ...\n"),
+            "96bad8a7"
+        );
     }
 
     /// R7 会话粘连：interactive 合成 id 稳定且经 validate_id 白名单（字母数字-_）。
