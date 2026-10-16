@@ -4,6 +4,26 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.0] - 2026-10-16
+
+### Added — 工程历史会话浏览与恢复（#11）
+
+- claude agent 行的 `⋯` 菜单新增「历史会话」：弹窗列出该 agent 工程的 **CLI 会话全量**（数据源 `~/.claude/projects/<slug>/*.jsonl`），行内相对时间 · 分支 · 体积 · worktree 名 · 会话名，口径对齐 CLI 原生 Resume 选择器；输入即过滤
+- **会话名三级名源**（CLI 原生 customTitle > 转录 summary 行 > 首条可读用户文本）+ 分块扩展读（256KB 块、上限 2MB、行边界切分保多字节安全、命中早停）——XML/命令包装行过滤，附件巨行不再挤掉可读名（实测无名字条目 50% → 0）
+- **恢复**：选中即 `claude --bg --resume <id>`（current/active 复用/resumed 三态 + spawn 前重复保护），消息视图呈现历史转录、可继续发送
+- 排版与可用性：列表左对齐（几何断言 Δ≤0.01px）、名称最多 2 行省略、体积右对齐；⋯ 菜单 **Portal 到 body + 实测翻转放置**（任何视口/行位置完整可见，矮视口贴底兜底）；菜单项按驱动收紧（pi 等非 claude 行不再显示 Logs/历史会话死入口）
+
+### Fixed — 带名会话 id 解析（#10）
+
+- `parse_bg_id` 重写为结构锚定（`backgrounded` 标记后首个短 hex → 首个短 hex → 单 token 原样），**带名新建会话的 id 不再被解析成整行**；解析失败显式报错，不再静默返回不可用 id
+- `extract_bg_id` 兜底分支加固：输出缺 `backgrounded` 字面不再整行变 id，hex 形名字（`dead`/`123`）不再被当 id
+- 如实注记：主路径症状自 #11 起已被 `extract_bg_id` 遮蔽，本修消除缺陷本体与剩余可达路径并显式化失败
+
+### 工单索引
+
+- 本批：#11（历史会话浏览与恢复）/ #10（带名会话 id 解析）
+- backlog：#15（会话历史扩展到 ACP 驱动，已确认范围 claude+omp）/ #5（sidecar 假失败）/ #6（MCP prompts）/ #7（nodelink 透传）/ #8（缓存加固）
+
 ## [0.3.0] - 2026-10-15
 
 本轮为 issue 驱动的三单批次（#1 B 阶段 / #2 / #3），一次部署上线。
