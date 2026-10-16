@@ -83,10 +83,13 @@ export default function AgentRow({
   // claude 行有意义
   const hasLogs = isClaudeDriver;
   // 历史会话入口（agent-hub-acp-session-history，用户拍板开放范围 = claude + omp）：
-  // claude → CLI 转录目录；omp → sessions 目录 + session/load 恢复。其余 ACP agent
-  // 仅有 hub 登记面（无名称/时间，元数据薄弱）本轮不开放——不出现点了信息残缺
-  // 或必失败的入口（isClaude 判据含 pi 等其他驱动，点开必然 400）
-  const hasSessions = isClaudeDriver || agent.driver === 'omp';
+  // claude → CLI 转录目录；omp → sessions 目录 + session/load 恢复。omp 生态有两种
+  // 行型——omp 文件扫描行（driver='omp'）与 hub-spawn 的 ACP 行（driver='acp'、
+  // name=acp agent 名）：注册表活会话被 omp 清单排除，常规路径「hub 开 omp 会话 →
+  // 恢复历史」入口落在 ACP 行上，须同放（R1 tester FAIL-1）。其余 ACP agent
+  // （元数据薄弱）不开放——不出现点了信息残缺或必失败的入口
+  const isOmpAcp = agent.driver === 'acp' && agent.name === 'omp';
+  const hasSessions = isClaudeDriver || agent.driver === 'omp' || isOmpAcp;
 
   const run = (action: SessionAction): void => {
     setMenuOpen(false);
@@ -163,7 +166,7 @@ export default function AgentRow({
               <div className="agent-row-menu-backdrop" onClick={() => setMenuOpen(false)} />
               <div className="agent-row-menu" ref={menuRef} role="menu" style={menuPos ?? undefined}>
                 {/* 非危险操作：Logs（claude 专属，其余驱动 logs 端点均 unsupported）/
-                    历史会话（agent-hub-acp-session-history，claude + omp 开放）/
+                    历史会话（agent-hub-acp-session-history，claude + omp 生态两行型开放）/
                     工程便签（agent-hub-notes）/ 中断 */}
                 {hasLogs ? (
                   <button type="button" role="menuitem" onClick={() => run('logs')}>

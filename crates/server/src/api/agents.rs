@@ -177,9 +177,30 @@ async fn respawn_agent(
 // （session 行 cwd 过滤）。两源同为非驱动抽象面的本机文件事实源，
 // ignore_agent（R8）同款 api 层特判先例 ——
 
+/// omp 生态行解析（R1 tester FAIL-1）：omp 会话在侧栏有两种行型——omp 文件扫描行
+/// （omp 驱动清单，driver=omp）与 hub-spawn 的 ACP 行（driver=acp、name=acp agent
+/// 名）。注册表活会话被 omp 清单排除（防双条，omp/mod.rs list），故 omp.get 对
+/// ACP 行落空 → 回退 ACP 注册表取 cwd（同 id 磁盘会话文件，scan 可见）。
+/// 返回 (cwd, 行自身 session_id)；两处都不命中 → None（端点 404）。
+async fn omp_target(
+    state: &SharedState,
+    id: &str,
+) -> Result<Option<(Option<String>, Option<String>)>, AppError> {
+    if let Some(a) = crate::drivers::AgentCatalog::get(&state.omp, id)
+        .await
+        .map_err(app_err)?
+    {
+        return Ok(Some((a.cwd, a.session_id)));
+    }
+    if let Some(s) = state.acp_registry.get(id) {
+        return Ok(Some((Some(s.cwd), Some(s.id))));
+    }
+    Ok(None)
+}
+
 /// 工程历史会话枚举：claude → 该 agent cwd 对应 `<claude_root>/projects/<slug>/`
 /// 只读列表（编码复用 session_dir，防穿越）；omp → sessions 目录扫描
-/// （`OmpDriver::list_cwd_sessions`，只读）。cwd 从 driver.get 权威取（不信前端）；
+/// （`OmpDriver::list_cwd_sessions`，只读）。cwd 从服务端权威取（不信前端）；
 /// agent 无 cwd → 空集（前端空态）。
 async fn cli_sessions(
     State(state): State<SharedState>,
@@ -211,14 +232,21 @@ async fn cli_sessions(
             Ok(Json(list))
         }
         "omp" => {
-            let agent = crate::drivers::AgentCatalog::get(&state.omp, &id)
-                .await
-                .map_err(app_err)?
-                .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
-            let Some(cwd) = agent.cwd else {
+            let Some((cwd, _sid)) = omp_target(&state, &id).await? else {
+                return Err(AppError::not_found(format!("agent {id} 不存在")));
+            };
+            let Some(cwd) = cwd else {
                 return Ok(Json(Vec::new()));
             };
-            Ok(Json(state.omp.list_cwd_sessions(&cwd)))
+            // FAIL-2 对齐 claude 语义：NotFound = omp 尚无会话（合法空集），
+            // 其余 IO 错误原样上抛 → 前端错误态 + 重试可达
+            let list = state.omp.list_cwd_sessions(&cwd);
+            let list = match list {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(anyhow::Error::new(e).into()),
+            };
+            Ok(Json(list))
         }
         _ => Err(AppError::bad("cli-sessions 仅支持 claude/omp 驱动")),
     }
@@ -291,11 +319,10 @@ async fn resume_session(
             Ok(Json(json!({ "status": "resumed", "id": new_id })))
         }
         "omp" => {
-            let agent = crate::drivers::AgentCatalog::get(&state.omp, &id)
-                .await
-                .map_err(app_err)?
-                .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
-            if agent.session_id.as_deref() == Some(body.session_id.as_str()) {
+            let Some((cwd, row_sid)) = omp_target(&state, &id).await? else {
+                return Err(AppError::not_found(format!("agent {id} 不存在")));
+            };
+            if row_sid.as_deref() == Some(body.session_id.as_str()) {
                 return Ok(Json(json!({ "status": "current" })));
             }
             // 重复保护：ACP 注册表活会话（此前恢复过 / hub-spawn）复用不重 spawn。
@@ -307,12 +334,17 @@ async fn resume_session(
             }) {
                 return Ok(Json(json!({ "status": "active", "agent": existing })));
             }
-            let Some(cwd) = agent.cwd else {
+            let Some(cwd) = cwd else {
                 return Err(AppError::bad("agent 无 cwd，无法定位恢复目标工程"));
             };
             validate_cwd(&cwd).await?;
-            // 文件不存在/加载失败在此上抛为明确错误（驱动侧不降级）
-            state.omp.resume_session(&body.session_id).await?;
+            // 文件不存在/加载失败在此上抛为明确错误（驱动侧不降级）；
+            // map_err(app_err)：域错误走 400（R1 tester 备注——裸 ? 经 anyhow Into 落 500）
+            state
+                .omp
+                .resume_session(&body.session_id)
+                .await
+                .map_err(app_err)?;
             Ok(Json(json!({ "status": "resumed", "id": body.session_id })))
         }
         _ => Err(AppError::bad("resume-session 仅支持 claude/omp 驱动")),

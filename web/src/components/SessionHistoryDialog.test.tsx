@@ -267,3 +267,34 @@ describe('SessionHistoryDialog · omp 驱动（agent-hub-acp-session-history）'
     expect(screen.queryByText('proj')).toBeNull();
   });
 });
+
+describe('SessionHistoryDialog · omp ACP 行型（R1 tester FAIL-1 回归）', () => {
+  it('hub-spawn 的 ACP 行（driver=acp+name=omp）：取数按 omp 驱动寻址，恢复快照保持 acp', async () => {
+    const acpOmp = mkAgent({ driver: 'acp', name: 'omp', id: 'fake-session-1', sessionId: 'fake-session-1' });
+    const cliSessions = vi.fn().mockResolvedValue([
+      entry({ sessionId: 'omp-sess-2', branch: null, summary: '早期会话' }),
+    ]);
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'resumed', id: 'omp-sess-2' });
+    const api = mkApi(cliSessions, resumeSession);
+    const onSelect = vi.fn();
+    renderDialog(api, onSelect, vi.fn(), [], acpOmp);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    // 取数：按 'omp' 而非 'acp' 寻址（按原样会打 /api/agents/acp/… → 400）
+    expect(cliSessions).toHaveBeenCalledWith('fake-session-1', 'omp');
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'omp-sess-2', sessionId: 'omp-sess-2', driver: 'acp' }),
+    );
+    expect(resumeSession).toHaveBeenCalledWith('fake-session-1', 'omp-sess-2', 'omp');
+  });
+
+  it('非 omp 的 ACP 行（name=other-agent）不换寻址驱动', async () => {
+    const acpOther = mkAgent({ driver: 'acp', name: 'other-agent', id: 'acp-x' });
+    const cliSessions = vi.fn().mockResolvedValue([]);
+    const api = mkApi(cliSessions);
+    renderDialog(api, vi.fn(), vi.fn(), [], acpOther);
+    await waitFor(() => expect(screen.getByText('该工程暂无历史会话')).toBeTruthy());
+    expect(cliSessions).toHaveBeenCalledWith('acp-x', 'acp');
+  });
+});

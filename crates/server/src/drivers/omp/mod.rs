@@ -109,7 +109,8 @@ impl OmpDriver {
         }
     }
 
-    /// 目录扫描（TTL 缓存；单文件解析失败跳过）。
+    /// 目录扫描（TTL 缓存；单文件解析失败跳过）。侧栏口径：源不可读降级空集
+    /// （R1 tester FAIL-2：错误语义只上历史枚举那条路，侧栏不因权限破损 500）。
     fn scan(&self) -> Vec<FileSession> {
         {
             let cache = self.scan.lock().expect("omp scan lock");
@@ -119,16 +120,22 @@ impl OmpDriver {
                 }
             }
         }
-        let sessions = self.scan_uncached();
+        let sessions = self.scan_checked().unwrap_or_default();
         *self.scan.lock().expect("omp scan lock") =
             Some((std::time::Instant::now(), sessions.clone()));
         sessions
     }
 
-    fn scan_uncached(&self) -> Vec<FileSession> {
+    /// 扫描（错误传播版，R1 tester FAIL-2）：sessions_dir 根不可读（非 NotFound）
+    /// → Err 上抛（历史枚举端点转错误响应 → 前端错误态 + 重试，对齐 claude AC8
+    /// 先例）；NotFound = omp 尚无会话（合法空集）。子目录/单文件失败仍跳过
+    /// （容错纪律：单坏条目不拖垮整表；根可读时个别子目录破损不扩大失败面）。
+    fn scan_checked(&self) -> std::io::Result<Vec<FileSession>> {
         let mut out = Vec::new();
-        let Ok(slugs) = std::fs::read_dir(&self.sessions_dir) else {
-            return out;
+        let slugs = match std::fs::read_dir(&self.sessions_dir) {
+            Ok(slugs) => slugs,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+            Err(e) => return Err(e),
         };
         for slug in slugs.flatten() {
             let Ok(files) = std::fs::read_dir(slug.path()) else {
@@ -145,7 +152,7 @@ impl OmpDriver {
             }
         }
         out.sort_by_key(|s| std::cmp::Reverse(s.modified));
-        out
+        Ok(out)
     }
 
     fn session_meta(&self, id: &str) -> Option<FileSession> {
@@ -153,18 +160,19 @@ impl OmpDriver {
     }
 
     /// 某 cwd 的历史会话枚举（agent-hub-acp-session-history，历史弹窗数据源）：
-    /// scan() 全量扫 → 按 session 行 cwd 精确过滤（cwd 字符串与 AgentSummary.cwd
-    /// 同源，不做 realpath 归一——两口径都出自 omp 写盘的 session 行）。
-    /// 条目形状复用 claude::session::SessionListEntry（omp 已有 claude 类型复用
-    /// 先例）：branch 恒 None（omp 转录无分支字段）、cwd 回填会话行值；名走
-    /// title → 首条可读用户文本（功能点 1），全无 → None（前端退化「日期」）；
-    /// 时间取 session 行 timestamp、退化文件 mtime（验收 2）。mtime 倒序。
+    /// 全量扫（每次现扫不走 TTL——弹窗按需开，数据断言要求与盘上文件一致）
+    /// → 按 session 行 cwd 精确过滤（cwd 字符串与 AgentSummary.cwd 同源，不做
+    /// realpath 归一——两口径都出自 omp 写盘的 session 行）。条目形状复用
+    /// claude::session::SessionListEntry（omp 已有 claude 类型复用先例）：branch
+    /// 恒 None（omp 转录无分支字段）、cwd 回填会话行值；名走 title → 首条可读
+    /// 用户文本（功能点 1），全无 → None（前端退化「日期」）；时间取 session 行
+    /// timestamp、退化文件 mtime（验收 2）。mtime 倒序。源不可读 → Err（FAIL-2）。
     pub fn list_cwd_sessions(
         &self,
         cwd: &str,
-    ) -> Vec<crate::drivers::claude::session::SessionListEntry> {
+    ) -> std::io::Result<Vec<crate::drivers::claude::session::SessionListEntry>> {
         let mut out: Vec<_> = self
-            .scan()
+            .scan_checked()?
             .into_iter()
             .filter(|s| s.cwd == cwd)
             .map(|s| {
@@ -189,7 +197,7 @@ impl OmpDriver {
             })
             .collect();
         out.sort_by_key(|e| std::cmp::Reverse(e.mtime_secs));
-        out
+        Ok(out)
     }
 
     /// 历史会话恢复（agent-hub-acp-session-history）：ACP spawn + session/load
@@ -1157,7 +1165,7 @@ mod tests {
                 broadcast::channel(8).0,
             )
         };
-        let list = d.list_cwd_sessions("/tmp");
+        let list = d.list_cwd_sessions("/tmp").unwrap();
         assert_eq!(list.len(), 2, "只含 cwd 匹配的会话");
         assert_eq!(list[0].session_id, s2, "session 行 timestamp 倒序");
         assert_eq!(
@@ -1176,7 +1184,7 @@ mod tests {
         assert_eq!(list[0].branch, None, "omp 转录无分支字段");
         assert_eq!(list[0].cwd.as_deref(), Some("/tmp"));
         assert_eq!(list[1].session_id, s1);
-        assert!(d.list_cwd_sessions("/no/such/cwd").is_empty());
+        assert!(d.list_cwd_sessions("/no/such/cwd").unwrap().is_empty());
     }
 
     /// 名退化链：title 空（overlay 形态）→ 首条可读用户文本；全无 → None
@@ -1204,13 +1212,49 @@ mod tests {
                 broadcast::channel(8).0,
             )
         };
-        let list = d.list_cwd_sessions("/tmp");
+        let list = d.list_cwd_sessions("/tmp").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(
             list[0].summary.as_deref(),
             Some("首条用户输入"),
             "空 title 退化首条可读用户文本"
         );
+    }
+
+    /// 源不可读（R1 tester FAIL-2）：sessions_dir 权限拒绝 → Err 上抛（端点转
+    /// 错误响应，前端错误态 + 重试可达），不得吞成空集；根缺失仍为合法空集。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_cwd_sessions_propagates_unreadable_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let d = {
+            let registry = Arc::new(AcpRegistry::new());
+            let router = Arc::new(AcpSendRouter::new(
+                registry.clone(),
+                broadcast::channel(8).0,
+                Arc::new(RwLock::new(HashMap::new())),
+            ));
+            OmpDriver::new(
+                dir.path().to_path_buf(),
+                Arc::new(AcpDriver {
+                    agents: Arc::new(std::sync::RwLock::new(Vec::new())),
+                }),
+                router,
+                registry,
+                "omp".into(),
+                Arc::new(RwLock::new(HashMap::new())),
+                broadcast::channel(8).0,
+            )
+        };
+        // 根目录不存在 = omp 尚无会话（合法空集）
+        assert!(d.list_cwd_sessions("/tmp").unwrap().is_empty());
+        // 权限拒绝 → Err
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let res = d.list_cwd_sessions("/tmp");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = res.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     /// 恢复链：resume → ACP spawn + session/load → 注册表持有 + 历史重放入 feed

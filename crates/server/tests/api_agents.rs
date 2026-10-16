@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -330,7 +332,8 @@ async fn omp_resume_session_loads_and_reuses_active() {
     assert_eq!(body["agent"]["id"], "omp-sess-2");
 }
 
-/// omp 恢复失败态（功能点 2「不静默」）：会话不存在 → 4xx/5xx 明确错误，不静默 200。
+/// omp 恢复失败态（功能点 2「不静默」）：会话不存在 → 400 明确错误
+/// （R1 tester 备注：域错误语义 4xx，map_err(app_err) 而非裸 ? 的 500）。
 #[tokio::test]
 async fn omp_resume_session_missing_is_explicit_error() {
     let dir = tempfile::tempdir().unwrap();
@@ -348,10 +351,7 @@ async fn omp_resume_session_missing_is_explicit_error() {
         Some(json!({ "sessionId": "no-such-sess" })),
     )
     .await;
-    assert!(
-        status.is_client_error() || status.is_server_error(),
-        "明确错误而非静默成功: {status}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "域错误走 400 而非 500");
 }
 
 /// omp 恢复白名单：路径分量形态 sessionId → 400（防穿越复用 claude 同款纪律）。
@@ -373,4 +373,80 @@ async fn omp_resume_session_bad_id_is_400() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// FAIL-1 回归：hub-spawn 的 omp 会话是 ACP 行（driver=acp、name=omp，注册表活
+/// 会话被 omp 清单排除）——omp 端点须从 ACP 注册表回退解析 cwd，该行型的
+/// 列表/恢复才可达（前端按 'omp' 驱动寻址）。
+#[tokio::test]
+async fn omp_endpoints_resolve_via_acp_registry_row() {
+    let dir = tempfile::tempdir().unwrap();
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-2",
+        dir.path(),
+        "乙",
+    );
+    let app = omp_test_app(&dir);
+    // hub 开 omp 会话（fake loadable agent，session id = fake-session-1）
+    let (status, created) = req(
+        app.clone(),
+        "POST",
+        "/api/acp/sessions",
+        Some(json!({ "agent": "omp", "cwd": dir.path().display().to_string() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "建会话应成功: {created}");
+    let sid = created["sessionId"].as_str().unwrap().to_string();
+    // 列表：ACP 行 id 走 omp 端点（omp.get 排除活会话 → 注册表回退 cwd）
+    let (status, body) = req(
+        app.clone(),
+        "GET",
+        &format!("/api/agents/omp/{sid}/cli-sessions"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "ACP 行 omp 列表应可达");
+    let rows = body.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "条目 = 该 cwd 会话文件（不含 ACP 行自身）");
+    assert_eq!(rows[0]["sessionId"], "omp-sess-2");
+    // 恢复：恢复自身 → current；恢复文件会话 → resumed
+    let (status, body) = req(
+        app.clone(),
+        "POST",
+        &format!("/api/agents/omp/{sid}/resume-session"),
+        Some(json!({ "sessionId": sid })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "current", "恢复行自身会话 = current");
+    let (status, body) = req(
+        app,
+        "POST",
+        &format!("/api/agents/omp/{sid}/resume-session"),
+        Some(json!({ "sessionId": "omp-sess-2" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "resumed");
+    assert_eq!(body["id"], "omp-sess-2");
+}
+
+/// FAIL-2 回归：omp 源不可读（权限拒绝）→ 非 2xx 错误响应（前端错误态 + 重试
+/// 可达），不得吞成空集 200；根缺失仍为 200 空集。
+#[tokio::test]
+async fn omp_cli_sessions_unreadable_source_is_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let omp_dir = dir.path().join("omp-sessions");
+    std::fs::create_dir_all(&omp_dir).unwrap();
+    let app = omp_test_app(&dir);
+    // 先造一个 omp 行（文件在 omp_dir 下才能寻址；随后把 omp_dir 整体锁死）
+    write_omp_session(&omp_dir, "omp-sess-1", dir.path(), "甲");
+    std::fs::set_permissions(&omp_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (status, _) = req(app, "GET", "/api/agents/omp/omp-sess-1/cli-sessions", None).await;
+    std::fs::set_permissions(&omp_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        status.is_server_error() || status.is_client_error(),
+        "源不可读须报错而非空集: {status}"
+    );
 }
