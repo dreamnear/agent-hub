@@ -232,7 +232,7 @@ export const zh: Record<string, string> = {
 
   // CLI 历史会话弹窗（agent-hub-session-history）
   'sesshist.title': 'CLI 历史会话',
-  'sesshist.subtitle': '该工程的 claude 会话 · 最近优先',
+  'sesshist.subtitle': '该工程的历史会话 · 最近优先',
   'sesshist.search': '输入即过滤（摘要 / 分支 / 会话 id）',
   'sesshist.searchLabel': '过滤历史会话',
   'sesshist.empty': '该工程暂无历史会话',

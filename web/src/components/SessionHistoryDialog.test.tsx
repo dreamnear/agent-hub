@@ -229,3 +229,41 @@ describe('SessionHistoryDialog（agent-hub-session-history）', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe('SessionHistoryDialog · omp 驱动（agent-hub-acp-session-history）', () => {
+  it('omp 恢复（resumed）：快照 driver 切 acp（会话归 acp 显示，消息/发送路由 ACP 端点）', async () => {
+    const omp = mkAgent({ driver: 'omp', id: 'omp-sess-1', sessionId: 'omp-sess-1' });
+    const resumeSession = vi
+      .fn()
+      .mockResolvedValue({ status: 'resumed', id: 'omp-sess-2' });
+    const api = mkApi(vi.fn().mockResolvedValue([entry({ sessionId: 'omp-sess-2', branch: null })]), resumeSession);
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    renderDialog(api, onSelect, onClose, [], omp);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'omp-sess-2', sessionId: 'omp-sess-2', driver: 'acp' }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // 端点按 omp 驱动寻址
+    expect(resumeSession).toHaveBeenCalledWith('omp-sess-1', 'omp-sess-2', 'omp');
+  });
+
+  it('omp 行内信息：无分支/worktree 字段如实留空，title 摘要与体积照常渲染', async () => {
+    const omp = mkAgent({ driver: 'omp', id: 'omp-sess-1', sessionId: 'omp-sess-1' });
+    const api = mkApi(
+      vi.fn().mockResolvedValue([
+        entry({ sessionId: 'omp-sess-2', branch: null, cwd: '/repo/proj', summary: '合成会话标题' }),
+      ]),
+    );
+    renderDialog(api, vi.fn(), vi.fn(), [], omp);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    expect(screen.getByText('合成会话标题')).toBeTruthy();
+    expect(screen.getByText('2KB')).toBeTruthy();
+    // 同 cwd 会话不显示 worktree 尾段、无分支 chip
+    expect(screen.queryByText('main')).toBeNull();
+    expect(screen.queryByText('proj')).toBeNull();
+  });
+});

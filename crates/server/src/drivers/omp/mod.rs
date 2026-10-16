@@ -59,6 +59,11 @@ struct FileSession {
     modified: SystemTime,
     /// 首条用户消息文本（标题回退 + 接管前预览）
     first_user: Option<String>,
+    /// session 行 timestamp（秒级 epoch；历史会话列表的展示时间口径——比 mtime
+    /// 更贴近「会话开始时刻」，解析失败退化为文件 mtime）
+    ts_secs: Option<i64>,
+    /// 文件字节体积（历史会话行内体积列）
+    size: u64,
 }
 
 /// 扫描缓存（TTL 内复用；INSTANT+清单 二元组）
@@ -145,6 +150,94 @@ impl OmpDriver {
 
     fn session_meta(&self, id: &str) -> Option<FileSession> {
         self.scan().into_iter().find(|s| s.id == id)
+    }
+
+    /// 某 cwd 的历史会话枚举（agent-hub-acp-session-history，历史弹窗数据源）：
+    /// scan() 全量扫 → 按 session 行 cwd 精确过滤（cwd 字符串与 AgentSummary.cwd
+    /// 同源，不做 realpath 归一——两口径都出自 omp 写盘的 session 行）。
+    /// 条目形状复用 claude::session::SessionListEntry（omp 已有 claude 类型复用
+    /// 先例）：branch 恒 None（omp 转录无分支字段）、cwd 回填会话行值；名走
+    /// title → 首条可读用户文本（功能点 1），全无 → None（前端退化「日期」）；
+    /// 时间取 session 行 timestamp、退化文件 mtime（验收 2）。mtime 倒序。
+    pub fn list_cwd_sessions(
+        &self,
+        cwd: &str,
+    ) -> Vec<crate::drivers::claude::session::SessionListEntry> {
+        let mut out: Vec<_> = self
+            .scan()
+            .into_iter()
+            .filter(|s| s.cwd == cwd)
+            .map(|s| {
+                let mtime_secs = s.ts_secs.unwrap_or_else(|| {
+                    s.modified
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0)
+                });
+                crate::drivers::claude::session::SessionListEntry {
+                    session_id: s.id,
+                    mtime_secs,
+                    size_bytes: s.size,
+                    branch: None,
+                    cwd: (!s.cwd.is_empty()).then_some(s.cwd.clone()),
+                    summary: s.title.or_else(|| {
+                        s.first_user
+                            .as_ref()
+                            .map(|t| truncate_chars(t, SUMMARY_MAX_CHARS))
+                    }),
+                }
+            })
+            .collect();
+        out.sort_by_key(|e| std::cmp::Reverse(e.mtime_secs));
+        out
+    }
+
+    /// 历史会话恢复（agent-hub-acp-session-history）：ACP spawn + session/load
+    /// （复用既有原语，不改协议）→ 注册表装配 + inbound 泵 + Tick + 持久化
+    /// （重启可恢复，与 acp create_session 同口径）。装配逻辑对齐 takeover_send
+    /// 正路分支；**不降级**——恢复语义必须忠实呈现历史，session 不存在/加载失败
+    /// 一律上抛明确错误（需求功能点 2「不静默」；区别于 takeover_send 的
+    /// 「降级 spawn 新会话」——那条链用户已预期发新消息）。
+    pub async fn resume_session(&self, session_id: &str) -> Result<()> {
+        // id 白名单（防路径分量；房间键/注册表键同用此 id）
+        if session_id.is_empty()
+            || session_id.contains('/')
+            || session_id.contains('\\')
+            || session_id.contains("..")
+        {
+            anyhow::bail!("omp 会话 id 非法: {session_id}");
+        }
+        let meta = self
+            .session_meta(session_id)
+            .ok_or_else(|| anyhow::anyhow!("omp 会话文件不存在: {session_id}"))?;
+        // 房间先行（entry 保底不覆盖：接管链可能已建房间）
+        {
+            let mut rooms = self.rooms.write().expect("chat_rooms lock");
+            rooms
+                .entry(session_id.to_string())
+                .or_insert_with(|| broadcast::channel(64).0);
+        }
+        let (session, inbound_rx) = self
+            .acp
+            .resume_session(
+                &self.acp_agent,
+                Path::new(&meta.cwd),
+                session_id,
+                self.rooms.clone(),
+            )
+            .await?;
+        self.registry.insert(session.clone());
+        crate::drivers::acp::dispatch::spawn_inbound_pump(
+            session.id.clone(),
+            session.conn.clone(),
+            inbound_rx,
+            self.registry.clone(),
+            session.feed.clone(),
+            self.events_tx.clone(),
+        );
+        self.registry.persist_async();
+        let _ = self.events_tx.send(HubEvent::Tick);
+        Ok(())
     }
 
     /// 接管（阶段 A 核心）：文件会话 → ACP spawn + session/load → 注册表装配
@@ -263,7 +356,7 @@ impl OmpDriver {
     }
 }
 
-/// 单文件头解析：session 行（id/cwd）+ title slot（非空标题）。
+/// 单文件头解析：session 行（id/cwd/timestamp）+ title slot（非空标题）。
 /// 解析失败/无 session 行 → None（容错跳过）。
 fn parse_session_file(path: &Path) -> Option<FileSession> {
     let file = std::fs::File::open(path).ok()?;
@@ -277,6 +370,7 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
     let mut cwd = None;
     let mut title = None;
     let mut first_user = None;
+    let mut ts_secs = None;
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue; // 坏行/半行（尾部截断）跳过
@@ -285,6 +379,10 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
             Some("session") => {
                 id = v.get("id").and_then(|x| x.as_str()).map(str::to_string);
                 cwd = v.get("cwd").and_then(|x| x.as_str()).map(str::to_string);
+                ts_secs = v
+                    .get("timestamp")
+                    .and_then(|x| x.as_str())
+                    .and_then(parse_rfc3339_secs);
             }
             Some("title") => {
                 // title slot overlay：pad 是占位重写区，标题可能为空串
@@ -306,7 +404,8 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
         }
     }
     let id = id?;
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
     Some(FileSession {
         id,
         cwd: cwd.unwrap_or_default(),
@@ -314,7 +413,16 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
         path: path.to_path_buf(),
         modified,
         first_user,
+        ts_secs,
+        size: meta.len(),
     })
+}
+
+/// RFC3339 → 秒级 epoch（session 行 timestamp 口径；解析失败 None，调用方退化 mtime）。
+fn parse_rfc3339_secs(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.timestamp())
 }
 
 /// content 块数组 → text 聚合（type=text 块；toolCall/thinking 由调用方分派）。
@@ -331,6 +439,20 @@ fn text_of(content: &serde_json::Value) -> Option<String> {
         }
         serde_json::Value::String(s) => (!s.is_empty()).then(|| s.clone()),
         _ => None,
+    }
+}
+
+/// 历史会话名截断上限（chars 计；与 claude::session 同口径，前端单行省略）
+const SUMMARY_MAX_CHARS: usize = 120;
+
+/// chars 边界安全截断（超长加 …；claude::session 同款）
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
     }
 }
 
@@ -983,5 +1105,159 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.to_string().contains("不存在"));
+    }
+
+    // —— 历史会话枚举/恢复（agent-hub-acp-session-history）——
+
+    /// 列表专用 fixture：按 cwd 分组写多个会话文件，timestamp 显式区分
+    /// （session 行 timestamp 是列表时间口径，须与文件 mtime 解耦断言）。
+    async fn list_fixture(dir: &Path, name: &str, cwd: &str, ts: &str, title: &str) -> String {
+        let slug = dir.join("--tmp--"); // omp slug 编码无关列表（按 session 行 cwd 过滤）
+        std::fs::create_dir_all(&slug).unwrap();
+        let sid = format!("sess-{name}");
+        let title_line = if title.is_empty() {
+            // title slot overlay 的空标题形态（pad 占位重写）
+            r#"{"type":"title","v":1,"title":"","pad":"    "}"#.to_string()
+        } else {
+            format!(r#"{{"type":"title","v":1,"title":"{title}"}}"#)
+        };
+        let body = format!(
+            "{title_line}\n{}\n{}\n",
+            format_args!(r#"{{"type":"session","id":"{sid}","cwd":"{cwd}","timestamp":"{ts}"}}"#,),
+            r#"{"type":"message","id":"e1","timestamp":"2026-10-03T00:00:02Z","message":{"role":"user","timestamp":"2026-10-03T00:00:02Z","content":[{"type":"text","text":"首条用户输入"}]}}"#,
+        );
+        std::fs::write(slug.join(format!("20261003T000000Z_{sid}.jsonl")), body).unwrap();
+        sid
+    }
+
+    /// 枚举：条目数 = 该 cwd 会话文件数；title 优先作名；时间取 session 行
+    /// timestamp（非 mtime）；mtime 倒序；体积回填。
+    #[tokio::test]
+    async fn list_cwd_sessions_filters_by_cwd_with_title_and_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let s1 = list_fixture(dir.path(), "a", "/tmp", "2026-10-03T01:00:00Z", "标题甲").await;
+        let s2 = list_fixture(dir.path(), "b", "/tmp", "2026-10-04T02:00:00Z", "标题乙").await;
+        list_fixture(dir.path(), "c", "/other", "2026-10-05T03:00:00Z", "别处").await;
+        let d = {
+            let registry = Arc::new(AcpRegistry::new());
+            let router = Arc::new(AcpSendRouter::new(
+                registry.clone(),
+                broadcast::channel(8).0,
+                Arc::new(RwLock::new(HashMap::new())),
+            ));
+            OmpDriver::new(
+                dir.path().to_path_buf(),
+                Arc::new(AcpDriver {
+                    agents: Arc::new(std::sync::RwLock::new(Vec::new())),
+                }),
+                router,
+                registry,
+                "omp".into(),
+                Arc::new(RwLock::new(HashMap::new())),
+                broadcast::channel(8).0,
+            )
+        };
+        let list = d.list_cwd_sessions("/tmp");
+        assert_eq!(list.len(), 2, "只含 cwd 匹配的会话");
+        assert_eq!(list[0].session_id, s2, "session 行 timestamp 倒序");
+        assert_eq!(
+            list[0].summary.as_deref(),
+            Some("标题乙"),
+            "title 行优先作名"
+        );
+        assert_eq!(
+            list[0].mtime_secs,
+            chrono::DateTime::parse_from_rfc3339("2026-10-04T02:00:00Z")
+                .unwrap()
+                .timestamp(),
+            "时间取 session 行 timestamp"
+        );
+        assert!(list[0].size_bytes > 0);
+        assert_eq!(list[0].branch, None, "omp 转录无分支字段");
+        assert_eq!(list[0].cwd.as_deref(), Some("/tmp"));
+        assert_eq!(list[1].session_id, s1);
+        assert!(d.list_cwd_sessions("/no/such/cwd").is_empty());
+    }
+
+    /// 名退化链：title 空（overlay 形态）→ 首条可读用户文本；全无 → None
+    /// （前端退化「日期」可辨识形式）。
+    #[tokio::test]
+    async fn list_cwd_sessions_name_falls_back_to_first_user() {
+        let dir = tempfile::tempdir().unwrap();
+        list_fixture(dir.path(), "notitle", "/tmp", "2026-10-03T01:00:00Z", "").await;
+        let d = {
+            let registry = Arc::new(AcpRegistry::new());
+            let router = Arc::new(AcpSendRouter::new(
+                registry.clone(),
+                broadcast::channel(8).0,
+                Arc::new(RwLock::new(HashMap::new())),
+            ));
+            OmpDriver::new(
+                dir.path().to_path_buf(),
+                Arc::new(AcpDriver {
+                    agents: Arc::new(std::sync::RwLock::new(Vec::new())),
+                }),
+                router,
+                registry,
+                "omp".into(),
+                Arc::new(RwLock::new(HashMap::new())),
+                broadcast::channel(8).0,
+            )
+        };
+        let list = d.list_cwd_sessions("/tmp");
+        assert_eq!(list.len(), 1);
+        assert_eq!(
+            list[0].summary.as_deref(),
+            Some("首条用户输入"),
+            "空 title 退化首条可读用户文本"
+        );
+    }
+
+    /// 恢复链：resume → ACP spawn + session/load → 注册表持有 + 历史重放入 feed
+    /// （fake loadable agent，与 takeover 正路同装配）。
+    #[tokio::test]
+    async fn resume_session_loads_via_acp_into_registry() {
+        let (d, _dir, registry) = fixture_driver();
+        d.resume_session("fake-load-1").await.unwrap();
+        assert!(
+            registry.get("fake-load-1").is_some(),
+            "恢复后注册表应持有会话"
+        );
+        // 轮询等泵回放 load chunk（确定性：后台任务）
+        let mut history: Vec<String> = Vec::new();
+        for _ in 0..50 {
+            if let Some(session) = registry.get("fake-load-1") {
+                history = session
+                    .feed
+                    .history()
+                    .iter()
+                    .filter_map(|m| m.text.clone())
+                    .collect();
+                if !history.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            history.iter().any(|t| t.contains("replayed")),
+            "session/load 重放 chunk 应入 feed: {history:?}"
+        );
+    }
+
+    /// 恢复失败两态（功能点 2「不静默」）：会话文件不存在 → 明确错误；
+    /// id 非法（路径分量形态）→ 白名单拒绝。
+    #[tokio::test]
+    async fn resume_session_errors_on_missing_and_bad_id() {
+        let (d, _dir, registry) = fixture_driver();
+        let e = d.resume_session("nope").await.unwrap_err();
+        assert!(e.to_string().contains("不存在"));
+        for bad in ["../etc", "a/b", "a\\b", ""] {
+            assert!(
+                d.resume_session(bad).await.is_err(),
+                "非法 id 须拒绝: {bad}"
+            );
+        }
+        assert!(registry.get("nope").is_none());
     }
 }

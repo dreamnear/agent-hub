@@ -49,11 +49,14 @@ function fallbackName(r: CliSessionEntry): string {
   return r.branch ? `${date} · ${r.branch}` : date;
 }
 
-/// CLI 历史会话弹窗（agent-hub-session-history）：某 agent cwd 对应工程的
-/// `~/.claude/projects/<slug>/*.jsonl` 只读枚举 + `--bg --resume` 恢复。
+/// 历史会话弹窗（agent-hub-session-history → agent-hub-acp-session-history）：
+/// 某 agent cwd 对应工程的历史会话只读枚举 + 恢复。按驱动路由数据源（服务端
+/// 同端点插拔）：claude → `~/.claude/projects/<slug>/*.jsonl`（`--bg --resume`
+/// 恢复）；omp → sessions 目录扫描（ACP `session/load` 恢复，快照切 acp 驱动）。
 /// 与全局 HistoryDialog 并存不合并——那边是「hub 已知非活跃会话」（hub 注册表），
 /// 这边是「CLI 侧工程会话全量」（含 hub 从未接管的会话），数据源不同。
-/// 行内口径对齐 CLI `--resume` 选择器：相对时间 · 分支 · 体积 · worktree · 摘要。
+/// 行内口径对齐 CLI resume 选择器：相对时间 · 分支 · 体积 · worktree · 摘要
+/// （omp 无分支/worktree 字段，如实留空）。
 export default function SessionHistoryDialog({
   agent,
   agents,
@@ -101,9 +104,12 @@ export default function SessionHistoryDialog({
         // 已有实例在跑：直接选中，不产生重复实例（功能点 6）
         onSelect(r.agent);
       } else if (r.status === 'resumed' && r.id) {
-        // 快照兜底（App historySel 机制）：新 bg 条目尚未进轮询清单时仍可选中；
-        // session_id = 原 CLI 会话 → 消息视图按既有分页端点呈现历史转录
-        onSelect({ ...agent, id: r.id, sessionId: entry.sessionId, group: 'other' });
+        // 快照兜底（App historySel 机制）：新 bg 条目尚未进轮询清单时仍可选中。
+        // claude：session_id = 原 CLI 会话 → 消息视图按既有分页端点呈现历史转录；
+        // omp：恢复 = ACP spawn + session/load，会话归 acp 驱动显示（omp 文件清单
+        // 排除注册表活会话），快照 driver 置 acp → 消息/发送路由 ACP 端点
+        const driver = agent.driver === 'omp' ? 'acp' : agent.driver;
+        onSelect({ ...agent, id: r.id, sessionId: entry.sessionId, driver, group: 'other' });
       }
       // current：目标即当前会话，无需动作
       onClose();

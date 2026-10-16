@@ -171,41 +171,57 @@ async fn respawn_agent(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// —— CLI 历史会话（agent-hub-session-history）：claude 特有能力，数据源为本机
-// `~/.claude/projects/`（非驱动抽象面），ignore_agent（R8）同款 api 层特判先例 ——
+// —— CLI 历史会话（agent-hub-session-history → agent-hub-acp-session-history）：
+// 按驱动插拔的数据源（用户拍板开放范围 = claude + omp，其余 ACP agent 元数据
+// 薄弱不开放）：claude → 本机 `~/.claude/projects/`；omp → sessions 目录
+// （session 行 cwd 过滤）。两源同为非驱动抽象面的本机文件事实源，
+// ignore_agent（R8）同款 api 层特判先例 ——
 
-/// 工程历史会话枚举：该 agent cwd 对应 `<claude_root>/projects/<slug>/` 只读列表
-/// （编码复用 session_dir，防穿越）。cwd 从 driver.get 权威取（不信前端）；
+/// 工程历史会话枚举：claude → 该 agent cwd 对应 `<claude_root>/projects/<slug>/`
+/// 只读列表（编码复用 session_dir，防穿越）；omp → sessions 目录扫描
+/// （`OmpDriver::list_cwd_sessions`，只读）。cwd 从 driver.get 权威取（不信前端）；
 /// agent 无 cwd → 空集（前端空态）。
 async fn cli_sessions(
     State(state): State<SharedState>,
     AxumPath((driver, id)): AxumPath<(String, String)>,
 ) -> Result<Json<Vec<crate::drivers::claude::session::SessionListEntry>>, AppError> {
-    if driver != "claude" {
-        return Err(AppError::bad("cli-sessions 仅支持 claude 驱动"));
+    match driver.as_str() {
+        "claude" => {
+            let d = driver_of(&state, &driver)?;
+            let agent = d
+                .get(&id)
+                .await
+                .map_err(app_err)?
+                .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
+            let Some(cwd) = agent.cwd else {
+                return Ok(Json(Vec::new()));
+            };
+            // R1 tester AC8 回修：只把“目录不存在”当作合法空集（工程尚无会话），
+            // 权限等其他 IO 错误原样上抛 → 前端错误态 + 重试可达
+            let list = crate::drivers::claude::session::list_project_sessions(
+                &state.cfg.claude_root,
+                Path::new(&cwd),
+            )
+            .await;
+            let list = match list {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(anyhow::Error::new(e).into()),
+            };
+            Ok(Json(list))
+        }
+        "omp" => {
+            let agent = crate::drivers::AgentCatalog::get(&state.omp, &id)
+                .await
+                .map_err(app_err)?
+                .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
+            let Some(cwd) = agent.cwd else {
+                return Ok(Json(Vec::new()));
+            };
+            Ok(Json(state.omp.list_cwd_sessions(&cwd)))
+        }
+        _ => Err(AppError::bad("cli-sessions 仅支持 claude/omp 驱动")),
     }
-    let d = driver_of(&state, &driver)?;
-    let agent = d
-        .get(&id)
-        .await
-        .map_err(app_err)?
-        .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
-    let Some(cwd) = agent.cwd else {
-        return Ok(Json(Vec::new()));
-    };
-    // R1 tester AC8 回修：只把“目录不存在”当作合法空集（工程尚无会话），
-    // 权限等其他 IO 错误原样上抛 → 前端错误态 + 重试可达
-    let list = crate::drivers::claude::session::list_project_sessions(
-        &state.cfg.claude_root,
-        Path::new(&cwd),
-    )
-    .await;
-    let list = match list {
-        Ok(v) => v,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(anyhow::Error::new(e).into()),
-    };
-    Ok(Json(list))
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,23 +230,25 @@ pub struct ResumeSessionBody {
     pub session_id: String,
 }
 
-/// 恢复历史会话：选中一条 CLI 会话 → hub 中成为可继续会话。
-/// 三态返回（前端据此分流选中动作）：
+/// 恢复历史会话：选中一条历史会话 → hub 中成为可继续会话。按驱动插拔：
+/// claude：`claude --bg --resume <sid>` spawn 新条目（StartSpec.resume_session_id
+///   透传；death 会话 CLI 侧 same-ID 继续，转录 jsonl 同文件 → 消息视图按既有
+///   sessionId 分页端点天然呈现历史）。
+/// omp：复用既有 `AcpDriver::resume_session`（ACP `session/load`，不改协议），
+///   注册表装配后归 acp 驱动显示；会话不存在/加载失败 → 明确错误（不降级不静默，
+///   需求功能点 2）。
+/// 三态返回（前端据此分流选中动作，两驱动同构）：
 /// - `current`：目标即该 agent 当前会话，无动作
 /// - `active`：活跃清单已有该 session_id 的实例（任意驱动条目）→ 复用，不 spawn
-///   （防 `--bg --resume` 对活会话产生 CLI 副本，需求功能点 6 重复保护）
-/// - `resumed`：`claude --bg --resume <sid>` spawn 新条目（StartSpec.resume_session_id
-///   透传；death 会话 CLI 侧 same-ID 继续，转录 jsonl 同文件 → 消息视图按既有
-///   sessionId 分页端点天然呈现历史）
+///   （claude 防 CLI 副本；omp 防 ACP 同会话双 spawn——重复保护语义同源）
+/// - `resumed`：claude 返回新 bg 条目 id；omp 返回 ACP 会话 id（= 原 omp 会话 id，
+///   前端快照按 acp 驱动路由消息端点）
 async fn resume_session(
     State(state): State<SharedState>,
     AxumPath((driver, id)): AxumPath<(String, String)>,
     Json(body): Json<ResumeSessionBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if driver != "claude" {
-        return Err(AppError::bad("resume-session 仅支持 claude 驱动"));
-    }
-    // session id 白名单（find_session_path 同款纪律：禁路径分量）
+    // session id 白名单（find_session_path 同款纪律：禁路径分量；两驱动同校验）
     if body.session_id.is_empty()
         || body.session_id.contains('/')
         || body.session_id.contains('\\')
@@ -238,37 +256,67 @@ async fn resume_session(
     {
         return Err(AppError::bad("sessionId 非法"));
     }
-    let d = driver_of(&state, &driver)?;
-    let agent = d
-        .get(&id)
-        .await
-        .map_err(app_err)?
-        .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
-    if agent.session_id.as_deref() == Some(body.session_id.as_str()) {
-        return Ok(Json(json!({ "status": "current" })));
+    match driver.as_str() {
+        "claude" => {
+            let d = driver_of(&state, &driver)?;
+            let agent = d
+                .get(&id)
+                .await
+                .map_err(app_err)?
+                .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
+            if agent.session_id.as_deref() == Some(body.session_id.as_str()) {
+                return Ok(Json(json!({ "status": "current" })));
+            }
+            // 重复保护：活跃清单（含 interactive）session_id 命中即复用
+            let active = state.drivers.list_all(false).await.unwrap_or_default();
+            if let Some(existing) = active
+                .into_iter()
+                .find(|a| a.session_id.as_deref() == Some(body.session_id.as_str()))
+            {
+                return Ok(Json(json!({ "status": "active", "agent": existing })));
+            }
+            let Some(cwd) = agent.cwd else {
+                return Err(AppError::bad("agent 无 cwd，无法定位恢复目标工程"));
+            };
+            validate_cwd(&cwd).await?;
+            let spec = StartSpec {
+                prompt: String::new(),
+                name: None,
+                model: None,
+                effort: None,
+                cwd,
+                resume_session_id: Some(body.session_id),
+            };
+            let new_id = d.start(&spec).await.map_err(app_err)?;
+            Ok(Json(json!({ "status": "resumed", "id": new_id })))
+        }
+        "omp" => {
+            let agent = crate::drivers::AgentCatalog::get(&state.omp, &id)
+                .await
+                .map_err(app_err)?
+                .ok_or_else(|| AppError::not_found(format!("agent {id} 不存在")))?;
+            if agent.session_id.as_deref() == Some(body.session_id.as_str()) {
+                return Ok(Json(json!({ "status": "current" })));
+            }
+            // 重复保护：ACP 注册表活会话（此前恢复过 / hub-spawn）复用不重 spawn。
+            // 判据限 acp 驱动行——omp 文件行 session_id 与目标同值（同源目录），
+            // 但文件行非活进程，命中它会导致恢复永不 spawn
+            let active = state.drivers.list_all(false).await.unwrap_or_default();
+            if let Some(existing) = active.into_iter().find(|a| {
+                a.driver == "acp" && a.session_id.as_deref() == Some(body.session_id.as_str())
+            }) {
+                return Ok(Json(json!({ "status": "active", "agent": existing })));
+            }
+            let Some(cwd) = agent.cwd else {
+                return Err(AppError::bad("agent 无 cwd，无法定位恢复目标工程"));
+            };
+            validate_cwd(&cwd).await?;
+            // 文件不存在/加载失败在此上抛为明确错误（驱动侧不降级）
+            state.omp.resume_session(&body.session_id).await?;
+            Ok(Json(json!({ "status": "resumed", "id": body.session_id })))
+        }
+        _ => Err(AppError::bad("resume-session 仅支持 claude/omp 驱动")),
     }
-    // 重复保护：活跃清单（含 interactive）session_id 命中即复用
-    let active = state.drivers.list_all(false).await.unwrap_or_default();
-    if let Some(existing) = active
-        .into_iter()
-        .find(|a| a.session_id.as_deref() == Some(body.session_id.as_str()))
-    {
-        return Ok(Json(json!({ "status": "active", "agent": existing })));
-    }
-    let Some(cwd) = agent.cwd else {
-        return Err(AppError::bad("agent 无 cwd，无法定位恢复目标工程"));
-    };
-    validate_cwd(&cwd).await?;
-    let spec = StartSpec {
-        prompt: String::new(),
-        name: None,
-        model: None,
-        effort: None,
-        cwd,
-        resume_session_id: Some(body.session_id),
-    };
-    let new_id = d.start(&spec).await.map_err(app_err)?;
-    Ok(Json(json!({ "status": "resumed", "id": new_id })))
 }
 
 /// ensure_driver 的注册表替身：按名取驱动；未知名 → 404（行为与批前 ensure_driver 一致）。

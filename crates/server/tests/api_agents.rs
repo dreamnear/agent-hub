@@ -206,3 +206,171 @@ async fn agents_aggregate_survives_dsh_auth_failure() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(status_body["dsh"]["authError"], true, "authError 已标记");
 }
+
+// —— 历史会话按驱动插拔（agent-hub-acp-session-history）：omp 数据源 + 恢复路由 ——
+
+fn write_omp_session(dir: &Path, sid: &str, cwd: &Path, title: &str) {
+    let slug = dir.join("--tmp--");
+    std::fs::create_dir_all(&slug).unwrap();
+    let body = format!(
+        "{}\n{}\n",
+        format_args!(r#"{{"type":"title","v":1,"title":"{title}"}}"#),
+        format_args!(
+            r#"{{"type":"session","id":"{sid}","cwd":"{}","timestamp":"2026-10-10T08:00:00Z"}}"#,
+            cwd.display()
+        ),
+    );
+    std::fs::write(slug.join(format!("20261010T080000Z_{sid}.jsonl")), body).unwrap();
+}
+
+/// omp 专用 app：sessions_dir 指 fixture、acp agent 指 fake loadable
+/// （name="omp" 与 api/mod.rs 的接管 agent 名回退一致）。
+fn omp_test_app(dir: &tempfile::TempDir) -> axum::Router {
+    let mut cfg = Config::load();
+    cfg.opencode.bin = "/nonexistent/opencode-test-isolated".into();
+    cfg.opencode.port = 65001;
+    cfg.opencode_serve_file = dir.path().join("opencode_serve.json");
+    cfg.dsh.bin = "/nonexistent/dsh-test-isolated".into();
+    cfg.dsh.port = 65002;
+    cfg.dsh_serve_file = dir.path().join("dsh_serve.json");
+    cfg.claude_bin = fake_bin();
+    cfg.jobs_dir = dir.path().to_path_buf();
+    let omp_dir = dir.path().join("omp-sessions");
+    std::fs::create_dir_all(&omp_dir).unwrap();
+    cfg.omp.sessions_dir = omp_dir;
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp_fake_agent.py");
+    cfg.acp.agents = vec![server::config::AcpAgentConfig {
+        name: "omp".into(),
+        command: "python3".into(),
+        args: vec![
+            "-u".into(),
+            fixture.to_string_lossy().into_owned(),
+            "loadable".into(),
+        ],
+        cwd: None,
+        model: None,
+    }];
+    cfg.acp_sessions_file = dir.path().join("acp_sessions.json");
+    router(Arc::new(AppState::from_config(cfg)))
+}
+
+/// omp cli-sessions：条目数与该 cwd 会话文件数一致，title 进 summary 字段。
+#[tokio::test]
+async fn omp_cli_sessions_lists_cwd_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-1",
+        dir.path(),
+        "合成标题",
+    );
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-2",
+        dir.path(),
+        "另一条",
+    );
+    let app = omp_test_app(&dir);
+    let (status, body) = req(app, "GET", "/api/agents/omp/omp-sess-1/cli-sessions", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "条目数 = 该 cwd 会话文件数");
+    assert!(rows.iter().any(|r| r["summary"] == "合成标题"));
+    assert!(rows.iter().any(|r| r["sessionId"] == "omp-sess-2"));
+}
+
+/// 无会话源的驱动（pi）→ 400 明确错误（不出现点了必失败的入口之外的后端兜底）。
+#[tokio::test]
+async fn omp_cli_sessions_rejects_other_drivers() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = omp_test_app(&dir);
+    let (status, _) = req(app, "GET", "/api/agents/pi/x/cli-sessions", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// omp 恢复路由：resume → ACP spawn + session/load（fake loadable）→ resumed，
+/// id = 原 omp 会话 id；同会话重复恢复 → active 复用（注册表活会话，不双 spawn）。
+#[tokio::test]
+async fn omp_resume_session_loads_and_reuses_active() {
+    let dir = tempfile::tempdir().unwrap();
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-1",
+        dir.path(),
+        "甲",
+    );
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-2",
+        dir.path(),
+        "乙",
+    );
+    let app = omp_test_app(&dir);
+    // 从 omp-sess-1 行恢复 omp-sess-2
+    let (status, body) = req(
+        app.clone(),
+        "POST",
+        "/api/agents/omp/omp-sess-1/resume-session",
+        Some(json!({ "sessionId": "omp-sess-2" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "resumed");
+    assert_eq!(body["id"], "omp-sess-2", "ACP 会话 id = 原 omp 会话 id");
+    // 活会话复用：再次恢复同会话 → active（注册表已持有，不二次 spawn）
+    let (status, body) = req(
+        app,
+        "POST",
+        "/api/agents/omp/omp-sess-1/resume-session",
+        Some(json!({ "sessionId": "omp-sess-2" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "active");
+    assert_eq!(body["agent"]["id"], "omp-sess-2");
+}
+
+/// omp 恢复失败态（功能点 2「不静默」）：会话不存在 → 4xx/5xx 明确错误，不静默 200。
+#[tokio::test]
+async fn omp_resume_session_missing_is_explicit_error() {
+    let dir = tempfile::tempdir().unwrap();
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-1",
+        dir.path(),
+        "甲",
+    );
+    let app = omp_test_app(&dir);
+    let (status, _) = req(
+        app,
+        "POST",
+        "/api/agents/omp/omp-sess-1/resume-session",
+        Some(json!({ "sessionId": "no-such-sess" })),
+    )
+    .await;
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "明确错误而非静默成功: {status}"
+    );
+}
+
+/// omp 恢复白名单：路径分量形态 sessionId → 400（防穿越复用 claude 同款纪律）。
+#[tokio::test]
+async fn omp_resume_session_bad_id_is_400() {
+    let dir = tempfile::tempdir().unwrap();
+    write_omp_session(
+        &dir.path().join("omp-sessions"),
+        "omp-sess-1",
+        dir.path(),
+        "甲",
+    );
+    let app = omp_test_app(&dir);
+    let (status, _) = req(
+        app,
+        "POST",
+        "/api/agents/omp/omp-sess-1/resume-session",
+        Some(json!({ "sessionId": "../escape" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
