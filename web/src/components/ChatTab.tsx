@@ -32,6 +32,11 @@ interface Props {
   onOpenTerminal?: () => void;
   /** 多实例（批1 任务4）：该 agent 所属实例的 per-instance api；缺省=本机 api（现状零破坏） */
   api?: Api;
+  /** 草稿按会话保留（agent-hub-pick-switch #18 交互模型 4）：挂载时的初值。
+   * 本组件随会话键重挂载，草稿保存在 App 的 per-key 表里，切换会话再切回不丢 */
+  initialDraft?: string;
+  /** 草稿上行（每次变更回报 App，由其按会话键存表）；不传则纯本组件内态 */
+  onDraftChange?: (text: string) => void;
 }
 
 /// 对话主区域（P5 A1）：选中 agent 即对话；顶栏含状态与操作（logs/stop/respawn/rm）；
@@ -161,6 +166,8 @@ export default function ChatTab({
   onToggleNotes,
   onOpenTerminal,
   api = localApi,
+  initialDraft = '',
+  onDraftChange,
 }: Props): ReactElement | null {
   const t = useI18n();
   // 会话视图（Agent/文档）：本地状态即可——App 以 key={`${instanceId}:${id}`} 挂载，
@@ -181,7 +188,13 @@ export default function ChatTab({
   const { messages, isLoading, error, refetch, hasMore, noMore, loadingOlder, loadOlder } =
     useSession(agent.id, sessionId, focusSubagent, isAcp ? 'acp' : 'claude', agent.instanceId ?? null, api, driver);
   const pendingAsk = detectPendingAsk(messages);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialDraft);
+  // 草稿上行（#18 交互模型 4）：变更回报 App 按会话键存表；发送清空/图片清空
+  // 同样走此路径（草稿状态只有这一处真相）。首挂载也回报一次（值多与原值相同，
+  // App 侧同值不写，无重渲环）
+  useEffect(() => {
+    onDraftChange?.(draft);
+  }, [draft, onDraftChange]);
   const [err, setErr] = useState('');
   const [sending, setSending] = useState(false);
   // 发送按钮 spinner：POST 2xx 起转，agent 离开 working/needs_input（回复完成）后恢复 ↑

@@ -1,0 +1,40 @@
+/* 一次性提示条（agent-hub-pick-switch #18）：固定屏幕下方居中、不阻塞。
+   色值全走 --c-* token（三态主题随动）；z-index 高于对话框族（48/50），
+   保证在任意覆盖层之上仍可见。 */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 76px; /* BottomBar（28px 高）之上，避开底部栏与手机迷你栏 */
+  transform: translateX(-50%);
+  z-index: 70;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-panel);
+  color: var(--c-text);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  /* 纯告知：不吃点击、不挡操作（交互模型 6「不阻塞」） */
+  pointer-events: none;
+  animation: toast-in 160ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

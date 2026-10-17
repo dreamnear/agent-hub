@@ -232,6 +232,10 @@ export const zh: Record<string, string> = {
 
   // CLI 历史会话弹窗（agent-hub-session-history）
   'sesshist.title': 'CLI 历史会话',
+  // 带 agent 名的标题（agent-hub-pick-switch #18 交互模型 5：非选中行操作有明确预期）
+  'sesshist.titleNamed': '{name} 的历史会话',
+  // 切换成功的一次性提示（#18 交互模型 6）
+  'sesshist.switchedToast': '已切换到 {name}',
   'sesshist.subtitle': '该工程的历史会话 · 最近优先',
   'sesshist.search': '输入即过滤（摘要 / 分支 / 会话 id）',
   'sesshist.searchLabel': '过滤历史会话',

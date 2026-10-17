@@ -50,7 +50,7 @@ function mkApi(
 
 function renderDialog(
   api: Api,
-  onSelect: (a: AgentSummary) => void = vi.fn(),
+  onSelect: (a: AgentSummary, info: { sessionName: string; spawned: boolean }) => void = vi.fn(),
   onClose: () => void = vi.fn(),
   agents: AgentSummary[] = [],
   agent: AgentSummary = mkAgent(),
@@ -178,9 +178,11 @@ describe('SessionHistoryDialog（agent-hub-session-history）', () => {
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
-    expect(onSelect).toHaveBeenCalledWith(
+    expect(onSelect.mock.calls[0][0]).toEqual(
       expect.objectContaining({ id: 'bg-new', sessionId: 'aaaa-old', driver: 'claude' }),
     );
+    // spawned：新起 bg 条目 → App 立即失效 agents 查询（新条目尽快进清单）
+    expect(onSelect.mock.calls[0][1]).toEqual({ sessionName: '旧会话摘要', spawned: true });
     expect(onClose).toHaveBeenCalledTimes(1);
     // 端点寻址：入口 agent 的 id + 目标 sessionId
     expect(resumeSession).toHaveBeenCalledWith('agent-1', 'aaaa-old', 'claude');
@@ -195,9 +197,10 @@ describe('SessionHistoryDialog（agent-hub-session-history）', () => {
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
-    expect(onSelect).toHaveBeenCalledWith(
+    expect(onSelect.mock.calls[0][0]).toEqual(
       expect.objectContaining({ id: 'bg-live', sessionId: 'aaaa-old' }),
     );
+    expect(onSelect.mock.calls[0][1]).toEqual({ sessionName: '旧会话摘要', spawned: false });
   });
 
   it('运行中徽标：活跃清单 sessionId 命中即显示（恢复动作仍可用，服务端复用兜底）', async () => {
@@ -243,7 +246,7 @@ describe('SessionHistoryDialog · omp 驱动（agent-hub-acp-session-history）'
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
-    expect(onSelect).toHaveBeenCalledWith(
+    expect(onSelect.mock.calls[0][0]).toEqual(
       expect.objectContaining({ id: 'omp-sess-2', sessionId: 'omp-sess-2', driver: 'acp' }),
     );
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -283,7 +286,7 @@ describe('SessionHistoryDialog · omp ACP 行型（R1 tester FAIL-1 回归）', 
     expect(cliSessions).toHaveBeenCalledWith('fake-session-1', 'omp');
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
-    expect(onSelect).toHaveBeenCalledWith(
+    expect(onSelect.mock.calls[0][0]).toEqual(
       expect.objectContaining({ id: 'omp-sess-2', sessionId: 'omp-sess-2', driver: 'acp' }),
     );
     expect(resumeSession).toHaveBeenCalledWith('fake-session-1', 'omp-sess-2', 'omp');
@@ -296,5 +299,113 @@ describe('SessionHistoryDialog · omp ACP 行型（R1 tester FAIL-1 回归）', 
     renderDialog(api, vi.fn(), vi.fn(), [], acpOther);
     await waitFor(() => expect(screen.getByText('该工程暂无历史会话')).toBeTruthy());
     expect(cliSessions).toHaveBeenCalledWith('acp-x', 'acp');
+  });
+});
+
+describe('SessionHistoryDialog · 原子切换（agent-hub-pick-switch #18）', () => {
+  // 根因回归：服务端三态只回答「后端要不要动作」，不回答「前端视图要不要切」。
+  // 非选中行开弹窗 + 选中该行自己的当前会话 → 服务端 current → 旧实现直接 return
+  // → 主区与侧栏纹丝不动（用户报告「会话态切了、agent 没切」）。
+  it('current：后端无需动作也必须回抛入口行 agent 切视图（#18 根因回归）', async () => {
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'current' });
+    // 入口行 = 非选中 agent「小乙」，其当前会话 sess-current
+    const entryAgent = mkAgent({ id: 'agent-b', name: '小乙', sessionId: 'sess-current' });
+    const api = mkApi(
+      vi.fn().mockResolvedValue([entry({ sessionId: 'sess-current', summary: '在跑的会话' })]),
+      resumeSession,
+    );
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    renderDialog(api, onSelect, onClose, [], entryAgent);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    // 目标 = 入口行 agent 本身（该会话的宿主），主区随之切过去
+    expect(onSelect.mock.calls[0][0]).toEqual(expect.objectContaining({ id: 'agent-b', sessionId: 'sess-current' }));
+    expect(onSelect.mock.calls[0][1]).toEqual({ sessionName: '在跑的会话', spawned: false });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('active：复用条目补入口行的实例维（远程实例选中后消息/发送不回落到本机 api）', async () => {
+    const entryAgent = mkAgent({ instanceId: 'remote-1' });
+    // 服务端返回的条目不带实例维（instanceId 是前端聚合层打标）
+    const live = mkAgent({ id: 'bg-live', sessionId: 'aaaa-old', instanceId: undefined });
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'active', agent: live });
+    const api = mkApi(vi.fn().mockResolvedValue([entry()]), resumeSession);
+    const onSelect = vi.fn();
+    renderDialog(api, onSelect, vi.fn(), [], entryAgent);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ id: 'bg-live', instanceId: 'remote-1' }),
+    );
+  });
+
+  it('active：条目自带实例维时不覆盖（前端已打标为准）', async () => {
+    const entryAgent = mkAgent({ instanceId: 'remote-1' });
+    const live = mkAgent({ id: 'bg-live', sessionId: 'aaaa-old', instanceId: 'remote-2' });
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'active', agent: live });
+    const api = mkApi(vi.fn().mockResolvedValue([entry()]), resumeSession);
+    const onSelect = vi.fn();
+    renderDialog(api, onSelect, vi.fn(), [], entryAgent);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect.mock.calls[0][0]).toEqual(expect.objectContaining({ instanceId: 'remote-2' }));
+  });
+
+  it('响应形状意外（三态皆不成立）：报错可见、不关弹窗、不切视图', async () => {
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'weird' });
+    const api = mkApi(vi.fn().mockResolvedValue([entry()]), resumeSession);
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    renderDialog(api, onSelect, onClose);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(screen.getByText(/恢复失败/)).toBeTruthy());
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('标题带 agent 名（交互模型 5），无名回退 id 前 8 位', async () => {
+    const api = mkApi(vi.fn().mockResolvedValue([]));
+    renderDialog(api, vi.fn(), vi.fn(), [], mkAgent({ id: 'abcdefgh-1234', name: '小丙' }));
+    await waitFor(() => expect(screen.getByText('小丙 的历史会话')).toBeTruthy());
+    cleanup();
+    const api2 = mkApi(vi.fn().mockResolvedValue([]));
+    renderDialog(api2, vi.fn(), vi.fn(), [], mkAgent({ id: 'abcdefgh-1234', name: null }));
+    await waitFor(() => expect(screen.getByText('abcdefgh 的历史会话')).toBeTruthy());
+  });
+
+  it('toast 会话名：无摘要回落「日期 · 分支」可辨识名（与行内同口径）', async () => {
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'resumed', id: 'bg-x' });
+    const api = mkApi(
+      vi.fn().mockResolvedValue([entry({ summary: null, branch: 'feat/y' })]),
+      resumeSession,
+    );
+    const onSelect = vi.fn();
+    renderDialog(api, onSelect);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect.mock.calls[0][1].sessionName).toMatch(/^\d{4}-\d{2}-\d{2} · feat\/y$/);
+  });
+
+  it('omp + current：同样回抛入口 ACP 行（两行型同规）', async () => {
+    const acpOmp = mkAgent({ driver: 'acp', name: 'omp', id: 'sess-x', sessionId: 'sess-x' });
+    const resumeSession = vi.fn().mockResolvedValue({ status: 'current' });
+    const api = mkApi(
+      vi.fn().mockResolvedValue([entry({ sessionId: 'sess-x', branch: null })]),
+      resumeSession,
+    );
+    const onSelect = vi.fn();
+    renderDialog(api, onSelect, vi.fn(), [], acpOmp);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.click(itemButtons()[0]);
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ id: 'sess-x', driver: 'acp' }),
+    );
   });
 });
