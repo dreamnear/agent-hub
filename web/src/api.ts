@@ -1,5 +1,14 @@
 import type { AgentSummary, ChatMessage, CliSessionEntry, DocEntry, DocFile, GitCommitFiles, GitLog, GitStatus, GitTreeGroup, InstanceConfig, SubagentEntry, SubmoduleInfo, TaskSpecWithAction, TaskRun, GitDiffResult , NodeView } from './types';
 import { t } from './i18n';
+import { instanceHealth } from './lib/instanceHealth';
+
+/** 实例存活信号（agent-hub-instance-health）：实例域任何一次 API 调用成功
+ * （HTTP 2xx，含发送 204、列表 200、cli-sessions 等）= 该实例数据面可达的最强
+ * 证据，健康状态机据此把 degraded/offline 立即拉回 online。key 与状态机一致
+ * （instanceId ?? ''）。 */
+function noteInstanceAlive(instanceId: string | null): void {
+  instanceHealth.onAlive(instanceId ?? '');
+}
 
 /** 历史分页信封（P6 B12/B13）：firstLine 为向前翻页游标，hasMore 标识还有更早消息 */
 /// 归一化模型条目（后端 ModelInfo 镜像）
@@ -147,6 +156,7 @@ export async function probeInstanceAuth(baseUrl: string, instanceId: string): Pr
     });
     if (!res.ok) return false;
     clearAuthFailed(instanceId);
+    noteInstanceAlive(instanceId);
     return true;
   } catch {
     return false;
@@ -468,6 +478,7 @@ export function makeApi(baseUrl: string, instanceId: string | null): Api {
     }
     if (!res.ok) throw new Error(await res.text());
     if (instanceId != null) clearAuthFailed(instanceId);
+    noteInstanceAlive(instanceId);
     return res.json() as Promise<T>;
   }
 
@@ -505,6 +516,7 @@ export function makeApi(baseUrl: string, instanceId: string | null): Api {
         throw new Error(detail.trim() || r.statusText);
       }
       if (instanceId != null) clearAuthFailed(instanceId);
+      noteInstanceAlive(instanceId);
     });
   }
 
@@ -532,6 +544,7 @@ export function makeApi(baseUrl: string, instanceId: string | null): Api {
         throw new Error(detail.trim() || r.statusText);
       }
       if (instanceId != null) clearAuthFailed(instanceId);
+      noteInstanceAlive(instanceId);
     });
   }
 
@@ -806,6 +819,8 @@ export function openEventStream(
     const q = token ? `?token=${encodeURIComponent(token)}` : '';
     ws = new WebSocket(`${host}/ws/events${q}`);
     ws.onmessage = (): void => {
+      // 真实帧 = 该实例 events 通道存活的被动证据（agent-hub-instance-health）
+      noteInstanceAlive(instanceId);
       onEvent();
     };
     ws.onopen = (): void => {

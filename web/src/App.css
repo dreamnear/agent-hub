@@ -28,6 +28,7 @@
   --c-warn-bg: #fff7ed;
   --c-warn-border: #f5c08a;
   --c-warn-text: #92400e;
+  --c-warn-bright: #e3b341; /* 深底（侧栏 #171717，两主题不变）上的警示琥珀文字：#171717 底 ~8.9:1；浅色态 --c-warn-text #92400e 在深底仅 ~2.5:1 不达标（同 --c-danger-bright 取法，agent-hub-instance-health 侧栏降级横幅） */
   /* diff 主区覆盖视图（git-diff）：增行底/字成对（删行复用 --c-danger-bg/text），两态对比 ≥4.5:1 */
   --c-diff-add-bg: #e6ffec;
   --c-diff-add-text: #0a7a5c;
@@ -99,6 +100,7 @@ html[data-font='serif'] {
   --c-warn-bg: #2a2200;
   --c-warn-border: #6b5600;
   --c-warn-text: #e3b341;
+  --c-warn-bright: #e3b341; /* dark 与亮态同值（深底场景，同 --c-danger-bright 取法） */
   --c-diff-add-bg: #12261e;
   --c-diff-add-text: #7ee2b8; /* #12261e 底 ~9:1 */
   --c-driver-claude-text: #fda487;

@@ -12,6 +12,7 @@ import {
 } from '../api';
 import { makeApi } from '../api';
 import { fetchInstances, instanceBaseUrl } from '../instances';
+import { instanceHealth, statusOf, type HealthStatus } from '../lib/instanceHealth';
 import type { AgentSummary, GitTreeGroup, Group, InstanceConfig } from '../types';
 
 export interface GroupedAgents {
@@ -163,7 +164,8 @@ export function useRemoteInstances(): {
   instances: InstanceCtx[];
   registry: InstanceRegistry;
   isLoading: boolean;
-  /** 实例 id（null=本机，键 ''）→ WS 断开（任务10 离线信号源） */
+  /** 实例 id（null=本机，键 ''）→ WS 断开（事件通道连通性；健康合成时单独
+   * 只贡献 degraded——事件延迟 ≠ 实例不可达，见 lib/instanceHealth.ts） */
   wsDown: Record<string, boolean>;
 } {
   const qc = useQueryClient();
@@ -219,7 +221,7 @@ export function useRemoteInstances(): {
           await api.tunnelStart(inst.id);
           if (alive) qc.invalidateQueries({ queryKey: ['instances'] });
         } catch {
-          // 隧道启动失败：留给离线降级（任务10 显示置灰）；此处不报错不循环
+          // 隧道启动失败：留给 agents 失败路径的隧道复活与健康状态机记账；此处不报错不循环
         }
       }
     };
@@ -231,8 +233,9 @@ export function useRemoteInstances(): {
   }, [configuredSsh.map((c) => `${c.id}:${c.localPort}`).join('|')]);
 
   // 每实例一条事件流 WS（各认各的 token、各自 5s 重连）。
-  // 任务10：WS 连通性是离线信号源——HTTP 查询有缓存数据时实例死亡不会触发重发，
-  // WS close 才是第一手信号；重连成功回调里顺带失效重取（api 层 onopen）。
+  // 任务10：WS 连通性单独只贡献 degraded（agent-hub-instance-health：事件延迟
+  // ≠ 实例不可达）——HTTP 查询有缓存数据时实例死亡不会触发重发，WS close 是
+  // 事件通道断开的第一手信号；重连成功回调里顺带失效重取（api 层 onopen）。
   // H253：依赖从 ctxs 引用换成实例集稳定签名——清单引用抖动不再拆建全部 WS。
   const wsKey = instanceSetKey(ctxs);
   const [wsDown, setWsDown] = useState<Record<string, boolean>>({});
@@ -323,7 +326,8 @@ export function autoTunnelStart(
       onSuccess();
     })
     .catch(() => {
-      // 拉起失败：留给离线降级（侧栏置灰），不报错不循环
+      // 拉起失败：不报错不循环——连续失败由 agents 清单失败路径按退避重试，
+      // 健康呈现交给 lib/instanceHealth 状态机
     })
     .finally(() => {
       // 无论 start 成败都计数——计数锚定 agents 连续失败（恢复成功在 queryFn 成功路径复位）
@@ -364,10 +368,10 @@ export async function ensureTunnelRunning(
   return autoTunnelStart(id, start, onSuccess, now);
 }
 
-/** 曾失败标记（r80）：never-successful 的查询每次重探会 pending↔error 翻转，
- * isError 期间离线门打开 → 整栏 loading 抖动。一旦失败即保持降级（置灰），
- * 拉取成功才清除——与 resetTunnelBackoff 同生命周期。键与 offline 一致（null=''）。 */
-const everErrored = new Set<string>();
+/** 曾失败标记（r80 的 everErrored）已废除（agent-hub-instance-health，#19 根修）：
+ * 「失败即长期记账」的无限闩锁把管理面单次抖动固化成整栏置灰。清单失败记账改由
+ * lib/instanceHealth 状态机接管（连续 ≥3 次且跨度 ≥20s 且无存活信号才 offline，
+ * 任何存活/成功立即清零），成功清零语义由状态机 onAlive 承担。 */
 
 // —— H253 按实例隔离：单通道堵死不许拖累本机与其他实例 ——
 // 浏览器对同源只有 6 条并发连接，而本机与所有远端实例的请求都打同一个 origin
@@ -485,8 +489,9 @@ export function useAgents(): {
   tree: GitTreeGroup[];
   registry: InstanceRegistry;
   instances: InstanceCtx[];
-  /** 实例 id（null=本机）→ 该实例 agents 抓取是否失败（离线判定，任务6/10 置灰依据） */
-  offline: Record<string, boolean>;
+  /** 实例 id（null=本机，键 ''）→ 健康三态（agent-hub-instance-health）：
+   * online / degraded（清单失败 chip，不置灰）/ offline（唯一置灰态） */
+  health: Record<string, HealthStatus>;
   /** 实例 id → 凭据失效（该实例 401，任务10：侧栏「凭据失效」态；本机走 TokenGate 不在此列） */
   authError: Record<string, boolean>;
 } {
@@ -512,9 +517,10 @@ export function useAgents(): {
         return singleFlight(k, () =>
           fetchAgentsWithDeadline(registry.apiFor(ctx.id), ctx.id)
             .then((list) => {
-              // 恢复：退避与降级标记整条复位（r80——成功后自动拉起与正常展示完整还原）
+              // 恢复：退避整条复位（r80——成功后自动拉起与正常展示完整还原）；
+              // 健康状态机：主动轮询成功 = 存活信号（计数清零 + 立即回 online）
               resetTunnelBackoff(k);
-              everErrored.delete(k);
+              instanceHealth.onAlive(k);
               return list;
             })
             .catch((e: unknown) => {
@@ -522,7 +528,8 @@ export function useAgents(): {
               // 服务端重连耗尽后可重新拉起），成功后重拉清单取新 localPort 再连。
               // r80：改走退避 + 上限 + 在途去重（原无条件 start 在远端持续不可达时自激风暴）
               // H253：加 running 判定——隧道在跑（只是慢/半通）就不 start、不 invalidate
-              everErrored.add(k);
+              // 健康状态机：清单拉取失败计数 +1（≥1 即 degraded；≥3 次且跨度 ≥20s 才 offline）
+              instanceHealth.onListFail(k);
               const instId = ctx.id;
               if (ctx.mode === 'ssh-tunnel' && instId != null) {
                 void ensureTunnelRunning(
@@ -563,19 +570,29 @@ export function useAgents(): {
     refetchInterval: 30_000,
   });
 
-  // 实例离线判定（任务6/10）：fetch 报错 **或 WS 断开** = 离线。
-  // WS 是第一手信号——HTTP 查询有缓存数据时实例死亡不会触发重发，等不出错误态；
-  // 本机（null，键 ''）也计入。
-  const offline: Record<string, boolean> = useMemo(() => {
-    const map: Record<string, boolean> = {};
-    queries.forEach((q, i) => {
-      const k = registry.instances[i]?.id ?? '';
-      // r80：everErrored——pending 重探期间 isError 翻转会让离线门间歇打开（整栏 loading 抖动），
-      // 失败过的实例保持降级直到拉取成功
-      map[k] = q.isError || wsDown[k] || everErrored.has(k) || false;
+  // 实例健康状态机（agent-hub-instance-health，#19 根修）：三态 online/degraded/
+  // offline，语义见 lib/instanceHealth.ts——清单失败计数驱动（≥1 即 degraded 不置灰，
+  // 连续 ≥3 次且跨度 ≥20s 且无存活信号才 offline），被动存活信号（实例域 API 成功 /
+  // events 帧，api 层直打状态机）随时救回 online。旧「isError ∨ wsDown ∨ everErrored
+  // = 离线」三管理面信号直推导 + 无限闩锁废除。WS 断开不进状态机（wsDown 独立持有，
+  // 断开单独发生 → 合成时至多 degraded，事件延迟 ≠ 实例不可达）；连续清单失败照判。
+  const machineStatus = useSyncExternalStore(instanceHealth.subscribe, instanceHealth.snapshot);
+  // 实例集修剪：清单移除的实例不留旧状态（重加同 id 从头判定）
+  const instanceKeys = useMemo(
+    () => new Set(registry.instances.map((c) => c.id ?? '')),
+    [registry.instances],
+  );
+  useEffect(() => {
+    instanceHealth.retain(instanceKeys);
+  }, [instanceKeys]);
+  const health: Record<string, HealthStatus> = useMemo(() => {
+    const map: Record<string, HealthStatus> = {};
+    registry.instances.forEach((ctx) => {
+      const k = ctx.id ?? '';
+      map[k] = statusOf(machineStatus[k] ?? 'online', wsDown[k] ?? false);
     });
     return map;
-  }, [queries, wsDown]);
+  }, [registry.instances, machineStatus, wsDown]);
 
   // 凭据失效 → 侧栏展示用记录（任务10）
   const authError: Record<string, boolean> = useMemo(() => {
@@ -586,13 +603,14 @@ export function useAgents(): {
     return map;
   }, [authFailed]);
 
-  // 任一实例离线/凭据失效时不整栏 loading（任务10：离线实例的 5s 探测会让
+  // 任一实例非 online/凭据失效时不整栏 loading（任务10：失败实例的 5s 重探会让
   // 无数据查询在 pending 间翻转，门控会造成侧栏闪烁消失）
-  const anyDegraded = Object.values(offline).some(Boolean) || Object.keys(authError).length > 0;
+  const anyDegraded =
+    Object.values(health).some((s) => s !== 'online') || Object.keys(authError).length > 0;
 
   // 启动风暴防御：全页 loading 只看本机查询——远程实例首次加载 pending 期间
-  // 不劫持本机 agent 列表（远程未就绪走 offline/everErrored 置灰态，机制见上）
+  // 不劫持本机 agent 列表（远程未就绪走 degraded/offline 呈现，机制见上）
   const localPending = queries.some((q, i) => registry.instances[i]?.id == null && q.isPending);
 
-  return { data, grouped: groupAgents(filterFinishedSubagents(data)), isLoading: instLoading || (localPending && !anyDegraded), tree: tree.data ?? [], registry, instances: registry.instances, offline, authError };
+  return { data, grouped: groupAgents(filterFinishedSubagents(data)), isLoading: instLoading || (localPending && !anyDegraded), tree: tree.data ?? [], registry, instances: registry.instances, health, authError };
 }
