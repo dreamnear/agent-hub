@@ -78,7 +78,7 @@ vi.mock('./hooks/useAgents', () => ({
     tree: [],
     registry: { instances: [{ id: null, name: '本机', mode: 'direct', baseUrl: '', config: null }], apiFor: () => null },
     instances: [{ id: null, name: '本机', mode: 'direct', baseUrl: '', config: null }],
-    offline: {},
+    health: {},
     authError: {},
   }),
 }));

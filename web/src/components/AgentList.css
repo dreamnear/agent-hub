@@ -82,25 +82,15 @@
   min-width: 0;
 }
 
-.inst-group-offline {
-  font-weight: 400;
-  font-size: 0.625rem;
-  color: var(--c-sidebar-icon, #777777);
-}
-
 .inst-group-count {
   margin-left: auto;
   color: var(--c-sidebar-icon, #777777);
   font-weight: 400;
 }
 
-/* 离线组置灰：组头 + 组内桶整体降透明度（其余实例不受影响） */
-.inst-group-head--offline {
-  opacity: 0.55;
-}
-.agent-group-head--offline {
-  opacity: 0.5;
-}
+/* 旧离线组置灰规则（inst-group-head--offline / agent-group-head--offline）已随
+   agent-hub-instance-health 移除：置灰唯一形态 = 行级 .agent-row--muted（仅
+   offline），组级/桶级降透明一律不留双轨。 */
 
 /* 凭据失效态（任务10）：区别于离线置灰——服务可达但 token 无效；
    点击进实例管理重配。侧栏深底两主题不变，用危险红亮色 token */
@@ -113,6 +103,33 @@
   font-size: 0.625rem;
   color: var(--c-danger-bright, #f87171);
   cursor: pointer;
+}
+
+/* 实例健康横幅（agent-hub-instance-health）：degraded = 清单失败、行不置灰，
+   琥珀字 + 可点重试；offline = 唯一置灰态的显式文字解释（置灰落在行上），
+   红字不可点（恢复自动解除，无用户动作）。侧栏深底两主题不变，
+   亮色变体 token 保对比度（同 .inst-group-autherr 取法） */
+.inst-health-banner {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 400;
+  font-size: 0.625rem;
+  text-align: left;
+}
+
+.inst-health-banner--degraded {
+  color: var(--c-warn-bright, #e3b341);
+  cursor: pointer;
+}
+
+.inst-health-banner--degraded:hover {
+  color: var(--c-sidebar-text, #c2c2c2);
+}
+
+.inst-health-banner--offline {
+  color: var(--c-danger-bright, #f87171);
 }
 
 /* 组头：▾/▸ + 组名 + 计数，全宽可点 */
@@ -234,12 +251,14 @@
   border-color: var(--c-sidebar-text, #c2c2c2);
 }
 
-/* 离线节点：chip 本体弱化 + 标记可辨（仍可选——查看该节点残留会话） */
+/* 离线节点（agent-hub-instance-health 重制）：chip 不再整体压暗（0.6 透明度把
+   10px「· 离线」小字压到深底 ~3.6:1 不达对比度），改亮红描边 + 亮红标记可辨；
+   仍可选——查看该节点残留会话 */
 .node-chip--offline {
-  opacity: 0.6;
+  border-color: var(--c-danger-bright, #f87171);
 }
 
 .node-chip-offline {
   font-size: 0.625rem;
-  color: var(--c-sidebar-icon, #9a9a9a);
+  color: var(--c-danger-bright, #f87171);
 }

@@ -43,10 +43,10 @@ const apiFor = vi.hoisted(() => () => ({
   unlistAgent: (...a: unknown[]) => unlistAgentMock(...a),
 }));
 
-/// 实例降级态的可变 mock（任务10 测试用）：默认全干净——离线/凭据失效均无，仅本机。
-/// agents 可覆盖（agent-list-status-grouping G1-G4 多实例渲染测试用；null = FIXTURE）。
+/// 实例健康态的可变 mock（agent-hub-instance-health）：默认全干净——三态均 online，
+/// 仅本机。agents 可覆盖（agent-list-status-grouping G1-G4 多实例渲染测试用；null = FIXTURE）。
 const degradeState = vi.hoisted(() => ({
-  offline: {} as Record<string, boolean>,
+  health: {} as Record<string, 'online' | 'degraded' | 'offline'>,
   authError: {} as Record<string, boolean>,
   instances: [
     { id: null, name: '本机', mode: 'direct', baseUrl: '', config: null },
@@ -64,7 +64,7 @@ vi.mock('../hooks/useAgents', async (importOriginal) => {
       isLoading: false,
       tree: [],
       instances: degradeState.instances,
-      offline: degradeState.offline,
+      health: degradeState.health,
       authError: degradeState.authError,
       registry: {
         instances: degradeState.instances,
@@ -133,7 +133,7 @@ if (typeof (window as unknown as Record<string, unknown>).alert !== 'function') 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  degradeState.offline = {};
+  degradeState.health = {};
   degradeState.authError = {};
   degradeState.instances = [{ id: null, name: '本机', mode: 'direct', baseUrl: '', config: null }];
   degradeState.agents = null;
@@ -557,15 +557,17 @@ describe('AgentList 实例降级态（任务10 能力保留 + 去节点分组适
     ];
   };
 
-  it('G2 离线节点 chip 可辨（· 离线 + 弱化态）仍可选；本机行照常渲染', () => {
+  it('G2 离线节点 chip 可辨（· 离线 + 亮红标记）仍可选；本机行照常渲染；离线横幅带文字解释', () => {
     withRemote();
-    degradeState.offline = { instR: true };
+    degradeState.health = { instR: 'offline' };
     renderList();
     const chip = screen.getByRole('button', { name: /远程机/ });
     expect(chip.textContent).toContain('· 离线');
     expect(chip.className).toContain('node-chip--offline');
     // FIXTURE 会话全本机：列表照常
     expect(screen.getByText('运行中的会话')).toBeTruthy();
+    // offline 显式文字横幅（原组头文案语义平移；置灰唯一形态在行上，此处是解释）
+    expect(screen.getByText(/离线 · 持续无响应/)).toBeTruthy();
   });
 
   it('凭据失效：实例横幅可点跳设置页实例分区（D1 后唯一入口保留）', () => {
@@ -580,9 +582,34 @@ describe('AgentList 实例降级态（任务10 能力保留 + 去节点分组适
 
   it('离线节点零会话时 chip 仍渲染（降级态不静默消失——原组头语义平移）', () => {
     withRemote();
-    degradeState.offline = { instR: true };
+    degradeState.health = { instR: 'offline' };
     renderList();
     expect(screen.getByRole('button', { name: /远程机/ })).toBeTruthy();
+  });
+
+  it('degraded（agent-hub-instance-health）：chip 文案「清单刷新失败 · 点击重试」可点重试，行不置灰', () => {
+    withRemote();
+    degradeState.health = { instR: 'degraded' };
+    degradeState.agents = [...FIXTURE, { ...mk('r1', '远程会话', 'working'), instanceId: 'instR' }];
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    try {
+      const { container } = renderList();
+      // 横幅出现且可点
+      const banner = screen.getByRole('button', { name: /清单刷新失败 · 点击重试/ });
+      expect(banner.textContent).toContain('远程机');
+      fireEvent.click(banner);
+      // 立即重试 = invalidate 该实例 agents 查询
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['agents', 'instR'] });
+      // 行不置灰（degraded ≠ offline）：远程行保持正常透明度
+      const remoteRow = [...container.querySelectorAll('.agent-row-wrap')].find((w) =>
+        w.textContent?.includes('远程会话'),
+      ) as HTMLElement;
+      expect(remoteRow.className).not.toContain('agent-row--muted');
+      // 不出现 offline 横幅
+      expect(screen.queryByText(/离线 · 持续无响应/)).toBeNull();
+    } finally {
+      invalidate.mockRestore();
+    }
   });
 });
 
@@ -622,7 +649,7 @@ describe('侧栏去节点分组渲染（G1-G4）', () => {
 
   it('G2 切节点过滤：选离线节点只显其会话（行置灰），选全部恢复', () => {
     twoNodes();
-    degradeState.offline = { instR: true };
+    degradeState.health = { instR: 'offline' };
     degradeState.agents = mixedAgents();
     const { container } = renderList();
     // 全部视图：远程会话在且行置灰（离线实例行级 muted——G4）

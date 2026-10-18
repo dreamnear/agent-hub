@@ -100,7 +100,7 @@ export default function AgentList({
   onOpenNotes,
   onOpenSessions,
 }: Props): ReactElement {
-  const { grouped, isLoading, tree, instances, offline, authError, registry } = useAgents();
+  const { grouped, isLoading, tree, instances, health, authError, registry } = useAgents();
   // 驱动级降级（急修第二刀）：dsh 收编带认证实例且未配 token → 侧栏「认证失效」banner
   const driverStatus = useQuery({
     queryKey: ['drivers-status'],
@@ -233,8 +233,9 @@ export default function AgentList({
   const multiNode = instances.length > 1;
   const instNameOf = (a: AgentSummary): string =>
     a.instanceId == null ? t('inst.local') : (instances.find((i) => i.id === a.instanceId)?.name ?? '');
-  // 行置灰（G4 离线不回归）：所属实例离线 → 行级降透明（原实例组头置灰语义下沉到行）
-  const isOfflineInst = (a: AgentSummary): boolean => !!offline[a.instanceId ?? ''];
+  // 行置灰（agent-hub-instance-health）：仅 offline（唯一置灰形态）；degraded
+  // 行保持正常透明度（管理通道抖动 ≠ 实例不可达），解释文字走实例健康横幅
+  const isOfflineInst = (a: AgentSummary): boolean => health[a.instanceId ?? ''] === 'offline';
   // 被工程过滤隐藏的会话数（仅空闲/已完成受滤桶统计；节点过滤不计入——那是主动筛选）
   let hiddenCount = 0;
   for (const g of statusGroups) {
@@ -302,7 +303,7 @@ export default function AgentList({
           </button>
           {instances.map((inst) => {
             const chipVal = inst.id ?? 'local';
-            const off = !!offline[inst.id ?? ''];
+            const off = health[inst.id ?? ''] === 'offline';
             return (
               <button
                 key={chipVal}
@@ -318,6 +319,43 @@ export default function AgentList({
             );
           })}
         </div>
+        {/* 实例健康横幅（agent-hub-instance-health）：degraded = 清单失败可点重试
+            （行不置灰）；offline = 置灰态的显式文字解释（恢复自动解除）。均带
+            title 说明，移动端无 hover 也有一眼可读的文案本体 */}
+        {instances.map((inst) => {
+          const key = inst.id ?? '';
+          const st = health[key] ?? 'online';
+          const name = inst.id == null ? t('inst.local') : inst.name;
+          if (st === 'degraded') {
+            return (
+              <p className="sb-empty" key={`health-${key}`}>
+                <button
+                  type="button"
+                  className="inst-health-banner inst-health-banner--degraded"
+                  title={t('sidebar.degradedTitle')}
+                  onClick={() => queryClient.invalidateQueries({ queryKey: ['agents', inst.id] })}
+                >
+                  {name}
+                  {t('sidebar.degraded')}
+                </button>
+              </p>
+            );
+          }
+          if (st === 'offline') {
+            return (
+              <p className="sb-empty" key={`health-${key}`}>
+                <span
+                  className="inst-health-banner inst-health-banner--offline"
+                  title={t('sidebar.offlineBannerTitle')}
+                >
+                  {name}
+                  {t('sidebar.offlineBanner')}
+                </span>
+              </p>
+            );
+          }
+          return null;
+        })}
         {driverAuthErrors.map(([name]) => (
           <p className="sb-empty" key={`drv-auth-${name}`}>
             <button
