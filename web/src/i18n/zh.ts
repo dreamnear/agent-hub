@@ -236,6 +236,10 @@ export const zh: Record<string, string> = {
   'sesshist.titleNamed': '{name} 的历史会话',
   // 切换成功的一次性提示（#18 交互模型 6）
   'sesshist.switchedToast': '已切换到 {name}',
+  // 原地恢复（agent-hub-resume-inplace #21）：toast 说明发生了什么
+  'sesshist.inplaceToast': '已在当前会话原地恢复「{name}」· 历史装载中',
+  'sesshist.spawnBusyToast': '目标会话正忙，已新增行恢复「{name}」',
+  'sesshist.inplaceFailedToast': '原地恢复未生效（会话可能装载失败），视图未变动',
   'sesshist.subtitle': '该工程的历史会话 · 最近优先',
   'sesshist.search': '输入即过滤（摘要 / 分支 / 会话 id）',
   'sesshist.searchLabel': '过滤历史会话',

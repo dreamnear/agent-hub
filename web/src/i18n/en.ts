@@ -233,6 +233,10 @@ export const en: Record<string, string> = {
   'sesshist.title': 'CLI session history',
   'sesshist.titleNamed': '{name} · CLI session history',
   'sesshist.switchedToast': 'Switched to {name}',
+  // In-place resume (agent-hub-resume-inplace #21): the toast states what happened
+  'sesshist.inplaceToast': 'Resumed "{name}" in the current session · loading history',
+  'sesshist.spawnBusyToast': 'Target session is busy — resumed "{name}" in a new row',
+  'sesshist.inplaceFailedToast': 'In-place resume did not take effect (session may have failed to load); view left unchanged',
   'sesshist.subtitle': 'Sessions in this project · recent first',
   'sesshist.search': 'Type to filter (summary / branch / id)',
   'sesshist.searchLabel': 'Filter session history',
