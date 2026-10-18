@@ -12,8 +12,11 @@ interface Props {
   agents: AgentSummary[];
   /** per-instance api（远程实例会话照常按实例路由） */
   api: Api;
-  /** 恢复成功回抛（active = 既有实例条目；resumed = 快照，id 已切新 bg 条目） */
-  onSelect: (a: AgentSummary) => void;
+  /** 选中回抛（原子切换：三态都回抛目标 agent，由 App 切选中 + 主区跟随）；
+   * info.sessionName = 该条会话的可读名（toast 文案用），
+   * info.spawned = 是否新起了 bg 条目（true 时 App 立即失效 agents 查询，
+   * 让新条目尽快进轮询清单——否则窗口内主区顶着快照名、侧栏无高亮） */
+  onSelect: (a: AgentSummary, info: { sessionName: string; spawned: boolean }) => void;
   onClose: () => void;
 }
 
@@ -49,6 +52,11 @@ function fallbackName(r: CliSessionEntry): string {
   return r.branch ? `${date} · ${r.branch}` : date;
 }
 
+/// 条目可读名（行内展示与切换 toast 同源，防两处口径漂移）。
+function displayName(r: CliSessionEntry): string {
+  return r.summary ?? fallbackName(r);
+}
+
 /// 历史会话弹窗（agent-hub-session-history → agent-hub-acp-session-history）：
 /// 某 agent cwd 对应工程的历史会话只读枚举 + 恢复。按驱动路由数据源（服务端
 /// 同端点插拔）：claude → `~/.claude/projects/<slug>/*.jsonl`（`--bg --resume`
@@ -65,6 +73,9 @@ export default function SessionHistoryDialog({
   onClose,
 }: Props): ReactElement {
   const t = useI18n();
+  // 弹窗标题带 agent 名（交互模型 5）：非选中行操作时有明确预期——「这是谁的
+  // 历史会话」。缺名回退 id 前 8 位（AgentRow 同款口径）
+  const agentName = agent.name ?? agent.id.slice(0, 8);
   const [filter, setFilter] = useState('');
   const [resuming, setResuming] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -105,19 +116,37 @@ export default function SessionHistoryDialog({
     setResumeError(null);
     try {
       const r = await api.resumeSession(agent.id, entry.sessionId, endpointDriver);
-      if (r.status === 'active' && r.agent) {
-        // 已有实例在跑：直接选中，不产生重复实例（功能点 6）
-        onSelect(r.agent);
-      } else if (r.status === 'resumed' && r.id) {
-        // 快照兜底（App historySel 机制）：新 bg 条目尚未进轮询清单时仍可选中。
-        // claude：session_id = 原 CLI 会话 → 消息视图按既有分页端点呈现历史转录；
-        // omp（两行型）：恢复 = ACP spawn + session/load，会话归 acp 驱动显示
-        // （omp 文件清单排除注册表活会话），快照 driver 置 acp → 消息/发送路由
-        // ACP 端点
-        const driver = endpointDriver === 'omp' ? 'acp' : agent.driver;
-        onSelect({ ...agent, id: r.id, sessionId: entry.sessionId, driver, group: 'other' });
-      }
-      // current：目标即当前会话，无需动作
+      // 三态统一收敛为「目标 agent」（agent-hub-pick-switch #18 原子切换）：
+      // 服务端三态只回答「后端要不要动作」，不回答「前端视图要不要切」——它按
+      // **入口行 agent** 比对 session_id，对主视图当前选中的是谁一无所知。把
+      // «无需后端动作» 当成 «无需切换» 正是本单根因：非选中行开弹窗、选中该行
+      // 自己的当前会话 → 服务端 current → 前端不回调 → 主区与侧栏纹丝不动。
+      // 故此处判据一律落在前端：三种情形都必须回抛目标 agent，由 App 原子切换。
+      const driver = endpointDriver === 'omp' ? 'acp' : agent.driver;
+      const target: AgentSummary | null =
+        r.status === 'current'
+          ? // 该条 = 入口行 agent 自己的当前会话：后端无需动作，前端切到该行 agent
+            agent
+          : r.status === 'active' && r.agent
+            ? // 已有实例在跑：复用该实例条目，不产生重复实例（功能点 3/6）。
+              // 服务端返回的条目不带实例维（instanceId 是前端聚合层打标），
+              // 远程实例上按实例路由必须由入口行的实例补上，否则选中后消息/
+              // 发送会落到本机 api（跨实例取错数据）
+              { ...r.agent, instanceId: r.agent.instanceId ?? agent.instanceId ?? null }
+            : r.status === 'resumed' && r.id
+              ? // 快照兜底（App historySel 机制）：新 bg 条目尚未进轮询清单时仍可选中。
+                // claude：session_id = 原 CLI 会话 → 消息视图按既有分页端点呈现历史转录；
+                // omp（两行型）：恢复 = ACP spawn + session/load，会话归 acp 驱动显示
+                // （omp 文件清单排除注册表活会话），快照 driver 置 acp → 消息/发送路由
+                // ACP 端点
+                { ...agent, id: r.id, sessionId: entry.sessionId, driver, group: 'other' }
+              : null;
+      // 响应形状意外（三态皆不成立）当作失败：不静默关弹窗，错误可见（交互模型 2）
+      if (target == null) throw new Error(t('sesshist.resumeFailed'));
+      onSelect(target, {
+        sessionName: displayName(entry),
+        spawned: r.status === 'resumed',
+      });
       onClose();
     } catch (e) {
       setResumeError(e instanceof Error ? e.message : String(e));
@@ -131,7 +160,7 @@ export default function SessionHistoryDialog({
       className="dialog-backdrop confirm-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={t('sesshist.title')}
+      aria-label={t('sesshist.titleNamed', { name: agentName })}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -141,7 +170,7 @@ export default function SessionHistoryDialog({
     >
       <div className="dialog-card sesshist-card">
         <div className="history-head">
-          <h2 className="history-title">{t('sesshist.title')}</h2>
+          <h2 className="history-title">{t('sesshist.titleNamed', { name: agentName })}</h2>
           <span className="history-sub">
             {t('sesshist.subtitle')}
             {/* 计数仅取数成功后显示（reviewer MINOR 1）：错误/加载态挂 0 是陈旧值 */}
@@ -179,7 +208,7 @@ export default function SessionHistoryDialog({
               // worktree 会话：转录 cwd 与工程 cwd 不同 → 显示尾段辨识名
               const wt = r.cwd && agent.cwd && r.cwd !== agent.cwd ? pathTail(r.cwd) : null;
               // 名称：清洗后的可读摘要；无可读文本 → 「日期 · 分支」可辨识回退
-              const name = r.summary ?? fallbackName(r);
+              const name = displayName(r);
               return (
                 <li key={r.sessionId}>
                   <button

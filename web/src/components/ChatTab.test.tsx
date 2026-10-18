@@ -1373,3 +1373,46 @@ describe('ChatTab slash 菜单键控（round 3：Enter 误提交中间态修复�
     expect(textarea.value).toBe('/reload-skills '); // 第二候选（同分短名优先）被选中
   });
 });
+
+describe('ChatTab 草稿上行/回落（agent-hub-pick-switch #18 交互模型 4）', () => {
+  // 草稿按会话保留：App 以 per-key 表喂 initialDraft、收 onDraftChange 上行；
+  // 本组件随会话键重挂载，故「打字 → 切走 → 切回」的草稿必须能从 props 复原
+  const setupDraft = (initialDraft?: string) => {
+    vi.spyOn(api, 'subagents').mockResolvedValue([]);
+    vi.spyOn(api, 'getModelSettings').mockResolvedValue({ caps: { canSet: false, canRead: false, supportsThinking: false }, current: null, models: [] });
+    vi.spyOn(api, 'agentTasks').mockResolvedValue([]);
+    vi.spyOn(api, 'sessionActive').mockResolvedValue(false);
+    vi.spyOn(api, 'listCommands').mockResolvedValue([]);
+    const onDraftChange = vi.fn();
+    const { container } = render(
+      qcWrap(<ChatTab agent={agent} initialDraft={initialDraft} onDraftChange={onDraftChange} />),
+    );
+    const textarea = container.querySelector('.chat-input textarea') as HTMLTextAreaElement;
+    return { container, textarea, onDraftChange };
+  };
+
+  it('initialDraft 回填：挂载即恢复该会话上次未发送草稿', () => {
+    const { textarea } = setupDraft('半截的草稿');
+    expect(textarea.value).toBe('半截的草稿');
+  });
+
+  it('未传 initialDraft 时保持空（缺省零破坏）', () => {
+    const { textarea } = setupDraft();
+    expect(textarea.value).toBe('');
+  });
+
+  it('输入变更上行 onDraftChange（App 按会话键存表）', () => {
+    const { textarea, onDraftChange } = setupDraft('');
+    fireEvent.change(textarea, { target: { value: '新输入' } });
+    expect(onDraftChange).toHaveBeenLastCalledWith('新输入');
+  });
+
+  it('发送清空同样上行空串（草稿不复活）', () => {
+    vi.spyOn(api, 'sendMessage').mockResolvedValue();
+    const { textarea, onDraftChange } = setupDraft('待发内容');
+    const form = textarea.closest('form') as HTMLFormElement;
+    fireEvent.submit(form);
+    expect(textarea.value).toBe('');
+    expect(onDraftChange).toHaveBeenLastCalledWith('');
+  });
+});

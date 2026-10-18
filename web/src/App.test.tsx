@@ -12,6 +12,7 @@ const stubs = vi.hoisted(() => ({
   renderAgentList: null as null | ((props: {
     onSelect: (a: { id: string }) => void;
     onRemoved: (id: string) => void;
+    onOpenSessions: (a: { id: string }) => void;
   }) => ReactElement),
   renderQuickChat: null as null | ((props: { onPick: (a: { id: string }) => void }) => ReactElement),
   // ChatTab 桩每次挂载记录 agent id，用于断言挂载确实发生
@@ -22,6 +23,11 @@ const stubs = vi.hoisted(() => ({
   notesMounts: [] as string[],
   // Git 面板（会话 cwd 版）经 App 回退 api 调用；记调用断言 cwd 跟随
   gitStatus: vi.fn(),
+  // 历史会话弹窗（#18 原子切换）取数/恢复可配桩
+  cliSessions: [] as unknown[],
+  resume: vi.fn(),
+  // ChatTab 桩每次渲染记录草稿协议入参（per-key 喂回断言用）
+  draftProps: { id: '', initialDraft: '', onDraftChange: undefined as undefined | ((t: string) => void) },
 }));
 
 // App 渲染链全量替身：数据 hooks/面板组件各自发请求，此处只测抽屉遮罩（反馈轮 25-A）
@@ -55,6 +61,8 @@ vi.mock('./api', () => ({
     docsList: () => Promise.resolve([]),
     docsFile: () => Promise.resolve({ kind: 'text', name: 'm.txt', content: 'x', size: 1 }),
     terminalWsUrl: (cwd: string) => `ws://hub.test/ws/terminal?cwd=${encodeURIComponent(cwd)}`,
+    cliSessions: () => Promise.resolve(stubs.cliSessions),
+    resumeSession: (...a: unknown[]) => stubs.resume(...a),
   },
   captureUrlToken: () => false,
   clearStoredToken: () => {},
@@ -77,7 +85,11 @@ vi.mock('./hooks/useAgents', () => ({
 vi.mock('./components/AgentList', async () => {
   const { useEffect } = await import('react');
   return {
-    default: (props: { onSelect: (a: { id: string }) => void; onRemoved: (id: string) => void }) => {
+    default: (props: {
+      onSelect: (a: { id: string }) => void;
+      onRemoved: (id: string) => void;
+      onOpenSessions: (a: { id: string }) => void;
+    }) => {
       useEffect(() => {
         stubs.listMounts.push('m');
       }, []);
@@ -90,15 +102,37 @@ vi.mock('./components/ProjectSidebar', () => ({ default: () => null }));
 vi.mock('./components/ChatTab', async () => {
   const { useEffect } = await import('react');
   return {
-    default: (props: { agent: { id: string }; onOpenTerminal?: () => void }) => {
+    default: (props: {
+      agent: { id: string };
+      onOpenTerminal?: () => void;
+      initialDraft?: string;
+      onDraftChange?: (t: string) => void;
+    }) => {
       useEffect(() => {
         stubs.chatMounts.push(props.agent.id);
       }, []);
-      return props.onOpenTerminal ? (
-        <button type="button" data-testid="open-terminal" onClick={props.onOpenTerminal}>
-          term
-        </button>
-      ) : null;
+      // 草稿协议入参记录：per-key 喂回（initialDraft）与上行（onDraftChange）断言用
+      stubs.draftProps = {
+        id: props.agent.id,
+        initialDraft: props.initialDraft ?? '',
+        onDraftChange: props.onDraftChange,
+      };
+      return (
+        <>
+          {props.onOpenTerminal ? (
+            <button type="button" data-testid="open-terminal" onClick={props.onOpenTerminal}>
+              term
+            </button>
+          ) : null}
+          <button
+            type="button"
+            data-testid="type-draft"
+            onClick={() => props.onDraftChange?.('半截草稿')}
+          >
+            type
+          </button>
+        </>
+      );
     },
   };
 });
@@ -1051,5 +1085,112 @@ describe('App 终端页签（agent-hub-terminal T1/T2/T3）', () => {
     await waitFor(() =>
       expect(container.querySelector('.main-tab--active')?.textContent).toContain('m.txt'),
     );
+  });
+});
+
+describe('App 历史会话原子切换 + 草稿保留（agent-hub-pick-switch #18）', () => {
+  const agentA = { id: 'agt-a', name: '小甲', sessionId: 'sess-a', instanceId: null } as never;
+  const agentB = { id: 'agt-b', name: '小乙', sessionId: 'sess-b', instanceId: null } as never;
+  const entryB = {
+    sessionId: 'sess-b',
+    mtimeSecs: 1_790_000_000,
+    sizeBytes: 2048,
+    branch: 'main',
+    cwd: '/repo/proj',
+    summary: '小乙的历史会话',
+  };
+
+  beforeEach(() => {
+    stubs.agents = [agentA, agentB];
+    stubs.chatMounts.length = 0;
+    stubs.cliSessions = [entryB];
+    stubs.resume = vi.fn().mockResolvedValue({ status: 'current' });
+    stubs.renderAgentList = (props) => (
+      <>
+        <button type="button" data-testid="row-a" onClick={() => props.onSelect(agentA)}>
+          a
+        </button>
+        <button type="button" data-testid="row-b" onClick={() => props.onSelect(agentB)}>
+          b
+        </button>
+        <button type="button" data-testid="hist-b" onClick={() => props.onOpenSessions(agentB)}>
+          b-history
+        </button>
+      </>
+    );
+  });
+
+  it('current 路径：#18 根因回归——非选中行弹窗选中该行自己的当前会话 → 主区切到该 agent + toast', async () => {
+    // 用户先在 A；从 B 行开历史、选中 B 自己的当前会话（服务端 current）
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    expect(stubs.chatMounts).toEqual(['agt-a']);
+
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    // 弹窗标题带 agent 名（交互模型 5）
+    expect(container.querySelector('.history-title')?.textContent).toBe('小乙 的历史会话');
+    fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+
+    // 主区切到 B（重挂载 = 原子切换的主区一环），弹窗关闭，toast 出现
+    await waitFor(() => expect(stubs.chatMounts).toEqual(['agt-a', 'agt-b']));
+    expect(container.querySelector('.sesshist-card')).toBeNull();
+    expect(container.querySelector('.toast')?.textContent).toBe('已切换到 小乙的历史会话');
+  });
+
+  it('resumed 路径：新 bg 条目快照承接主区，toast 同现', async () => {
+    stubs.resume = vi.fn().mockResolvedValue({ status: 'resumed', id: 'bg-new' });
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+    await waitFor(() => expect(stubs.chatMounts).toContain('bg-new'));
+    expect(container.querySelector('.toast')?.textContent).toBe('已切换到 小乙的历史会话');
+  });
+
+  it('恢复失败：视图不动、无 toast、弹窗留场显示错误（交互模型 2）', async () => {
+    stubs.resume = vi.fn().mockRejectedValue(new Error('resume 挂了'));
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+    await waitFor(() => expect(container.textContent).toContain('resume 挂了'));
+    expect(stubs.chatMounts).toEqual(['agt-a']); // 停在原地
+    expect(container.querySelector('.toast')).toBeNull();
+    expect(container.querySelector('.sesshist-card')).not.toBeNull();
+  });
+
+  it('草稿跨切换保留：A 打字 → 切 B（不带出）→ 切回 A（草稿仍在）（交互模型 4）', async () => {
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    expect(stubs.draftProps.id).toBe('agt-a');
+    expect(stubs.draftProps.initialDraft).toBe('');
+    // A 输入半截草稿（上行到 App 的 per-key 表）
+    fireEvent.click(container.querySelector('[data-testid="type-draft"]') as HTMLElement);
+
+    fireEvent.click(container.querySelector('[data-testid="row-b"]') as HTMLElement);
+    expect(stubs.draftProps.id).toBe('agt-b');
+    expect(stubs.draftProps.initialDraft).toBe(''); // B 不串味
+
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    expect(stubs.draftProps.id).toBe('agt-a');
+    expect(stubs.draftProps.initialDraft).toBe('半截草稿'); // 切回 A 草稿复原
   });
 });

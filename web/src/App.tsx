@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactElement } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAgents, familyAnchors } from './hooks/useAgents';
 import ProjectSidebar from './components/ProjectSidebar';
@@ -27,6 +27,7 @@ import SettingsPage, { lastSettingsSection, type SettingsSectionKey } from './co
 import TokenGate from './components/TokenGate';
 import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialog';
 import SessionHistoryDialog from './components/SessionHistoryDialog';
+import Toast from './components/Toast';
 import { api, clearStoredToken, onUnauthorized } from './api';
 import { useI18n } from './i18n';
 import type { AgentSummary } from './types';
@@ -83,6 +84,16 @@ export default function App(): ReactElement {
   // 快照退位，group 恢复实时口径；不复活则保持完成态快照（只读历史照常可看）。
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [historySel, setHistorySel] = useState<AgentSummary | null>(null);
+  // 未发送草稿按会话键保留（agent-hub-pick-switch #18 交互模型 4）：ChatTab 是
+  // 会话键重挂载组件（切会话 = 新实例），草稿若留组件本地态必丢。此处按复合键
+  // 存一份、挂载时喂回，故「前 agent 打字 → 切走 → 切回」草稿仍在，且各 agent
+  // 各存各的（切到 B 不会带出 A 的草稿）。
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // 同值不写（返回原引用）：ChatTab 的草稿上行 effect 每次渲染都跑，无此守卫会
+  // 造成「写状态 → App 重渲 → effect 再跑」的自激环
+  const setDraft = useCallback((key: string, text: string): void => {
+    setDrafts((d) => (d[key] === text ? d : { ...d, [key]: text }));
+  }, []);
   const selected =
     selectedKey != null
       ? (data.find((a) => selectKey(a) === selectedKey) ??
@@ -186,6 +197,15 @@ export default function App(): ReactElement {
   const [notesFor, setNotesFor] = useState<AgentSummary | null>(null);
   // CLI 历史会话弹窗（agent-hub-session-history）：⋯ 菜单开；恢复成功 onSelect 切选中
   const [sessionsFor, setSessionsFor] = useState<AgentSummary | null>(null);
+  // 一次性提示条（agent-hub-pick-switch #18 交互模型 6）：切换成功提示「已切换到
+  // <会话名>」，自动消失、不阻塞。计时器挂状态不挂 Toast 组件内——父级因轮询
+  // 频繁重渲，组件内定时器会被反复重置而永不消失。
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (toast == null) return;
+    const timer = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(timer);
+  }, [toast]);
   // token 门禁：仅 allow_lan 模式遇 401 触发；localhost 不触发
   const [needToken, setNeedToken] = useState(false);
   // 面板宽度（工程 + Git + 文件三视图各自持久化 hub_panel_right_w /
@@ -594,6 +614,10 @@ export default function App(): ReactElement {
                   key={`${selected.instanceId ?? ''}:${selected.id}`}
                   agent={selected}
                   api={selectedApi ?? undefined}
+                  // 草稿按会话键保留（#18 交互模型 4）：key 换即重挂载，草稿从
+                  // App 的 per-key 表喂回，切走再切回不丢、跨 agent 不串味
+                  initialDraft={selectedKey != null ? (drafts[selectedKey] ?? '') : ''}
+                  onDraftChange={(text) => setDraft(selectedKey ?? '', text)}
                   onClose={closeSelected}
                   onOpenSidebar={() => setLeftOpen(true)}
                   notesOpen={notesFor?.cwd === selected.cwd}
@@ -829,20 +853,27 @@ export default function App(): ReactElement {
           onClose={() => setNotesFor(null)}
         />
       ) : null}
-      {/* CLI 历史会话弹窗（agent-hub-session-history）：恢复成功 = 快照兜底 + 切选中
-          （selectAgent 走复合键；新 bg 条目未进轮询清单时 historySel 承接，同 HistoryDialog 语义） */}
+      {/* CLI 历史会话弹窗（agent-hub-session-history）：选中 = 原子切换
+          （agent-hub-pick-switch #18：选中 agent + 活跃会话 + 主区转录三者同切）——
+          selectAgent 走复合键；新 bg 条目未进轮询清单时 historySel 快照承接，
+          同 HistoryDialog 语义。spawned = 新条目标条目尚未在清单里，立即失效
+          agents 查询把新条目尽快拉进来（否则受 WS 失效节流 5s 影响，窗口期内
+          主区顶着快照名、侧栏无任何高亮，看着像「没切」） */}
       {sessionsFor ? (
         <SessionHistoryDialog
           agent={sessionsFor}
           agents={data}
           api={registry.apiFor(sessionsFor.instanceId ?? null) ?? api}
-          onSelect={(a) => {
+          onSelect={(a, info) => {
             setHistorySel(a);
             selectAgent(a);
+            setToast(t('sesshist.switchedToast', { name: info.sessionName }));
+            if (info.spawned) void queryClient.invalidateQueries({ queryKey: ['agents'] });
           }}
           onClose={() => setSessionsFor(null)}
         />
       ) : null}
+      {toast != null ? <Toast text={toast} /> : null}
       {needToken ? <TokenGate onUnlocked={unlock} /> : null}
     </div>
   );
