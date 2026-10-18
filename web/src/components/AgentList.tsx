@@ -151,7 +151,7 @@ export default function AgentList({
       onOpenNotes(a);
       return;
     }
-    // CLI 历史会话（agent-hub-session-history）：仅 claude 行有入口（AgentRow 已限）
+    // 历史会话（agent-hub-acp-session-history）：claude/omp 行有入口（AgentRow 已限）
     if (action === 'sessions') {
       onOpenSessions(a);
       return;

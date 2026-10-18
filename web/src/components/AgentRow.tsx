@@ -77,13 +77,19 @@ export default function AgentRow({
   // ocr-review 中：Logs/Stop/Respawn/删除是 claude 专属端点（/api/agents/claude/...），
   // ACP 行隐藏（中断在 AgentList.handleAction 分流 cancelAcpSession）
   const isClaude = agent.driver !== 'acp';
-  // R4 自验修正：历史会话的数据源是 claude CLI 转录目录，仅 claude 行显示
-  // （isClaude 判据含 pi 等其他驱动，点开必然 400——需求口径「claude agent 行」）
   const isClaudeDriver = agent.driver === 'claude';
   // R4 追加（tester 观察 1 查证）：所有非 claude 驱动的 AgentCatalog::logs 均返回
   // unsupported（pi 1078/opencode 401/dsh 863/omp 627/acp 584 各处）——Logs 项只有
-  // claude 行有意义，判据与「历史会话」同源收紧
+  // claude 行有意义
   const hasLogs = isClaudeDriver;
+  // 历史会话入口（agent-hub-acp-session-history，用户拍板开放范围 = claude + omp）：
+  // claude → CLI 转录目录；omp → sessions 目录 + session/load 恢复。omp 生态有两种
+  // 行型——omp 文件扫描行（driver='omp'）与 hub-spawn 的 ACP 行（driver='acp'、
+  // name=acp agent 名）：注册表活会话被 omp 清单排除，常规路径「hub 开 omp 会话 →
+  // 恢复历史」入口落在 ACP 行上，须同放（R1 tester FAIL-1）。其余 ACP agent
+  // （元数据薄弱）不开放——不出现点了信息残缺或必失败的入口
+  const isOmpAcp = agent.driver === 'acp' && agent.name === 'omp';
+  const hasSessions = isClaudeDriver || agent.driver === 'omp' || isOmpAcp;
 
   const run = (action: SessionAction): void => {
     setMenuOpen(false);
@@ -160,14 +166,14 @@ export default function AgentRow({
               <div className="agent-row-menu-backdrop" onClick={() => setMenuOpen(false)} />
               <div className="agent-row-menu" ref={menuRef} role="menu" style={menuPos ?? undefined}>
                 {/* 非危险操作：Logs（claude 专属，其余驱动 logs 端点均 unsupported）/
-                    历史会话（agent-hub-session-history，claude 专属）/ 工程便签
-                    （agent-hub-notes）/ 中断 */}
+                    历史会话（agent-hub-acp-session-history，claude + omp 生态两行型开放）/
+                    工程便签（agent-hub-notes）/ 中断 */}
                 {hasLogs ? (
                   <button type="button" role="menuitem" onClick={() => run('logs')}>
                     Logs
                   </button>
                 ) : null}
-                {isClaudeDriver ? (
+                {hasSessions ? (
                   <button type="button" role="menuitem" onClick={() => run('sessions')}>
                     {t('row.sessions')}
                   </button>

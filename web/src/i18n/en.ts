@@ -231,7 +231,7 @@ export const en: Record<string, string> = {
 
   // CLI session history dialog (agent-hub-session-history)
   'sesshist.title': 'CLI session history',
-  'sesshist.subtitle': 'Claude sessions in this project · recent first',
+  'sesshist.subtitle': 'Sessions in this project · recent first',
   'sesshist.search': 'Type to filter (summary / branch / id)',
   'sesshist.searchLabel': 'Filter session history',
   'sesshist.empty': 'No sessions in this project yet',
