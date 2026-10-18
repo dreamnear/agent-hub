@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Api } from '../api';
 import type { AgentSummary, CliSessionEntry } from '../types';
-import { resolveResumeRoute, type ResumeSpawnReason } from '../lib/resumeRoute';
+import { isInjectableSessionId, resolveResumeRoute, type ResumeSpawnReason } from '../lib/resumeRoute';
 import { useI18n } from '../i18n';
 import './SessionHistoryDialog.css';
 
@@ -144,10 +144,10 @@ export default function SessionHistoryDialog({
         selected,
       });
       if (route.kind === 'inplace') {
-        // 注入文本白名单校验（后端 resume_session 同款纪律：sessionId 只作参数
-        // 不作路径/命令结构）——非法 id 直接报错，不发注入
+        // 注入 id 白名单（UUID 正则，lib/resumeRoute）：黑名单封不住换行的命令
+        // 分隔向量（/resume <sid>\nX 第二行成独立命令）——非法 id 直接报错，不发注入
         const sid = entry.sessionId;
-        if (sid === '' || sid.includes('/') || sid.includes('\\') || sid.includes('..')) {
+        if (!isInjectableSessionId(sid)) {
           throw new Error(t('sesshist.resumeFailed'));
         }
         await api.sendMessage(route.agent.id, `/resume ${sid}`, route.agent.driver);

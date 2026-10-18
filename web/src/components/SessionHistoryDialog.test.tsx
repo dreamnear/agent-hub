@@ -251,19 +251,22 @@ describe('SessionHistoryDialog（agent-hub-session-history）', () => {
 });
 
 describe('SessionHistoryDialog · 原地恢复路由（agent-hub-resume-inplace #21）', () => {
+  // 注入白名单为 UUID 正则（round1 审查 MINOR 收紧）——inplace 用例 id 用合法 UUID
+  const SID = 'a1b2c3d4-e5f6-7890-abcd-ef0123456789';
   it('死会话 + 选中行活着 idle 同工程 → 注入 /resume 原地装载（不打 resume-session）', async () => {
     const selected = mkAgent({ id: 'agt-sel', sessionId: 'sess-live' });
     const resumeSession = vi.fn();
     const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const api = mkApi(vi.fn().mockResolvedValue([entry()]), resumeSession, sendMessage);
+    const api = mkApi(vi.fn().mockResolvedValue([entry({ sessionId: SID })]), resumeSession, sendMessage);
     const onSelect = vi.fn();
     const onClose = vi.fn();
-    renderDialog(api, onSelect, onClose, [], mkAgent(), selected);
+    // selected 必须在活跃清单（路由活判前提，round1 审查 BLOCKER 2）
+    renderDialog(api, onSelect, onClose, [selected], mkAgent(), selected);
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
     // 注入走既有 /message 管道：目标 = 当前选中行，text = /resume <sessionId>
-    expect(sendMessage).toHaveBeenCalledWith('agt-sel', '/resume aaaa-old', 'claude');
+    expect(sendMessage).toHaveBeenCalledWith('agt-sel', `/resume ${SID}`, 'claude');
     expect(resumeSession).not.toHaveBeenCalled(); // 后端 spawn 路径未触发
     // 行不变：回抛选中行自己 + mode inplace（App 启动装载跟随，不切行）
     expect(onSelect.mock.calls[0][0]).toEqual(expect.objectContaining({ id: 'agt-sel' }));
@@ -271,7 +274,7 @@ describe('SessionHistoryDialog · 原地恢复路由（agent-hub-resume-inplace 
       sessionName: '旧会话摘要',
       spawned: false,
       mode: 'inplace',
-      targetSessionId: 'aaaa-old',
+      targetSessionId: SID,
     });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -282,7 +285,7 @@ describe('SessionHistoryDialog · 原地恢复路由（agent-hub-resume-inplace 
     const sendMessage = vi.fn();
     const api = mkApi(vi.fn().mockResolvedValue([entry()]), resumeSession, sendMessage);
     const onSelect = vi.fn();
-    renderDialog(api, onSelect, vi.fn(), [], mkAgent(), selected);
+    renderDialog(api, onSelect, vi.fn(), [selected], mkAgent(), selected);
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
@@ -300,7 +303,7 @@ describe('SessionHistoryDialog · 原地恢复路由（agent-hub-resume-inplace 
     const sendMessage = vi.fn();
     const api = mkApi(vi.fn().mockResolvedValue([entry()]), resumeSession, sendMessage);
     const onSelect = vi.fn();
-    renderDialog(api, onSelect, vi.fn(), [live], mkAgent(), selected);
+    renderDialog(api, onSelect, vi.fn(), [live, selected], mkAgent(), selected);
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
@@ -314,10 +317,10 @@ describe('SessionHistoryDialog · 原地恢复路由（agent-hub-resume-inplace 
   it('注入失败（/message 拒绝）→ 错误内联显示、弹窗不关、无回抛（视图不动）', async () => {
     const selected = mkAgent({ id: 'agt-sel', sessionId: 'sess-live' });
     const sendMessage = vi.fn().mockRejectedValue(new Error('inject 被拒'));
-    const api = mkApi(vi.fn().mockResolvedValue([entry()]), undefined, sendMessage);
+    const api = mkApi(vi.fn().mockResolvedValue([entry({ sessionId: SID })]), undefined, sendMessage);
     const onSelect = vi.fn();
     const onClose = vi.fn();
-    renderDialog(api, onSelect, onClose, [], mkAgent(), selected);
+    renderDialog(api, onSelect, onClose, [selected], mkAgent(), selected);
     await waitFor(() => expect(itemButtons().length).toBe(1));
     fireEvent.click(itemButtons()[0]);
     await waitFor(() => expect(screen.getByText(/inject 被拒/)).toBeTruthy());

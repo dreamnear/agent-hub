@@ -1213,9 +1213,9 @@ describe('App 原地恢复（agent-hub-resume-inplace #21）', () => {
     name: '小乙', sessionId: 'sess-b', instanceId: null,
   } as never;
   const deadEntry = {
-    sessionId: 'dead-sess', mtimeSecs: 1_790_000_000, sizeBytes: 2048,
-    branch: 'main', cwd: '/repo/proj', summary: '死会话',
-  };
+    sessionId: 'a1b2c3d4-e5f6-7890-abcd-ef0123456789', mtimeSecs: 1_790_000_000,
+    sizeBytes: 2048, branch: 'main', cwd: '/repo/proj', summary: '死会话',
+  }; // sessionId 须合法 UUID（注入白名单，round1 审查 MINOR 收紧）
 
   beforeEach(() => {
     stubs.agents = [agentA, agentB];
@@ -1252,7 +1252,11 @@ describe('App 原地恢复（agent-hub-resume-inplace #21）', () => {
 
     // 注入走 /message 管道打当前选中行；后端 spawn 路径未触发
     await waitFor(() => expect(stubs.sendMessage).toHaveBeenCalledTimes(1));
-    expect(stubs.sendMessage).toHaveBeenCalledWith('agt-a', '/resume dead-sess', 'claude');
+    expect(stubs.sendMessage).toHaveBeenCalledWith(
+      'agt-a',
+      `/resume ${deadEntry.sessionId}`,
+      'claude',
+    );
     expect(stubs.resume).not.toHaveBeenCalled();
     // 行不变：ChatTab 无重挂（无新 mount），弹窗关、toast 原地恢复
     expect(stubs.chatMounts).toEqual(['agt-a']);
