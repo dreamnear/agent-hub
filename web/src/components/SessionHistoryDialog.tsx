@@ -2,21 +2,35 @@ import { useMemo, useState, type ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Api } from '../api';
 import type { AgentSummary, CliSessionEntry } from '../types';
+import { isInjectableSessionId, resolveResumeRoute, type ResumeSpawnReason } from '../lib/resumeRoute';
 import { useI18n } from '../i18n';
 import './SessionHistoryDialog.css';
+
+/// 恢复结果回抛信息（App 据 mode 分流 toast、据 targetSessionId 启动装载跟随）：
+/// - mode 'inplace'：已向当前选中 TUI 注入 /resume 原地装载（App 启动 watcher +
+///   行名跟随被恢复会话）
+/// - mode 'reuse'：复用现有行（原子切换，#18 语义）
+/// - mode 'spawn'：新行恢复（spawned=true 时 App 立即失效 agents 查询让新条目
+///   尽快进轮询清单；reason='busy' 时 App 用专属 toast 说明为何没原地装）
+export interface SessionResumeInfo {
+  sessionName: string;
+  spawned: boolean;
+  mode: 'reuse' | 'spawn' | 'inplace';
+  spawnReason?: ResumeSpawnReason;
+  targetSessionId?: string;
+}
 
 interface Props {
   /** 入口 agent 行：cwd 定工程、id 供端点寻址、instanceId 定实例 */
   agent: AgentSummary;
   /** 活跃清单（App 轮询 data）：sessionId 命中 → 运行中徽标 + 恢复走复用 */
   agents: AgentSummary[];
+  /** 主视图当前选中行（null = 无选中）：死会话原地注入的路由判据之一 */
+  selected: AgentSummary | null;
   /** per-instance api（远程实例会话照常按实例路由） */
   api: Api;
-  /** 选中回抛（原子切换：三态都回抛目标 agent，由 App 切选中 + 主区跟随）；
-   * info.sessionName = 该条会话的可读名（toast 文案用），
-   * info.spawned = 是否新起了 bg 条目（true 时 App 立即失效 agents 查询，
-   * 让新条目尽快进轮询清单——否则窗口内主区顶着快照名、侧栏无高亮） */
-  onSelect: (a: AgentSummary, info: { sessionName: string; spawned: boolean }) => void;
+  /** 选中回抛（原子切换：三态都回抛目标 agent，由 App 切选中 + 主区跟随） */
+  onSelect: (a: AgentSummary, info: SessionResumeInfo) => void;
   onClose: () => void;
 }
 
@@ -61,6 +75,9 @@ function displayName(r: CliSessionEntry): string {
 /// 某 agent cwd 对应工程的历史会话只读枚举 + 恢复。按驱动路由数据源（服务端
 /// 同端点插拔）：claude → `~/.claude/projects/<slug>/*.jsonl`（`--bg --resume`
 /// 恢复）；omp → sessions 目录扫描（ACP `session/load` 恢复，快照切 acp 驱动）。
+/// 恢复路由（agent-hub-resume-inplace #21，裁决在 lib/resumeRoute）：运行中复用
+/// 现有行；死会话且当前选中行活着 idle 同工程 → 向选中 TUI 注入 /resume 原地
+/// 装载（行与任务 id 不变）；其余（无选中/忙/异驱动/异工程）回退 spawn 新行。
 /// 与全局 HistoryDialog 并存不合并——那边是「hub 已知非活跃会话」（hub 注册表），
 /// 这边是「CLI 侧工程会话全量」（含 hub 从未接管的会话），数据源不同。
 /// 行内口径对齐 CLI resume 选择器：相对时间 · 分支 · 体积 · worktree · 摘要
@@ -68,6 +85,7 @@ function displayName(r: CliSessionEntry): string {
 export default function SessionHistoryDialog({
   agent,
   agents,
+  selected,
   api,
   onSelect,
   onClose,
@@ -115,6 +133,34 @@ export default function SessionHistoryDialog({
     setResuming(entry.sessionId);
     setResumeError(null);
     try {
+      // 路由裁决前置（agent-hub-resume-inplace #21）：死会话且当前选中行活着
+      // 且 idle 且同工程 → 不打后端 resume（那会直接 spawn 新行），改向选中 TUI
+      // 注入 /resume 原地装载；其余路径与现状一致（后端三态 current/active/
+      // resumed 照旧，注入/spawn 路径互斥不重叠）
+      const route = resolveResumeRoute({
+        sessionId: entry.sessionId,
+        entry: agent,
+        activeAgents: agents,
+        selected,
+      });
+      if (route.kind === 'inplace') {
+        // 注入 id 白名单（UUID 正则，lib/resumeRoute）：黑名单封不住换行的命令
+        // 分隔向量（/resume <sid>\nX 第二行成独立命令）——非法 id 直接报错，不发注入
+        const sid = entry.sessionId;
+        if (!isInjectableSessionId(sid)) {
+          throw new Error(t('sesshist.resumeFailed'));
+        }
+        await api.sendMessage(route.agent.id, `/resume ${sid}`, route.agent.driver);
+        // 行不变：回抛选中行自己（App 不切行、启动装载跟随 + 行名跟随会话名）
+        onSelect(route.agent, {
+          sessionName: displayName(entry),
+          spawned: false,
+          mode: 'inplace',
+          targetSessionId: sid,
+        });
+        onClose();
+        return;
+      }
       const r = await api.resumeSession(agent.id, entry.sessionId, endpointDriver);
       // 三态统一收敛为「目标 agent」（agent-hub-pick-switch #18 原子切换）：
       // 服务端三态只回答「后端要不要动作」，不回答「前端视图要不要切」——它按
@@ -146,6 +192,10 @@ export default function SessionHistoryDialog({
       onSelect(target, {
         sessionName: displayName(entry),
         spawned: r.status === 'resumed',
+        // 后端 resumed = 新行恢复（含路由裁决回退的 busy/no-agent/cwd/driver），
+        // current/active = 复用现有行
+        mode: r.status === 'resumed' ? 'spawn' : 'reuse',
+        spawnReason: route.kind === 'spawn' ? route.reason : undefined,
       });
       onClose();
     } catch (e) {

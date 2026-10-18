@@ -29,6 +29,7 @@ import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialo
 import SessionHistoryDialog from './components/SessionHistoryDialog';
 import Toast from './components/Toast';
 import { api, clearStoredToken, onUnauthorized } from './api';
+import { useInplaceResumeWatch } from './hooks/useInplaceResumeWatch';
 import { useI18n } from './i18n';
 import type { AgentSummary } from './types';
 import './App.css';
@@ -73,7 +74,21 @@ function selectKey(a: AgentSummary): string {
 export default function App(): ReactElement {
   const queryClient = useQueryClient();
   const t = useI18n();
-  const { data, registry, tree } = useAgents();
+  const { data: polled, registry, tree } = useAgents();
+  // 行名跟随（agent-hub-resume-inplace #21 功能点 5）：原地恢复后该行显示名改为
+  // 被恢复会话的名（行 id/任务 id 不变，只覆写展示名）。在数据入口统一派生，
+  // 侧栏行 / 主区标题 / 弹窗标题等全部下游自然跟随，无需逐组件传透
+  const [nameOverrides, setNameOverrides] = useState<Record<string, string>>({});
+  const data = useMemo(
+    () =>
+      Object.keys(nameOverrides).length === 0
+        ? polled
+        : polled.map((a) => {
+            const name = nameOverrides[a.id];
+            return name != null && a.name !== name ? { ...a, name } : a;
+          }),
+    [polled, nameOverrides],
+  );
   // 工程族锚（历史会话分区过滤同款语义；推导同 AgentList）
   const anchors = familyAnchors(tree);
   // 选中只存复合键（`${instanceId}:${agentId}`，任务7：跨实例 agentId 碰撞）——
@@ -206,6 +221,21 @@ export default function App(): ReactElement {
     const timer = setTimeout(() => setToast(null), 2600);
     return () => clearTimeout(timer);
   }, [toast]);
+  // 原地恢复装载跟随（agent-hub-resume-inplace #21 路由 2）：/resume 注入后
+  // 有界等待 watcher 把选中行 sessionId 跟随到目标会话——命中静默收尾（视图
+  // 自然跟随），超时明确报错（TUI 未装载，视图不动）。心跳失效 agents 查询
+  // 加速拾取，不让用户干等轮询周期
+  const refreshAgents = useCallback((): void => {
+    void queryClient.invalidateQueries({ queryKey: ['agents'] });
+  }, [queryClient]);
+  const onInplaceTimeout = useCallback((): void => {
+    setToast(t('sesshist.inplaceFailedToast'));
+  }, [t]);
+  const startResumeWatch = useInplaceResumeWatch({
+    agents: data,
+    onTimeout: onInplaceTimeout,
+    refresh: refreshAgents,
+  });
   // token 门禁：仅 allow_lan 模式遇 401 触发；localhost 不触发
   const [needToken, setNeedToken] = useState(false);
   // 面板宽度（工程 + Git + 文件三视图各自持久化 hub_panel_right_w /
@@ -858,16 +888,33 @@ export default function App(): ReactElement {
           selectAgent 走复合键；新 bg 条目未进轮询清单时 historySel 快照承接，
           同 HistoryDialog 语义。spawned = 新条目标条目尚未在清单里，立即失效
           agents 查询把新条目尽快拉进来（否则受 WS 失效节流 5s 影响，窗口期内
-          主区顶着快照名、侧栏无任何高亮，看着像「没切」） */}
+          主区顶着快照名、侧栏无任何高亮，看着像「没切」）。
+          恢复路由（agent-hub-resume-inplace #21）：inplace = 已向当前选中 TUI
+          注入 /resume 原地装载——不切行、toast 说明 + 行名跟随会话名 + 启动
+          装载跟随（watcher 刷新 sessionId 后消息视图自然跟随，超时明确报错）；
+          spawn+busy = 选中行正忙没法注入，新行恢复并如实说明；其余沿用 #18 语义 */}
       {sessionsFor ? (
         <SessionHistoryDialog
           agent={sessionsFor}
           agents={data}
+          selected={selected}
           api={registry.apiFor(sessionsFor.instanceId ?? null) ?? api}
           onSelect={(a, info) => {
             setHistorySel(a);
             selectAgent(a);
-            setToast(t('sesshist.switchedToast', { name: info.sessionName }));
+            if (info.mode === 'inplace') {
+              setToast(t('sesshist.inplaceToast', { name: info.sessionName }));
+              setNameOverrides((m) => ({ ...m, [a.id]: info.sessionName }));
+              startResumeWatch({
+                agentId: a.id,
+                instanceId: a.instanceId ?? null,
+                targetSessionId: info.targetSessionId ?? '',
+              });
+            } else if (info.spawnReason === 'busy') {
+              setToast(t('sesshist.spawnBusyToast', { name: info.sessionName }));
+            } else {
+              setToast(t('sesshist.switchedToast', { name: info.sessionName }));
+            }
             if (info.spawned) void queryClient.invalidateQueries({ queryKey: ['agents'] });
           }}
           onClose={() => setSessionsFor(null)}

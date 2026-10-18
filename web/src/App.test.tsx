@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // 可配置桩：默认全 null（抽屉遮罩用例不受影响）；会话选择回归用例按需注入交互渲染
@@ -17,6 +17,8 @@ const stubs = vi.hoisted(() => ({
   renderQuickChat: null as null | ((props: { onPick: (a: { id: string }) => void }) => ReactElement),
   // ChatTab 桩每次挂载记录 agent id，用于断言挂载确实发生
   chatMounts: [] as string[],
+  // ChatTab 桩每次渲染记录 agent 展示名（#21 行名跟随断言用）
+  chatNames: [] as string[],
   // AgentList 挂载计数（移动抽屉不重挂断言用）
   listMounts: [] as string[],
   // 工程便签悬浮卡挂载记录（cwd）
@@ -26,6 +28,8 @@ const stubs = vi.hoisted(() => ({
   // 历史会话弹窗（#18 原子切换）取数/恢复可配桩
   cliSessions: [] as unknown[],
   resume: vi.fn(),
+  // 原地恢复（#21）/message 注入桩
+  sendMessage: vi.fn(),
   // ChatTab 桩每次渲染记录草稿协议入参（per-key 喂回断言用）
   draftProps: { id: '', initialDraft: '', onDraftChange: undefined as undefined | ((t: string) => void) },
 }));
@@ -63,6 +67,7 @@ vi.mock('./api', () => ({
     terminalWsUrl: (cwd: string) => `ws://hub.test/ws/terminal?cwd=${encodeURIComponent(cwd)}`,
     cliSessions: () => Promise.resolve(stubs.cliSessions),
     resumeSession: (...a: unknown[]) => stubs.resume(...a),
+    sendMessage: (...a: unknown[]) => stubs.sendMessage(...a),
   },
   captureUrlToken: () => false,
   clearStoredToken: () => {},
@@ -103,7 +108,7 @@ vi.mock('./components/ChatTab', async () => {
   const { useEffect } = await import('react');
   return {
     default: (props: {
-      agent: { id: string };
+      agent: { id: string; name?: string | null };
       onOpenTerminal?: () => void;
       initialDraft?: string;
       onDraftChange?: (t: string) => void;
@@ -111,6 +116,8 @@ vi.mock('./components/ChatTab', async () => {
       useEffect(() => {
         stubs.chatMounts.push(props.agent.id);
       }, []);
+      // 行名跟随（#21）：每次渲染记录最新 agent 展示名（nameOverrides 派生断言用）
+      stubs.chatNames.push(props.agent?.name ?? '');
       // 草稿协议入参记录：per-key 喂回（initialDraft）与上行（onDraftChange）断言用
       stubs.draftProps = {
         id: props.agent.id,
@@ -1192,5 +1199,139 @@ describe('App 历史会话原子切换 + 草稿保留（agent-hub-pick-switch #1
     fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
     expect(stubs.draftProps.id).toBe('agt-a');
     expect(stubs.draftProps.initialDraft).toBe('半截草稿'); // 切回 A 草稿复原
+  });
+});
+
+describe('App 原地恢复（agent-hub-resume-inplace #21）', () => {
+  // 两行都 claude、同工程、idle——满足注入判据的死会话场景
+  const agentA = {
+    id: 'agt-a', driver: 'claude', cwd: '/repo/proj', group: 'other',
+    name: '小甲', sessionId: 'sess-a', instanceId: null,
+  } as never;
+  const agentB = {
+    id: 'agt-b', driver: 'claude', cwd: '/repo/proj', group: 'other',
+    name: '小乙', sessionId: 'sess-b', instanceId: null,
+  } as never;
+  const deadEntry = {
+    sessionId: 'a1b2c3d4-e5f6-7890-abcd-ef0123456789', mtimeSecs: 1_790_000_000,
+    sizeBytes: 2048, branch: 'main', cwd: '/repo/proj', summary: '死会话',
+  }; // sessionId 须合法 UUID（注入白名单，round1 审查 MINOR 收紧）
+
+  beforeEach(() => {
+    stubs.agents = [agentA, agentB];
+    stubs.chatMounts.length = 0;
+    stubs.chatNames.length = 0;
+    stubs.cliSessions = [deadEntry];
+    stubs.resume = vi.fn().mockResolvedValue({ status: 'resumed', id: 'bg-new' });
+    stubs.sendMessage = vi.fn().mockResolvedValue(undefined);
+    stubs.renderAgentList = (props) => (
+      <>
+        <button type="button" data-testid="row-a" onClick={() => props.onSelect(agentA)}>
+          a
+        </button>
+        <button type="button" data-testid="row-b" onClick={() => props.onSelect(agentB)}>
+          b
+        </button>
+        <button type="button" data-testid="hist-b" onClick={() => props.onOpenSessions(agentB)}>
+          b-history
+        </button>
+      </>
+    );
+  });
+
+  it('死会话 + 选中行 idle → 注入当前 TUI 原地装载：行不变、resume-session 不打、toast 说明', async () => {
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+
+    // 注入走 /message 管道打当前选中行；后端 spawn 路径未触发
+    await waitFor(() => expect(stubs.sendMessage).toHaveBeenCalledTimes(1));
+    expect(stubs.sendMessage).toHaveBeenCalledWith(
+      'agt-a',
+      `/resume ${deadEntry.sessionId}`,
+      'claude',
+    );
+    expect(stubs.resume).not.toHaveBeenCalled();
+    // 行不变：ChatTab 无重挂（无新 mount），弹窗关、toast 原地恢复
+    expect(stubs.chatMounts).toEqual(['agt-a']);
+    expect(container.querySelector('.sesshist-card')).toBeNull();
+    expect(container.querySelector('.toast')?.textContent).toBe(
+      '已在当前会话原地恢复「死会话」· 历史装载中',
+    );
+  });
+
+  it('行名跟随：原地恢复后该行展示名切到被恢复会话名', async () => {
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+    await waitFor(() => expect(stubs.sendMessage).toHaveBeenCalledTimes(1));
+    // nameOverrides 派生 data → ChatTab 收到的 agent.name 变为会话名
+    await waitFor(() => expect(stubs.chatNames.at(-1)).toBe('死会话'));
+  });
+
+  it('选中行忙（working）→ 回退 spawn 新行 + 专属 toast 说明（busy 策略 b）', async () => {
+    const busyA = {
+      id: 'agt-a', driver: 'claude', cwd: '/repo/proj', group: 'working',
+      name: '小甲', sessionId: 'sess-a', instanceId: null,
+    } as never;
+    stubs.agents = [busyA, agentB];
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+
+    await waitFor(() => expect(stubs.resume).toHaveBeenCalledTimes(1));
+    expect(stubs.sendMessage).not.toHaveBeenCalled(); // 忙时注入会被吞，禁走
+    expect(container.querySelector('.toast')?.textContent).toBe(
+      '目标会话正忙，已新增行恢复「死会话」',
+    );
+  });
+
+  it('装载失败（sessionId 未跟随）→ 有界超时明确报错 toast，视图不动', async () => {
+    // 先真 timers 渲染到 item 就绪（react-query 首挂链需要 waitFor 轮询排干，
+    // act 微任务两轮不够），再切 fake 推进 watcher 心跳/超时
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(container.querySelector('[data-testid="row-a"]') as HTMLElement);
+    fireEvent.click(container.querySelector('[data-testid="hist-b"]') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('.sesshist-item')).not.toBeNull());
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await act(async () => {
+        fireEvent.click(container.querySelector('.sesshist-item') as HTMLElement);
+      });
+      expect(stubs.sendMessage).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.toast')?.textContent).toContain('原地恢复');
+      // toast 2.6s 自动消失 + watcher 15s 超时：推进到超时点
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16_000);
+      });
+      expect(container.querySelector('.toast')?.textContent).toBe(
+        '原地恢复未生效（会话可能装载失败），视图未变动',
+      );
+      expect(stubs.chatMounts).toEqual(['agt-a']); // 视图未动
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
