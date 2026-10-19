@@ -1,0 +1,93 @@
+/* 侧栏「插件视图」组（导航栏为深色系，两主题同观感——用 sidebar token 族）。
+   零插件时组件不渲染，此文件不影响既有导航观感（BR-06）。 */
+
+.plugin-nav {
+  border-top: 1px solid var(--c-sidebar-line);
+  padding: 0.4rem 0 0.2rem;
+  flex-shrink: 0;
+}
+
+.plugin-nav-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.6rem 0.25rem;
+}
+
+.plugin-nav-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-sidebar-icon);
+}
+
+.plugin-nav-manage {
+  margin-left: auto;
+  border: 1px solid var(--c-sidebar-border);
+  background: transparent;
+  color: var(--c-sidebar-text);
+  font-size: 0.72rem;
+  border-radius: 6px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.plugin-nav-manage:hover {
+  background: var(--c-hover);
+}
+
+.plugin-nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plugin-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 0.7rem;
+  border: none;
+  background: transparent;
+  color: var(--c-sidebar-text);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugin-nav-item:hover {
+  background: var(--c-hover);
+}
+
+.plugin-nav-item.is-active {
+  background: var(--c-hover-strong);
+  color: var(--c-sidebar-text-sel);
+}
+
+.plugin-nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-nav-source {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--c-sidebar-icon);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+/* 故障徽标（深色侧栏上的红字用 bright 变体，对比度达标） */
+.plugin-nav-fault {
+  font-size: 0.7rem;
+  color: var(--c-danger-bright);
+  border: 1px solid var(--c-danger-bright);
+  border-radius: 999px;
+  padding: 0 5px;
+  flex-shrink: 0;
+}

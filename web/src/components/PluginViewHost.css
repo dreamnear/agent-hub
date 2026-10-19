@@ -1,0 +1,121 @@
+/* 插件视图宿主（ADR-0004 第 2 条：主内容区整页 + 宿主框架可用）。
+   全站色值一律走 --c-* token（三态主题纪律，管理仓 CLAUDE.md）。 */
+
+.plugin-view-host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+}
+
+.plugin-view-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+}
+
+.plugin-view-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.plugin-view-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-view-tag {
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  color: var(--c-sub);
+  white-space: nowrap;
+}
+
+/* 宿主主题态指示（BR-16 可观察化：三态走查时对照用） */
+.plugin-view-theme {
+  font-size: 0.75rem;
+  color: var(--c-sub);
+  margin-left: auto;
+}
+
+.plugin-view-exit {
+  min-height: 32px;
+  padding: 0 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--c-border-input);
+  background: var(--c-panel);
+  color: var(--c-text);
+  cursor: pointer;
+}
+
+.plugin-view-exit:hover {
+  background: var(--c-selected);
+}
+
+.plugin-view-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-view-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--c-bg);
+}
+
+.plugin-view-loading {
+  padding: 1.2rem;
+  color: var(--c-sub);
+  font-size: 0.875rem;
+}
+
+/* 故障层：覆盖内容区、不覆盖宿主框架（BR-08 不白屏） */
+.plugin-view-fault {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  text-align: center;
+  background: var(--c-bg);
+}
+
+.plugin-view-fault-title {
+  font-weight: 700;
+  color: var(--c-danger-text);
+}
+
+.plugin-view-fault-msg {
+  max-width: 560px;
+  font-size: 0.875rem;
+  color: var(--c-sub);
+  word-break: break-word;
+}
+
+.plugin-view-fault-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}

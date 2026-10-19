@@ -4,6 +4,7 @@ import SettingsAppearance from './SettingsAppearance';
 import SettingsDocRender from './SettingsDocRender';
 import SettingsLanguage from './SettingsLanguage';
 import SettingsPiHub from './SettingsPiHub';
+import PluginManagerPage from './PluginManagerPage';
 import InstancesSection from './settings/InstancesSection';
 import NodesSection from './settings/NodesSection';
 import TasksSection from './settings/TasksSection';
@@ -31,7 +32,9 @@ export type SettingsSectionKey =
   | 'newAgent'
   | 'history'
   // Hub 助手（agent-hub-pi-hub-agent P3/P5）：pi provider/model + 助手生命周期
-  | 'piHub';
+  | 'piHub'
+  // 插件管理（agent-hub-plugin-system B1）：设计中的「系统 · 插件管理」入口
+  | 'plugins';
 
 /// 上次访问分区（S4：默认分区 = 上次访问，持久化合理即可）
 const LAST_SECTION_KEY = 'hub_settings_section';
@@ -49,6 +52,7 @@ const SECTION_KEYS: SettingsSectionKey[] = [
   'instances',
   'harness',
   'tasks',
+  'plugins',
   'about',
 ];
 
@@ -170,6 +174,7 @@ const SECTIONS: {
   { key: 'nodes', labelKey: 'settings.section.nodes', render: () => <NodesSection /> },
   { key: 'harness', labelKey: 'settings.section.harness', render: () => <HarnessPanel /> },
   { key: 'tasks', labelKey: 'settings.section.tasks', render: (ctx) => <TasksSection onOpenSession={ctx.onOpenSession} /> },
+  { key: 'plugins', labelKey: 'settings.section.plugins', render: () => <PluginManagerPage /> },
   { key: 'about', labelKey: 'settings.section.about', render: () => <SettingsAbout /> },
 ];
 
