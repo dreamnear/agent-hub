@@ -25,6 +25,8 @@ pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 握手超时（ADR-0006 第 2 条）
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// stderr 日志限速：每插件每秒最多落盘条数（ADR-0006 第 6 条护栏），超限按秒汇总
+pub const STDERR_RATE_LINES: u32 = 20;
 
 /// JSON-RPC 错误码（技术设计 §4.1）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,12 +270,31 @@ impl RpcChannel {
             });
         }
 
-        // stderr：日志（脱敏后落 tracing；限速由 tracing 侧过滤承担）
+        // stderr：日志（脱敏后落 tracing）。限速在 hub 侧：每秒最多 STDERR_RATE_LINES
+        // 条，超限丢弃并按秒汇总一条（ADR-0006 第 6 条「stderr 日志限速」护栏——
+        // 防插件刷屏拖垮日志面）
         if let Some(stderr) = stderr {
             let pid = plugin_id;
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
+                let mut window = tokio::time::Instant::now();
+                let mut budget: u32 = STDERR_RATE_LINES;
+                let mut dropped: u64 = 0;
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let now = tokio::time::Instant::now();
+                    if now.duration_since(window) >= std::time::Duration::from_secs(1) {
+                        if dropped > 0 {
+                            tracing::warn!(plugin = %pid, dropped, "plugin stderr 限速：窗口内丢弃汇总");
+                            dropped = 0;
+                        }
+                        window = now;
+                        budget = STDERR_RATE_LINES;
+                    }
+                    if budget == 0 {
+                        dropped += 1;
+                        continue;
+                    }
+                    budget -= 1;
                     let scrubbed = scrub(line);
                     tracing::info!(plugin = %pid, "plugin backend stderr: {scrubbed}");
                 }
