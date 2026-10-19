@@ -3,7 +3,6 @@
 // 引入前一致）、故障徽标、入口点击回调携带完整条目。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import type { ReactElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import PluginNavGroup from './PluginNavGroup';
 import type { PluginView } from '../plugins';
