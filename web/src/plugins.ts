@@ -223,6 +223,17 @@ export const plugins = {
       body: JSON.stringify({ method, params }),
     }),
 
+  /// 设置凭据值（值只上行不入响应；界面永不回显旧值）
+  setCredential: (name: string, value: string): Promise<{ name: string; configured: boolean }> =>
+    request(`/api/plugins/credentials/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify({ value }),
+    }),
+
+  /// 清除凭据值
+  clearCredential: (name: string): Promise<{ name: string; configured: boolean }> =>
+    request(`/api/plugins/credentials/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
   apiSchema: (): Promise<{
     apiVersion: number;
     hubVersion: string;

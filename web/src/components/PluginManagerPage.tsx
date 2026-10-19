@@ -13,6 +13,9 @@ import './PluginManagerPage.css';
 /// 生效时机标签（BR-04：一切状态变化文案带生效时机，与实际行为一致）
 const EFFECT_LABEL = 'plugin.effect.immediate';
 
+/// 凭据变更后的提示回调（页面挂载时注册；CredentialRow 深层调用，避免层层传参）
+let onCredentialChanged: ((msg: string) => void) | null = null;
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -35,8 +38,109 @@ function StateChip({ uiState }: { uiState: string }): ReactElement {
   return <span className={`plugin-chip plugin-chip--${uiState}`}>{t(labelKey)}</span>;
 }
 
+/// 单条凭据的「设置 / 清除」入口（2026-10-19 预览反馈增量）：
+/// - 只显示「已配置 / 未配置」，**输入框永不回显旧值**（不预填、不回读）；
+/// - 保存 = 上行值 → 落 hub 侧 plugin_credentials.json（0600），响应只回状态；
+/// - 清除 = 移除该名（幂等）。
+function CredentialRow({
+  name,
+  configured,
+  onDone,
+}: {
+  name: string;
+  configured: boolean;
+  onDone: (msg: string) => void;
+}): ReactElement {
+  const t = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const save = (): void => {
+    if (value === '') return;
+    setBusy(true);
+    plugins
+      .setCredential(name, value)
+      .then(() => {
+        setValue(''); // 上行即清：不留在任何可观察位置
+        setEditing(false);
+        onDone(t('plugin.cred.saved'));
+      })
+      .catch((e: unknown) => onDone(`${t('plugin.op.failed')}: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setBusy(false));
+  };
+
+  const clear = (): void => {
+    setBusy(true);
+    plugins
+      .clearCredential(name)
+      .then(() => {
+        setValue('');
+        setEditing(false);
+        onDone(t('plugin.cred.cleared'));
+      })
+      .catch((e: unknown) => onDone(`${t('plugin.op.failed')}: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="plugin-cred-row">
+      <span className="plugin-mono plugin-cred-name">{name}</span>
+      <span className={`plugin-chip ${configured ? 'plugin-chip--enabled' : 'plugin-chip--disabled'}`}>
+        {configured ? t('plugin.cred.configured') : t('plugin.cred.missing')}
+      </span>
+      {editing ? (
+        <>
+          <input
+            type="password"
+            className="plugin-cred-input"
+            aria-label={t('plugin.cred.placeholder')}
+            placeholder={t('plugin.cred.placeholder')}
+            autoComplete="off"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button type="button" className="btn-primary" disabled={busy || value === ''} onClick={save}>
+            {t('plugin.cred.save')}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => {
+              setValue('');
+              setEditing(false);
+            }}
+          >
+            {t('plugin.cred.cancel')}
+          </button>
+        </>
+      ) : (
+        <>
+          <button type="button" className="btn-ghost" onClick={() => setEditing(true)}>
+            {t('plugin.cred.set')}
+          </button>
+          {configured ? (
+            <button type="button" className="btn-ghost" disabled={busy} onClick={clear}>
+              {t('plugin.cred.clear')}
+            </button>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 /// 权限声明面（只列名称与边界；凭据按名引用、值零回显，BR-10/11）
-function PermissionFace({ report, view }: { report?: AuditReport; view?: PluginView }): ReactElement {
+function PermissionFace({
+  report,
+  view,
+  editableCredentials,
+}: {
+  report?: AuditReport;
+  view?: PluginView;
+  /** 已安装卡的凭据行提供「设置/清除」入口（审计卡只读展示） */
+  editableCredentials?: boolean;
+}): ReactElement {
   const t = useI18n();
   const data = report?.reach.data ?? view?.permissions.data ?? [];
   const creds = report?.reach.credentials ?? view?.permissions.credentials ?? [];
@@ -49,11 +153,29 @@ function PermissionFace({ report, view }: { report?: AuditReport; view?: PluginV
       <dd>{data.length > 0 ? data.join('、') : t('plugin.perm.none')}</dd>
       <dt>{t('plugin.perm.credentials')}</dt>
       <dd>
-        {creds.length > 0
-          ? creds
-              .map((c) => `${c.name}（${c.configured ? t('plugin.cred.configured') : t('plugin.cred.missing')}）`)
-              .join('、')
-          : t('plugin.perm.none')}
+        {creds.length > 0 ? (
+          <div className="plugin-cred-list">
+            {creds.map((c) =>
+              editableCredentials === true && onCredentialChanged != null ? (
+                <CredentialRow
+                  key={c.name}
+                  name={c.name}
+                  configured={c.configured}
+                  onDone={onCredentialChanged}
+                />
+              ) : (
+                <span key={c.name} className="plugin-cred-plain">
+                  {c.name}（{c.configured ? t('plugin.cred.configured') : t('plugin.cred.missing')}）
+                </span>
+              ),
+            )}
+            {editableCredentials === true ? (
+              <p className="plugin-hint">{t('plugin.cred.hint')}</p>
+            ) : null}
+          </div>
+        ) : (
+          t('plugin.perm.none')
+        )}
       </dd>
       <dt>{t('plugin.perm.highRisk')}</dt>
       <dd>{high.length > 0 ? high.join('、') : t('plugin.perm.none')}</dd>
@@ -167,6 +289,18 @@ export default function PluginManagerPage(): ReactElement {
     const timer = window.setTimeout(() => setToast(null), 4000);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  // 凭据变更回调注册（含卸载清理；保存/清除后刷新清单以更新「已配置」态）
+  useEffect(() => {
+    onCredentialChanged = (msg: string) => {
+      setToast(msg);
+      refresh();
+    };
+    return () => {
+      onCredentialChanged = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh 依赖 qc，稳定
+  }, []);
 
   const refresh = (): void => {
     void qc.invalidateQueries({ queryKey: ['plugins'] });
@@ -337,7 +471,7 @@ export default function PluginManagerPage(): ReactElement {
               ) : null}
 
               <ContributionList view={p} />
-              <PermissionFace view={p} />
+              <PermissionFace view={p} editableCredentials />
 
               <footer className="plugin-card-actions">
                 {p.uiState === 'fault' ? (

@@ -637,4 +637,13 @@ export const en: Record<string, string> = {
   'plugin.view.themeLight': 'Theme: light',
   'settings.section.plugins': 'Plugins',
 
+  'plugin.cred.set': 'Set',
+  'plugin.cred.save': 'Save',
+  'plugin.cred.cancel': 'Cancel',
+  'plugin.cred.clear': 'Clear',
+  'plugin.cred.placeholder': 'Paste the credential value (stored value is never shown)',
+  'plugin.cred.saved': 'Credential saved',
+  'plugin.cred.cleared': 'Credential cleared',
+  'plugin.cred.hint': 'Stored hub-side only (0600); plugins reference it by name, never shown in UI or logs',
+
 };

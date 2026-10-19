@@ -640,4 +640,13 @@ export const zh: Record<string, string> = {
   'plugin.view.themeLight': '主题：亮',
   'settings.section.plugins': '插件管理',
 
+  'plugin.cred.set': '设置',
+  'plugin.cred.save': '保存',
+  'plugin.cred.cancel': '取消',
+  'plugin.cred.clear': '清除',
+  'plugin.cred.placeholder': '粘贴凭据值（不回显已存值）',
+  'plugin.cred.saved': '凭据已保存',
+  'plugin.cred.cleared': '凭据已清除',
+  'plugin.cred.hint': '值只存 hub 侧（0600），插件按名引用、界面与日志零回显',
+
 };

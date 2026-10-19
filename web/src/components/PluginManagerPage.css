@@ -177,6 +177,46 @@
   background: var(--c-panel);
 }
 
+/* 凭据入口（预览反馈增量） */
+.plugin-cred-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plugin-cred-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+
+.plugin-cred-name {
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.plugin-cred-input {
+  min-width: 180px;
+  flex: 1;
+  min-height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  background: var(--c-panel);
+  color: var(--c-text);
+  font-size: 0.85rem;
+}
+
+.plugin-cred-plain {
+  font-size: 0.82rem;
+}
+
+.plugin-cred-input::placeholder {
+  color: var(--c-faint);
+}
+
 /* 权限声明面 */
 .plugin-perm {
   display: grid;
