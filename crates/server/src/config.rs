@@ -485,6 +485,27 @@ pub struct Config {
     /// pi 会话存储目录（`--session-dir`）：`~/.claude-view/pi/sessions`，
     /// env `PI_SESSION_DIR` 覆盖
     pub pi_session_dir: PathBuf,
+    /// 插件根目录（ADR-0001 第 4/5 条 drop-in 位）：`~/.claude-view/plugins`，
+    /// env `AGENT_HUB_PLUGINS_DIR` 覆盖；只扫一层深、不跟随符号链接
+    pub plugins_dir: PathBuf,
+    /// 插件注册表持久态：`~/.claude-view/plugins.json`，env `AGENT_HUB_PLUGINS_FILE`
+    /// 覆盖；落盘强制 0600（含权限面 hash 与故障摘要）
+    pub plugin_state_file: PathBuf,
+    /// 插件凭据代持文件（ADR-0007 第 4 条）：`~/.claude-view/plugin_credentials.json`，
+    /// env `AGENT_HUB_PLUGIN_CREDENTIALS_FILE` 覆盖；0600，值零回显
+    pub plugin_credentials_file: PathBuf,
+    /// 插件审计留档目录：`~/.claude-view/plugin_audit/<id>-<hash>.json`，
+    /// env `AGENT_HUB_PLUGIN_AUDIT_DIR` 覆盖
+    pub plugin_audit_dir: PathBuf,
+    /// 插件自持数据目录：`~/.claude-view/plugin_data/<id>/`，
+    /// env `AGENT_HUB_PLUGIN_DATA_DIR` 覆盖（卸载默认保留，ADR-0007 拍板结论 5）
+    pub plugin_data_dir: PathBuf,
+    /// 周期扫描间隔秒数（ADR-0002 第 2 条）：`[plugins] scan_interval_secs`，
+    /// env `AGENT_HUB_PLUGIN_SCAN_SECS` 覆盖；0 = 关闭（退化为启动扫描 + 手动刷新）
+    pub plugin_scan_secs: u64,
+    /// transient 插件目录（ADR-0001 第 4 条）：`--plugin-dir` 可重复或 env
+    /// `AGENT_HUB_PLUGIN_DIR`（多值 `:` 分隔）；不写注册表持久层
+    pub plugin_transient_dirs: Vec<PathBuf>,
 }
 
 impl Config {
@@ -640,7 +661,84 @@ impl Config {
                     )
                     .into()
                 }),
+            plugins_dir: std::env::var("AGENT_HUB_PLUGINS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!("{}/.claude-view/plugins", crate::platform::home_dir_str()).into()
+                }),
+            plugin_state_file: std::env::var("AGENT_HUB_PLUGINS_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.claude-view/plugins.json",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
+            plugin_credentials_file: std::env::var("AGENT_HUB_PLUGIN_CREDENTIALS_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.claude-view/plugin_credentials.json",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
+            plugin_audit_dir: std::env::var("AGENT_HUB_PLUGIN_AUDIT_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.claude-view/plugin_audit",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
+            plugin_data_dir: std::env::var("AGENT_HUB_PLUGIN_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.claude-view/plugin_data",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
+            plugin_scan_secs: PluginScanConfig::load(),
+            plugin_transient_dirs: std::env::var("AGENT_HUB_PLUGIN_DIR")
+                .ok()
+                .map(|raw| {
+                    raw.split(':')
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
+    }
+}
+
+/// `[plugins]` 配置段（ADR-0002 第 2 条）：周期扫描间隔（秒）。
+/// 文件缺失/解析失败回退默认 10s；0 = 关闭周期扫描（启动扫描 + 手动刷新仍可用）。
+struct PluginScanConfig;
+
+impl PluginScanConfig {
+    fn load() -> u64 {
+        if let Ok(raw) = std::env::var("AGENT_HUB_PLUGIN_SCAN_SECS") {
+            if let Ok(v) = raw.parse::<u64>() {
+                return v;
+            }
+        }
+        let path = config_path();
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return 10;
+        };
+        let Ok(val) = toml::from_str::<toml::Value>(&raw) else {
+            return 10;
+        };
+        val.get("plugins")
+            .and_then(|p| p.get("scan_interval_secs"))
+            .and_then(toml::Value::as_integer)
+            .map(|v| v.max(0) as u64)
+            .unwrap_or(10)
     }
 }
 

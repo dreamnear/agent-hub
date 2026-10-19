@@ -10,6 +10,7 @@ pub mod models;
 pub mod nodelink;
 pub mod notes;
 pub mod platform;
+pub mod plugins;
 pub mod projects;
 pub mod remote_install;
 pub mod ssh_cmd;

@@ -1,0 +1,270 @@
+//! 目录扫描（ADR-0002 第 2 条 / ADR-0001 第 5 条）：启动 / 周期 / 手动三种触发。
+//!
+//! 只发现、不安装：扫描结果进「新发现 · 待确认」，安装须用户显式确认（BR-02）。
+//! 范围 = `plugins_dir/*/plugin.json`（一层深、不递归、不跟随符号链接）+ transient 目录根。
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+
+use super::audit::{self, AuditReport};
+use super::credentials::CredentialsStore;
+use super::manifest::ManifestIssue;
+use super::registry::Registry;
+
+/// 一个新发现 / 更新候选条目。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredItem {
+    /// manifest 声明的 id（manifest 不可解析时回退目录名）
+    pub id: String,
+    pub dir_name: String,
+    pub path: String,
+    /// `drop-in` | `transient`
+    pub source_kind: String,
+    /// `new` | `audit_failed` | `update`
+    pub status: String,
+    /// 已安装条目的当前 hash（更新候选时用于展示版本差异）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_content_hash: Option<String>,
+    pub report: AuditReport,
+}
+
+/// 扫描结果。
+#[derive(Debug, Clone, Default)]
+pub struct ScanOutcome {
+    pub items: Vec<DiscoveredItem>,
+    pub last_scan_at: String,
+}
+
+/// 枚举插件根下的一层目录（不跟随符号链接，ADR-0001 第 5 条）。
+pub fn plugin_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(read) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            continue;
+        }
+        out.push(path);
+    }
+    out.sort();
+    out
+}
+
+/// 执行一次扫描。`transient` 目录逐一作为单个插件根处理（不写注册表，ADR-0001 第 4 条）。
+pub fn scan(
+    plugins_dir: &Path,
+    transient: &[PathBuf],
+    registry: &Registry,
+    creds: &CredentialsStore,
+) -> ScanOutcome {
+    let mut candidates: Vec<(PathBuf, String, AuditReport)> = Vec::new();
+
+    for dir in plugin_dirs(plugins_dir) {
+        if !dir.join("plugin.json").is_file() {
+            // 非插件目录（例如用户自己的杂项目录）静默跳过
+            continue;
+        }
+        let report = audit::audit_dir(&dir, creds);
+        candidates.push((dir, "drop-in".into(), report));
+    }
+    for dir in transient {
+        if !dir.join("plugin.json").is_file() {
+            tracing::warn!(dir = %dir.display(), "transient 插件目录缺 plugin.json，忽略");
+            continue;
+        }
+        let report = audit::audit_dir(dir, creds);
+        candidates.push((dir.clone(), "transient".into(), report));
+    }
+
+    // id 冲突：两个目录声明同 id → 两个都不安装（BR-02 整体拒绝）
+    let mut by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, (_, _, r)) in candidates.iter().enumerate() {
+        if !r.plugin_id.is_empty() {
+            by_id.entry(r.plugin_id.clone()).or_default().push(i);
+        }
+    }
+    for (id, idxs) in &by_id {
+        if idxs.len() > 1 {
+            for &i in idxs {
+                let r = &mut candidates[i].2;
+                r.errors.push(ManifestIssue::new(
+                    "id",
+                    "id-conflict",
+                    format!("多个目录声明同一插件 id {id}，全部拒绝安装"),
+                ));
+                r.installable = false;
+            }
+        }
+    }
+
+    let mut items = Vec::new();
+    for (dir, source_kind, report) in candidates {
+        let dir_name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let id = if report.plugin_id.is_empty() {
+            dir_name.clone()
+        } else {
+            report.plugin_id.clone()
+        };
+        let installed = registry.get(&id);
+        let installed_hash = installed.as_ref().map(|p| p.entry.content_hash.clone());
+        let status = if !report.errors.is_empty() {
+            "audit_failed"
+        } else if installed.is_none() {
+            "new"
+        } else if installed_hash.as_deref() != Some(report.content_hash.as_str()) {
+            "update"
+        } else {
+            // 已安装且 hash 一致：不需要用户处理，不进新发现区
+            continue;
+        };
+        items.push(DiscoveredItem {
+            id,
+            dir_name,
+            path: dir.to_string_lossy().into_owned(),
+            source_kind,
+            status: status.into(),
+            installed_content_hash: installed_hash,
+            report,
+        });
+    }
+
+    // 需处理项置前（审计失败优先），其余按 id 稳定排序
+    items.sort_by(|a, b| {
+        let rank = |s: &str| match s {
+            "audit_failed" => 0,
+            "update" => 1,
+            _ => 2,
+        };
+        rank(&a.status)
+            .cmp(&rank(&b.status))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    ScanOutcome {
+        items,
+        last_scan_at: super::registry::now_rfc3339(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn creds() -> CredentialsStore {
+        CredentialsStore::load(std::env::temp_dir().join("hub-test-no-such-credentials.json"))
+    }
+
+    fn write_plugin(root: &Path, dir: &str, id: &str) {
+        let d = root.join(dir);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("plugin.json"),
+            format!(
+                r#"{{"schemaVersion":1,"id":"{id}","name":"{id}","version":"0.1.0","hub":{{"apiVersion":"1"}}}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn discovers_new_plugins_one_level_only() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "a", "plugin-a");
+        // 嵌套目录不是插件（一层深）
+        write_plugin(&dir.path().join("a"), "nested", "plugin-nested");
+        // 非插件目录忽略
+        fs::create_dir_all(dir.path().join("random")).unwrap();
+        let reg = Registry::open(dir.path().join("plugins.json"));
+        let out = scan(dir.path(), &[], &reg, &creds());
+        assert_eq!(out.items.len(), 1);
+        assert_eq!(out.items[0].id, "plugin-a");
+        assert_eq!(out.items[0].status, "new");
+    }
+
+    #[test]
+    fn audit_failed_items_are_marked_and_ordered_first() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "ok", "plugin-ok");
+        fs::create_dir_all(dir.path().join("bad")).unwrap();
+        fs::write(
+            dir.path().join("bad/plugin.json"),
+            r#"{"schemaVersion":1,"id":"Bad Id","name":"x","version":"0.1.0","hub":{"apiVersion":"1"}}"#,
+        )
+        .unwrap();
+        let reg = Registry::open(dir.path().join("plugins.json"));
+        let out = scan(dir.path(), &[], &reg, &creds());
+        assert_eq!(out.items[0].status, "audit_failed");
+        assert!(out.items[0]
+            .report
+            .errors
+            .iter()
+            .any(|e| e.field == "id" && e.rule == "id-format"));
+    }
+
+    #[test]
+    fn same_id_in_two_dirs_rejected_entirely() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "one", "same-id");
+        write_plugin(dir.path(), "two", "same-id");
+        let reg = Registry::open(dir.path().join("plugins.json"));
+        let out = scan(dir.path(), &[], &reg, &creds());
+        assert_eq!(out.items.len(), 2);
+        assert!(out.items.iter().all(|i| i.status == "audit_failed"
+            && i.report.errors.iter().any(|e| e.rule == "id-conflict")));
+    }
+
+    #[test]
+    fn symlinked_plugin_dir_is_not_followed() {
+        let outside = tempfile::tempdir().unwrap();
+        write_plugin(outside.path(), "real", "linked-plugin");
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path().join("real"), dir.path().join("link")).unwrap();
+        let reg = Registry::open(dir.path().join("plugins.json"));
+        let out = scan(dir.path(), &[], &reg, &creds());
+        assert!(out.items.is_empty(), "符号链接目录不跟随");
+    }
+
+    #[test]
+    fn installed_same_hash_is_not_rediscovered() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "a", "plugin-a");
+        let reg = Registry::open(dir.path().join("plugins.json"));
+        let first = scan(dir.path(), &[], &reg, &creds());
+        let report = &first.items[0].report;
+        reg.insert_installed(
+            super::super::registry::PluginEntry {
+                id: "plugin-a".into(),
+                version: "0.1.0".into(),
+                content_hash: report.content_hash.clone(),
+                permissions_hash: "sha256:x".into(),
+                source: super::super::registry::PluginSource::drop_in(),
+                installed_at: super::super::registry::now_rfc3339(),
+                enabled: true,
+                state: super::super::registry::PluginState::Ready,
+                last_fault: None,
+            },
+            super::super::manifest::parse(
+                &fs::read_to_string(dir.path().join("a/plugin.json")).unwrap(),
+            )
+            .unwrap()
+            .manifest,
+            dir.path().join("a"),
+        )
+        .unwrap();
+        let second = scan(dir.path(), &[], &reg, &creds());
+        assert!(second.items.is_empty(), "同 hash 已安装不应再进新发现区");
+    }
+}

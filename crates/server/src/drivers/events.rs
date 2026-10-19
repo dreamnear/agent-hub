@@ -23,6 +23,10 @@ pub enum HubEvent {
     JobsChanged { id: String },
     #[serde(rename = "tick")]
     Tick,
+    /// 插件注册表/状态变化（ADR-0002 第 3 条）：前端据此刷新 `/api/plugins` 与导航组。
+    /// 加法变更——既有变体与序列化名一字未动。
+    #[serde(rename = "plugins_changed")]
+    PluginsChanged { id: String },
 }
 
 /// 分页信封（P6 B12/B13）：页内消息 + 首条源行号游标 + 是否还有更早消息。
