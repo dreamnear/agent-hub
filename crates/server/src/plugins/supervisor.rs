@@ -492,6 +492,23 @@ done
         assert!(!sup.is_running("hang-plugin"));
     }
 
+    #[test]
+    fn credential_env_substitution() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plugin_credentials.json");
+        std::fs::write(
+            &file,
+            r#"{"demo_pat":"fake-credential-value-for-test"}"#,
+        )
+        .unwrap();
+        let creds = CredentialsStore::load(file);
+        let out = substitute_credentials("Bearer $cred:demo_pat!", &creds).unwrap();
+        assert_eq!(out, "Bearer fake-credential-value-for-test!");
+        // 未配置的凭据 → 明确失败（不静默注入空值）
+        let err = substitute_credentials("$cred:missing_one", &creds).unwrap_err();
+        assert!(err.contains("未配置"), "{err}");
+    }
+
     #[tokio::test]
     async fn killed_backend_is_observed_dead() {
         let dir = tempfile::tempdir().unwrap();

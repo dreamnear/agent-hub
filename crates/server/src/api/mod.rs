@@ -11,6 +11,7 @@ pub mod messages;
 pub mod nodes;
 pub mod notes;
 pub mod pi;
+pub mod plugins;
 pub mod projects;
 pub mod proxy;
 pub mod tasks;
@@ -80,6 +81,9 @@ pub struct AppState {
     /// { 条目, 来源, 过期时刻 }；SDK 校准源 TTL 300s，文件枚举回退 TTL 60s
     /// （pub(crate)：缓存类型为 commands 模块内部机制，不外泄）
     pub(crate) commands_cache: commands::CommandCache,
+    /// 插件体系门面（agent-hub-plugin-system B1）：注册表/扫描/审计/监督器/凭据/票据。
+    /// AppState 只挂这一个字段，不散挂子模块（ADR-0002 第 1 条）。
+    pub plugins: StdArc<crate::plugins::PluginManager>,
 }
 
 impl AppState {
@@ -89,6 +93,8 @@ impl AppState {
         // chat 房间表先行创建：AppState 与两个驱动共享同一张表（AcpFeed/ensure_*_room 同源）
         let chat_rooms: Arc<RwLock<HashMap<String, broadcast::Sender<ChatEvent>>>> =
             Arc::new(RwLock::new(HashMap::new()));
+        // 插件门面先建（events_tx 已就绪；AppState 落盘后由 main 触发装载序列）
+        let plugins = crate::plugins::PluginManager::new(&cfg, events_tx.clone());
         // 单实例共享：sender 由 ClaudeDriver::new 自建，轨一
         // message_routes 取其句柄——attaches 表唯一（双实例 = 双重 attach 破坏
         // TUI 注入时序）
@@ -204,6 +210,7 @@ impl AppState {
             nodes: StdArc::new(crate::nodelink::registry::NodeRegistry::new(nodes_file)),
             node_conns: crate::nodelink::gateway::NodeConnections::new(),
             commands_cache: commands::new_command_cache(),
+            plugins,
         }
     }
 }

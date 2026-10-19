@@ -704,7 +704,9 @@ impl PluginManager {
                 PluginSource::drop_in()
             },
             installed_at: now_rfc3339(),
-            enabled: true,
+            // 先落「未启用 + stopped」，再走一次合法迁移到启用/就绪
+            //（BR-01 迁移表是唯一入口，不在 insert 里造非法初态）
+            enabled: false,
             state: PluginState::Stopped,
             last_fault: None,
         };
@@ -714,7 +716,10 @@ impl PluginManager {
             .map_err(|e| format!("注册表写入失败：{e}"))?;
         if created {
             // 装载 = 贡献物登记（backend 懒启动）：解析无误即就绪
-            let _ = self.registry.apply(id, Transition::EnableOk);
+            if let Err(e) = self.registry.apply(id, Transition::EnableOk) {
+                tracing::warn!(plugin = %id, error = %e, "安装后启用迁移失败");
+                self.fail_load(id, "load-failed", e);
+            }
             let _ = audit::persist(&item.report, &self.paths.audit_dir);
         }
         self.scan_now();
