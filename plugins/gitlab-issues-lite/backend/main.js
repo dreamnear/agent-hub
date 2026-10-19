@@ -95,7 +95,6 @@ function resolveTarget(args) {
     apiBase: `${target.scheme}://${target.host}/api/v4`,
     project: target.projectPath,
     host: target.host,
-    originUrl: remote,
     via: 'git',
   };
 }
