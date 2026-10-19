@@ -47,12 +47,13 @@
     pickerEl.innerHTML = '';
     var label = document.createElement('span');
     label.className = 'project-label';
-    label.textContent = '项目';
+    label.textContent = '工程';
     var input = document.createElement('input');
     input.className = 'project-input';
-    input.placeholder = '输入或选择项目';
+    input.placeholder = '选择工程（按其 git remote 取数）或手输名';
     input.value = currentProject;
     input.addEventListener('input', function () { currentProject = input.value.trim(); filterPickerList(input.value); });
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') loadIssues(); });
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn';
@@ -61,6 +62,7 @@
     pickerEl.appendChild(label);
     pickerEl.appendChild(input);
     pickerEl.appendChild(btn);
+    // 下拉列完整工程路径（绑定到工程：选中即按其 git remote 反解取数，反馈第 2 轮）
     allProjects = (Array.isArray(projects) ? projects : []).map(function (p) { return String(p); });
     buildPickerList(input);
   }
@@ -96,18 +98,19 @@
     if (items.length === 0) {
       var empty = document.createElement('div');
       empty.className = 'project-item';
-      empty.textContent = allProjects.length === 0 ? '暂无工程（先在 hub 注册工程目录）' : '无匹配项目（可直接输入项目名）';
+      empty.textContent = allProjects.length === 0 ? '暂无工程（先在 hub 注册带 GitLab remote 的工程目录）' : '无匹配工程（可手输名作兜底）';
       pickerListEl.appendChild(empty);
       return;
     }
-    items.forEach(function (name) {
+    items.forEach(function (full) {
       var it = document.createElement('div');
       it.className = 'project-item';
-      it.textContent = name;
+      it.title = full;
+      it.textContent = full.split('/').filter(Boolean).pop() + ' — ' + full;
       it.addEventListener('click', function () {
-        currentProject = name;
+        currentProject = full;
         var inp = pickerEl.querySelector('.project-input');
-        if (inp) inp.value = name;
+        if (inp) inp.value = full;
         pickerListEl.hidden = true;
         loadIssues();
       });
@@ -144,16 +147,25 @@
     if (old) old.remove();
     boardEl.appendChild(list);
     if (!data.issues || data.issues.length === 0) setState('该项目暂无 issue', false);
-    metaEl.textContent = data.project + ' · 共 ' + data.total + ' 条 · 取数于 ' + (data.fetchedAt || '').replace('T', ' ').slice(0, 19);
+    metaEl.textContent =
+      (data.host ? data.host + ' · ' : '') + data.project + ' · 共 ' + data.total +
+      ' 条 · 取数于 ' + (data.fetchedAt || '').replace('T', ' ').slice(0, 19);
   }
 
   function failText(e) {
     var msg = String(e && e.message || e);
-    if (msg.indexOf('credential-unconfigured') === 0 || /凭据.*未配置/.test(msg) || /401/.test(msg)) {
-      return '凭据未配置或无效：请在「插件管理」中设置 gitlab_pat（凭据值只存 hub 侧、零回显），再回来按「查询」重试。';
+    if (msg.indexOf('gitlab-auth-failed') === 0) {
+      // 文案自带反解出的 host：提示用户 PAT 应对哪台 GitLab 实例有效
+      return msg + ' 可在「插件管理」重新设置 gitlab_pat（值只存 hub 侧、零回显）后重试。';
     }
-    if (msg.indexOf('no-project') === 0 || /未指定 project/.test(msg)) {
-      return '未指定项目：请在上方输入框输入或选择一个项目，再按「查询」。';
+    if (msg.indexOf('credential-unconfigured') === 0) {
+      return '凭据未配置：请在「插件管理」中设置 gitlab_pat（凭据值只存 hub 侧、零回显），再回来按「查询」重试。';
+    }
+    if (msg.indexOf('no-git-remote') === 0 || msg.indexOf('git-remote-unrecognized') === 0) {
+      return msg + ' 绑定到工程要求选中目录是 git 仓库且 origin 指向 GitLab。';
+    }
+    if (msg.indexOf('no-project') === 0) {
+      return '未选择工程：请在上方下拉选择工程（选中即取数），或手输名兜底。';
     }
     if (msg.indexOf('未声明') !== -1 || msg.indexOf('violation') !== -1) {
       return '请求被拒：' + msg + '（请检查插件权限声明）';
@@ -179,13 +191,11 @@
     callHub('hub.projects.list', {}).then(function (res) {
       var list = res && Array.isArray(res.projects) ? res.projects : [];
       renderPicker(list);
-      if (list.length > 0) currentProject = String(list[0]).split('/').filter(Boolean).pop() || '';
-      var inp = pickerEl.querySelector('.project-input');
-      if (inp) inp.value = currentProject;
-      setState('请选择项目后按「查询」拉取 issue。', false);
+      currentProject = '';
+      setState('请从下拉选择工程（选中即取数）。', false);
     }).catch(function () {
       renderPicker([]);
-      setState('工程清单获取失败，可直接输入项目名后查询。', true);
+      setState('工程清单获取失败，可手输名兜底。', true);
     });
   }
 
