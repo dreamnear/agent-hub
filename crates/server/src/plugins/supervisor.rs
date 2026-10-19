@@ -496,11 +496,7 @@ done
     fn credential_env_substitution() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("plugin_credentials.json");
-        std::fs::write(
-            &file,
-            r#"{"demo_pat":"fake-credential-value-for-test"}"#,
-        )
-        .unwrap();
+        std::fs::write(&file, r#"{"demo_pat":"fake-credential-value-for-test"}"#).unwrap();
         let creds = CredentialsStore::load(file);
         let out = substitute_credentials("Bearer $cred:demo_pat!", &creds).unwrap();
         assert_eq!(out, "Bearer fake-credential-value-for-test!");

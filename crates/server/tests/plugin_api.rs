@@ -68,11 +68,20 @@ async fn req(
     let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
         .await
         .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null), headers)
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        headers,
+    )
 }
 
 /// 文本响应版请求（AppError 走纯文本，不套 JSON 信封）。
-async fn req_text(a: axum::Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, String) {
+async fn req_text(
+    a: axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, String) {
     let builder = Request::builder().method(method).uri(uri);
     let request = match body {
         Some(v) => builder
@@ -120,8 +129,11 @@ fn write_plugin(dir: &tempfile::TempDir, id: &str) {
         "<!doctype html><html><body><div id=\"root\"></div><script src=\"app.js\"></script></body></html>",
     )
     .unwrap();
-    std::fs::write(p.join("view/app.js"), "document.getElementById('root').textContent='ok';\n")
-        .unwrap();
+    std::fs::write(
+        p.join("view/app.js"),
+        "document.getElementById('root').textContent='ok';\n",
+    )
+    .unwrap();
     std::fs::write(
         p.join("backend/main.sh"),
         r#"#!/bin/sh
@@ -189,7 +201,10 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     let (status, list, _) = req(a.clone(), "GET", "/api/plugins", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list.as_array().unwrap().len(), 0);
-    assert!(state.plugins.nav_entries().is_empty(), "零插件时导航集合为空");
+    assert!(
+        state.plugins.nav_entries().is_empty(),
+        "零插件时导航集合为空"
+    );
 
     // 安装
     let body = install_demo(a.clone(), "demo-plugin").await;
@@ -204,7 +219,10 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     assert_eq!(plugin["permissions"]["credentials"][0]["name"], "demo_pat");
     assert_eq!(plugin["permissions"]["credentials"][0]["configured"], true);
     let raw = plugin.to_string();
-    assert!(!raw.contains(FAKE_CRED), "凭据值不得出现在 /api/plugins 响应中");
+    assert!(
+        !raw.contains(FAKE_CRED),
+        "凭据值不得出现在 /api/plugins 响应中"
+    );
 
     // 导航组出现入口
     let nav = state.plugins.nav_entries();
@@ -259,7 +277,13 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     assert_eq!(headers.get("cache-control").unwrap(), "no-store");
 
     // 无票据 / 错作用域 / 越界路径一律拒绝
-    let (status, _, _) = req(a.clone(), "GET", "/plugin-view/demo-plugin/index.html", None).await;
+    let (status, _, _) = req(
+        a.clone(),
+        "GET",
+        "/plugin-view/demo-plugin/index.html",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "无票据必须 403");
     let (status, _, _) = req(
         a.clone(),
@@ -315,13 +339,8 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "未声明凭据必须拒绝");
-    let (status, records, _) = req(
-        a.clone(),
-        "GET",
-        "/api/plugins/demo-plugin/records",
-        None,
-    )
-    .await;
+    let (status, records, _) =
+        req(a.clone(), "GET", "/api/plugins/demo-plugin/records", None).await;
     assert_eq!(status, StatusCode::OK);
     let recs = records["records"].as_array().unwrap();
     assert!(
@@ -344,18 +363,21 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // 停用：入口与能力同现同隐（BR-03），旧票据作废
-    let (status, body, _) = req(
-        a.clone(),
-        "POST",
-        "/api/plugins/demo-plugin/disable",
-        None,
-    )
-    .await;
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/demo-plugin/disable", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["plugin"]["uiState"], "disabled");
     assert_eq!(body["effect"], "immediate");
-    assert!(state.plugins.nav_entries().is_empty(), "停用后导航入口必须消失");
-    let (status, _, _) = req(a.clone(), "GET", &format!("/plugin-view/demo-plugin/index.html?ticket={t}"), None).await;
+    assert!(
+        state.plugins.nav_entries().is_empty(),
+        "停用后导航入口必须消失"
+    );
+    let (status, _, _) = req(
+        a.clone(),
+        "GET",
+        &format!("/plugin-view/demo-plugin/index.html?ticket={t}"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "停用后旧票据失效");
     let (status, _, _) = req(
         a.clone(),
@@ -377,18 +399,19 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     assert_eq!(status, StatusCode::OK, "卸载失败：{body}");
     assert_eq!(body["removed"], true);
     assert_eq!(body["regression"]["passed"], true, "回归断言集：{body}");
-    assert!(dir.path().join("plugins/demo-plugin").is_dir(), "目录默认保留");
+    assert!(
+        dir.path().join("plugins/demo-plugin").is_dir(),
+        "目录默认保留"
+    );
     assert!(state.plugins.list().is_empty(), "登记必须清空");
     assert!(state.plugins.nav_entries().is_empty());
-    let (status, records, _) = req(
-        a.clone(),
-        "GET",
-        "/api/plugins/demo-plugin/records",
-        None,
-    )
-    .await;
+    let (status, records, _) =
+        req(a.clone(), "GET", "/api/plugins/demo-plugin/records", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(records["records"].as_array().unwrap().is_empty(), "卸载后记录面为未安装");
+    assert!(
+        records["records"].as_array().unwrap().is_empty(),
+        "卸载后记录面为未安装"
+    );
 
     // 零回归回放：卸载到零插件后再走一遍主体链路
     let (status, list, _) = req(a.clone(), "GET", "/api/plugins", None).await;
@@ -620,7 +643,11 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
 
     // 凭据先于 AppState 构造落盘（构造期加载）；mock 地址经 env 传给 backend（子进程继承）
     let cred_path = dir.path().join("plugin_credentials.json");
-    std::fs::write(&cred_path, r#"{"gitlab_pat":"fake-credential-value-for-test"}"#).unwrap();
+    std::fs::write(
+        &cred_path,
+        r#"{"gitlab_pat":"fake-credential-value-for-test"}"#,
+    )
+    .unwrap();
     let base = spawn_gitlab_mock("fake-credential-value-for-test").await;
     std::env::set_var("GITLAB_API_BASE", &base);
     std::env::set_var("GITLAB_PROJECT", "demo-repo");
@@ -635,9 +662,15 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
     // 审计卡内容：贡献物 2 条 + 凭据按名
     let plugin = &body["plugin"];
     assert_eq!(plugin["contributions"].as_array().unwrap().len(), 2);
-    assert_eq!(plugin["permissions"]["credentials"][0]["name"], "gitlab_pat");
+    assert_eq!(
+        plugin["permissions"]["credentials"][0]["name"],
+        "gitlab_pat"
+    );
     let raw = plugin.to_string();
-    assert!(!raw.contains("fake-credential-value-for-test"), "凭据值零回显");
+    assert!(
+        !raw.contains("fake-credential-value-for-test"),
+        "凭据值零回显"
+    );
 
     // 视图资产：index.html + app.js 均经票据下发
     let (status, ticket, _) = req(
@@ -681,12 +714,17 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "rpc 失败：{res}");
-    let text = res["result"]["content"][0]["text"].as_str().expect("text block");
+    let text = res["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text block");
     let data: Value = serde_json::from_str(text).unwrap();
     assert_eq!(data["project"], "demo-repo");
     assert_eq!(data["total"], 2);
     assert_eq!(data["issues"][0]["iid"], 7);
-    assert!(data["issues"][0]["title"].as_str().unwrap().contains("凭据注入"));
+    assert!(data["issues"][0]["title"]
+        .as_str()
+        .unwrap()
+        .contains("凭据注入"));
     assert!(
         !res.to_string().contains("fake-credential-value-for-test"),
         "rpc 应答之外不得出现凭据值"
@@ -701,7 +739,10 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["plugin"]["backend"]["running"], false, "停用必须回收 backend 进程组");
+    assert_eq!(
+        body["plugin"]["backend"]["running"], false,
+        "停用必须回收 backend 进程组"
+    );
 }
 
 fn copy_dir(src: &Path, dst: &Path) {

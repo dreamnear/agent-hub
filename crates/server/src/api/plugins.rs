@@ -149,7 +149,9 @@ async fn enable_plugin(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let v = state.plugins.enable(&id).await.map_err(AppError::bad)?;
-    Ok(Json(json!({ "plugin": v, "state": v.state, "effect": "immediate" })))
+    Ok(Json(
+        json!({ "plugin": v, "state": v.state, "effect": "immediate" }),
+    ))
 }
 
 async fn disable_plugin(
@@ -157,7 +159,9 @@ async fn disable_plugin(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let v = state.plugins.disable(&id).await.map_err(AppError::bad)?;
-    Ok(Json(json!({ "plugin": v, "state": v.state, "effect": "immediate" })))
+    Ok(Json(
+        json!({ "plugin": v, "state": v.state, "effect": "immediate" }),
+    ))
 }
 
 async fn retry_plugin(
@@ -165,7 +169,9 @@ async fn retry_plugin(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let v = state.plugins.retry(&id).await.map_err(AppError::bad)?;
-    Ok(Json(json!({ "plugin": v, "state": v.state, "effect": "immediate" })))
+    Ok(Json(
+        json!({ "plugin": v, "state": v.state, "effect": "immediate" }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -221,7 +227,10 @@ async fn view_ticket(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let (ticket, expires) = state.plugins.issue_ticket(&id).map_err(AppError::forbidden)?;
+    let (ticket, expires) = state
+        .plugins
+        .issue_ticket(&id)
+        .map_err(AppError::forbidden)?;
     Ok(Json(json!({ "ticket": ticket, "expiresInSecs": expires })))
 }
 
@@ -531,7 +540,10 @@ mod tests {
 
     #[test]
     fn ticket_cookie_name_is_path_safe() {
-        assert_eq!(ticket_cookie_name("gitlab-issues-lite"), "hub_pv_gitlab_issues_lite");
+        assert_eq!(
+            ticket_cookie_name("gitlab-issues-lite"),
+            "hub_pv_gitlab_issues_lite"
+        );
     }
 
     #[test]

@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 
 fn repo_plugins_dir() -> PathBuf {
     // 示例插件随源码仓交付：crates/server 的上两级 = 仓库根
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../plugins")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins")
 }
 
 /// 剥离 JS 注释（行/块；字符串字面量保护——demo 里的 URL 字符串不应被注释剥离破坏）。
@@ -112,7 +111,10 @@ fn references_hub_api(code: &str) -> Vec<usize> {
     while let Some(rel) = code[from..].find("/api/") {
         let at = from + rel;
         let prev_ok = at == 0
-            || matches!(bytes[at - 1], b'"' | b'\'' | b'`' | b' ' | b'\t' | b'\n' | b'(' | b'=');
+            || matches!(
+                bytes[at - 1],
+                b'"' | b'\'' | b'`' | b' ' | b'\t' | b'\n' | b'(' | b'='
+            );
         if prev_ok {
             hits.push(at);
         }
@@ -168,5 +170,8 @@ fn hub_api_reference_detection_covers_real_shapes() {
         0
     );
     // 注释里的提及被剥离后不算
-    assert_eq!(references_hub_api(&strip_js_comments("// 零直调 /api/*\nload();")).len(), 0);
+    assert_eq!(
+        references_hub_api(&strip_js_comments("// 零直调 /api/*\nload();")).len(),
+        0
+    );
 }
