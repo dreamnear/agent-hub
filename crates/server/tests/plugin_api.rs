@@ -126,7 +126,7 @@ fn write_plugin(dir: &tempfile::TempDir, id: &str) {
     .unwrap();
     std::fs::write(
         p.join("view/index.html"),
-        "<!doctype html><html><body><div id=\"root\"></div><script src=\"app.js\"></script></body></html>",
+        "<!doctype html><html><head><link rel=\"stylesheet\" href=\"style.css\" /></head><body><div id=\"root\"></div><script src=\"app.js\"></script></body></html>",
     )
     .unwrap();
     std::fs::write(
@@ -134,6 +134,7 @@ fn write_plugin(dir: &tempfile::TempDir, id: &str) {
         "document.getElementById('root').textContent='ok';\n",
     )
     .unwrap();
+    std::fs::write(p.join("view/style.css"), "body { margin: 0; }\n").unwrap();
     std::fs::write(
         p.join("backend/main.sh"),
         r#"#!/bin/sh
@@ -254,6 +255,7 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     let t = ticket["ticket"].as_str().unwrap().to_string();
     assert_eq!(t.len(), 64, "票据为 32 字节随机不透明串");
 
+    // 形态一（入口）：query 票据（ADR-0004 原形）
     let (status, _, headers) = req(
         a.clone(),
         "GET",
@@ -270,11 +272,37 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
         .to_string();
     assert!(csp.contains("connect-src 'none'"), "CSP: {csp}");
     assert!(csp.contains("default-src 'none'"));
-    assert!(
-        headers.contains_key("set-cookie"),
-        "index.html 应种下作用域票据 cookie（多文件视图次级资源需要）"
-    );
     assert_eq!(headers.get("cache-control").unwrap(), "no-store");
+
+    // 形态二（tester 1 轮 FAIL-1 修复）：票据入路径段——静态 HTML 的相对引用
+    // （app.js / style.css）由浏览器按文档目录解析时自动继承，不依赖 cookie/query。
+    // 此处模拟浏览器真实路径：子资源请求**不带 query、不带 cookie**。
+    let (status, _, headers) = req(
+        a.clone(),
+        "GET",
+        &format!("/plugin-view/demo-plugin/~{t}/index.html"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "路径段形态入口必须可达");
+    assert!(
+        !headers.contains_key("set-cookie"),
+        "cookie 承接已废弃（sandbox iframe 不随发），响应不得再种票据 cookie"
+    );
+    for asset in ["app.js", "style.css"] {
+        let (status, _, _) = req(
+            a.clone(),
+            "GET",
+            &format!("/plugin-view/demo-plugin/~{t}/{asset}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "次级资产 {asset}（无 query/cookie）必须 200"
+        );
+    }
 
     // 无票据 / 错作用域 / 越界路径一律拒绝
     let (status, _, _) = req(
@@ -285,14 +313,25 @@ async fn b1_end_to_end_install_view_ticket_rpc_disable_uninstall() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "无票据必须 403");
+    // 浏览器真实失败形态：次级资产无任何票据（query/cookie/路径段都没有）
+    let (status, _, _) = req(a.clone(), "GET", "/plugin-view/demo-plugin/app.js", None).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "无票据次级资产必须 403（tester 复现路径）"
+    );
     let (status, _, _) = req(
         a.clone(),
         "GET",
-        &format!("/plugin-view/other-plugin/index.html?ticket={t}"),
+        &format!("/plugin-view/other-plugin/~{t}/index.html"),
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "票据作用域限单插件");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "票据作用域限单插件（路径段形态同）"
+    );
     let (status, _, _) = req(
         a.clone(),
         "GET",

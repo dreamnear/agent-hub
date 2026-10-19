@@ -259,7 +259,12 @@ export function navItemsOf(list: PluginView[]): PluginNavItem[] {
 }
 
 /// 视图资产 URL（票据门禁；票据 ≠ hub token，换不到任何 /api 能力）。
+///
+/// 票据走**路径段**形态 `/plugin-view/{id}/~<ticket>/<asset>`：静态 HTML 里的相对
+/// 引用（app.js/style.css）由浏览器按文档 URL 目录解析时自动继承票据段——sandbox
+/// iframe（opaque origin）下 SameSite cookie 不随发、query 无法被静态相对引用继承
+/// （tester 1 轮 FAIL-1），路径段是唯一对浏览器透明的形态。
 export function viewAssetUrl(pluginId: string, relPath: string, ticket: string): string {
   const clean = relPath.replace(/^\/+/, '') || 'index.html';
-  return `/plugin-view/${encodeURIComponent(pluginId)}/${clean}?ticket=${encodeURIComponent(ticket)}`;
+  return `/plugin-view/${encodeURIComponent(pluginId)}/~${encodeURIComponent(ticket)}/${clean}`;
 }

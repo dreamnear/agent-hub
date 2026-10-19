@@ -12,7 +12,7 @@ use std::time::Duration;
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -302,32 +302,38 @@ fn rpc_error_response(e: &RpcError) -> Response {
 
 // ===== 视图资产（票据门禁）=====
 
-/// 票据 cookie 名（多文件视图的次级资源请求无法带 query，用同路径作用域 cookie 承接；
-/// HttpOnly + SameSite=Strict + Path=/plugin-view/<id>/，值域仍是票据而非 hub token）。
-fn ticket_cookie_name(id: &str) -> String {
-    let safe: String = id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    format!("hub_pv_{safe}")
-}
-
 #[derive(Deserialize)]
 struct TicketQuery {
     #[serde(default)]
     ticket: Option<String>,
 }
 
-fn cookie_ticket(headers: &HeaderMap, id: &str) -> Option<String> {
-    let name = ticket_cookie_name(id);
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    for part in raw.split(';') {
-        let part = part.trim();
-        if let Some(v) = part.strip_prefix(&format!("{name}=")) {
-            return Some(v.to_string());
+/// 视图票据的两种携带形态（值域均为票据而非 hub token；测试 1 轮 FAIL-1 的修复）：
+///
+/// - 形态一（入口专用）：`/plugin-view/{id}/index.html?ticket=<opaque>`（ADR-0004
+///   第 3 条原形）；iframe 的 src 由宿主构造，query 可控；
+/// - 形态二（次级资源）：`/plugin-view/{id}/~<ticket>/app.js`——票据在路径段。
+///   静态 HTML 里的相对引用（`app.js` / `style.css`）由浏览器按文档 URL 目录解析，
+///   会**自动继承路径段里的票据**；而 sandbox（无 allow-same-origin）iframe 是
+///   opaque origin，其子资源请求被视为跨站上下文，SameSite cookie 不随发
+///   （tester 第 1 轮 FAIL-1 实测），query 也无法被静态相对引用继承——cookie
+///   承接方案就此废弃，路径段是唯一对浏览器透明的形态。
+///
+/// 解析为纯函数（单测锚点）：返回 (票据, 剩余资产路径)。
+fn split_view_path(raw_path: &str, query_ticket: Option<String>) -> (Option<String>, String) {
+    if let Some(rest) = raw_path.strip_prefix('~') {
+        if let Some(slash) = rest.find('/') {
+            let (ticket, remain) = rest.split_at(slash);
+            // 票据为 64 hex（uuid 双拼）；过短视为普通以 ~ 开头的文件名，不劫持
+            if ticket.len() >= 32 && ticket.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return (
+                    Some(ticket.to_string()),
+                    remain.trim_start_matches('/').to_string(),
+                );
+            }
         }
     }
-    None
+    (query_ticket, raw_path.to_string())
 }
 
 async fn plugin_view_asset(
@@ -336,7 +342,7 @@ async fn plugin_view_asset(
     Query(q): Query<TicketQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let ticket = q.ticket.clone().or_else(|| cookie_ticket(&headers, &id));
+    let (ticket, path) = split_view_path(&path, q.ticket.clone());
     let Some(ticket) = ticket else {
         return (StatusCode::FORBIDDEN, "缺少视图票据").into_response();
     };
@@ -368,19 +374,6 @@ async fn plugin_view_asset(
                 "max-age=60"
             },
         );
-    if file.no_store {
-        // index.html 响应顺带种下作用域票据 cookie，供次级资源请求使用
-        let cookie = format!(
-            "{}={}; Path=/plugin-view/{}/; HttpOnly; SameSite=Strict; Max-Age={}",
-            ticket_cookie_name(&id),
-            ticket,
-            id,
-            crate::plugins::view_ticket::DEFAULT_TTL_SECS
-        );
-        if let Ok(v) = HeaderValue::from_str(&cookie) {
-            resp = resp.header(header::SET_COOKIE, v);
-        }
-    }
     resp.body(Body::from(file.bytes))
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "build failed").into_response())
 }
@@ -518,6 +511,7 @@ pub async fn regression_report(state: &SharedState, plugin_id: &str) -> Regressi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     #[test]
     fn csp_matches_contract_and_pins_origin() {
@@ -539,22 +533,26 @@ mod tests {
     }
 
     #[test]
-    fn ticket_cookie_name_is_path_safe() {
-        assert_eq!(
-            ticket_cookie_name("gitlab-issues-lite"),
-            "hub_pv_gitlab_issues_lite"
-        );
-    }
-
-    #[test]
-    fn cookie_ticket_is_scoped_per_plugin() {
-        let mut h = HeaderMap::new();
-        h.insert(
-            header::COOKIE,
-            HeaderValue::from_static("other=1; hub_pv_plugin_a=abc123"),
-        );
-        assert_eq!(cookie_ticket(&h, "plugin-a").as_deref(), Some("abc123"));
-        assert_eq!(cookie_ticket(&h, "plugin-b"), None);
+    fn view_path_splits_embedded_ticket() {
+        let t = "a".repeat(64);
+        // 形态二：票据段被剥离，剩余路径原样
+        let (ticket, path) = split_view_path(&format!("~{t}/app.js"), None);
+        assert_eq!(ticket.as_deref(), Some(t.as_str()));
+        assert_eq!(path, "app.js");
+        // 形态一：query 票据 + 普通路径
+        let (ticket, path) = split_view_path("index.html", Some("q".into()));
+        assert_eq!(ticket.as_deref(), Some("q"));
+        assert_eq!(path, "index.html");
+        // 以 ~ 开头的普通文件名不被劫持（票据段必须 ≥32 hex 且含 /）
+        let (ticket, path) = split_view_path("~notes/readme.md", None);
+        assert!(ticket.is_none());
+        assert_eq!(path, "~notes/readme.md");
+        let (ticket, path) = split_view_path(&format!("~short/{}", "x".repeat(10)), None);
+        assert!(ticket.is_none());
+        assert_eq!(path, format!("~short/{}", "x".repeat(10)));
+        // 形态二优先于 query（路径票据生效时 query 被忽略）
+        let (ticket, _) = split_view_path(&format!("~{t}/a.js"), Some("q".into()));
+        assert_eq!(ticket.as_deref(), Some(t.as_str()));
     }
 
     #[test]

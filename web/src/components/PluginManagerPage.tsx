@@ -188,9 +188,10 @@ export default function PluginManagerPage(): ReactElement {
   const doInstall = (item: DiscoveredItem): void => {
     void run(item.id, async () => {
       const r = await plugins.install(item.id, item.report.contentHash);
+      // BR-04：一切状态变化 toast 首段固定「已生效 · 立即」（与启停/卸载同口径）
       return r.alreadyInstalled
-        ? t('plugin.toast.alreadyInstalled', { name: r.plugin.name })
-        : t('plugin.toast.installed', { name: r.plugin.name });
+        ? `${t(EFFECT_LABEL)} · ${t('plugin.toast.alreadyInstalled', { name: r.plugin.name })}`
+        : `${t(EFFECT_LABEL)} · ${t('plugin.toast.installed', { name: r.plugin.name })}`;
     });
     setInstallFor(null);
   };

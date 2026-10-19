@@ -65,21 +65,26 @@ describe('navItemsOf（BR-03 同现同隐 / BR-07 故障徽标）', () => {
   });
 });
 
-describe('viewAssetUrl（ADR-0004 票据门禁形态）', () => {
-  it('资产路径落在 /plugin-view/{id}/ 且带 ticket query（票据 ≠ hub token）', () => {
+describe('viewAssetUrl（票据路径段形态，tester 1 轮 FAIL-1 修复）', () => {
+  it('票据入路径段：相对引用由浏览器按文档目录解析时自动继承（不依赖 cookie/query）', () => {
     expect(viewAssetUrl('demo-plugin', 'index.html', 'tk')).toBe(
-      '/plugin-view/demo-plugin/index.html?ticket=tk',
+      '/plugin-view/demo-plugin/~tk/index.html',
     );
   });
 
   it('空路径回落 index.html；相对路径不带前导斜杠', () => {
-    expect(viewAssetUrl('p', '', 'tk')).toBe('/plugin-view/p/index.html?ticket=tk');
-    expect(viewAssetUrl('p', '/app.js', 'tk')).toBe('/plugin-view/p/app.js?ticket=tk');
+    expect(viewAssetUrl('p', '', 'tk')).toBe('/plugin-view/p/~tk/index.html');
+    expect(viewAssetUrl('p', '/app.js', 'tk')).toBe('/plugin-view/p/~tk/app.js');
   });
 
   it('票据与插件 id 做 URL 编码（防注入）', () => {
     expect(viewAssetUrl('a b', 'x.js', 'a&b')).toBe(
-      '/plugin-view/a%20b/x.js?ticket=a%26b',
+      '/plugin-view/a%20b/~a%26b/x.js',
     );
+  });
+
+  it('子目录引用仍落在票据段之下（浏览器相对解析语义）', () => {
+    const url = new URL(viewAssetUrl('p', 'index.html', 'tk'), 'http://x');
+    expect(new URL('assets/app.js', url).pathname).toBe('/plugin-view/p/~tk/assets/app.js');
   });
 });
