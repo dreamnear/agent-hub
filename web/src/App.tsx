@@ -582,7 +582,7 @@ export default function App(): ReactElement {
             onOpenView={(item) => {
               setPluginView(item);
               setSettingsSection(null);
-              setLeftOpen(false); // 手机上开视图即收抽屉
+              setLeftOpen(false); // 手机上开视图即收抽屉（并关已展开的设置页，防遮挡）
             }}
             onOpenManager={() => {
               setSettingsSection('plugins');
