@@ -238,6 +238,16 @@ pub fn compare_semver(a: &str, b: &str) -> std::cmp::Ordering {
     std::cmp::Ordering::Equal
 }
 
+/// 凭据名规则（manifest 声明与凭据写入口共用同一判据）：
+/// 字母/数字/`_-.`，≤64 字符，非空——**只是名字**，值一律由 hub 代持、不入 manifest。
+pub fn valid_credential_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+}
+
 /// `api` 权限项语法：`"<METHOD> <path-pattern>"`，`*` 只能占单段，禁 `**`。
 pub fn valid_api_pattern(pattern: &str) -> Result<(), String> {
     let mut it = pattern.split_whitespace();
@@ -463,11 +473,7 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         }
     }
     for (i, c) in manifest.permissions.credentials.iter().enumerate() {
-        let ok = !c.trim().is_empty()
-            && c.len() <= 64
-            && c.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.');
-        if !ok {
+        if !valid_credential_name(c) {
             errors.push(ManifestIssue::new(
                 format!("permissions.credentials[{i}]"),
                 "credential-name",
@@ -717,6 +723,16 @@ mod tests {
         let raw = base().replace("\"projects:read\"", "\"everything:read\"");
         let errs = parse(&raw).unwrap_err();
         assert!(errs.iter().any(|e| e.rule == "unknown-domain"));
+    }
+
+    #[test]
+    fn credential_name_rule_is_shared() {
+        assert!(valid_credential_name("gitlab_pat"));
+        assert!(valid_credential_name("a"));
+        assert!(!valid_credential_name(""));
+        assert!(!valid_credential_name("has space"));
+        assert!(!valid_credential_name("a:b"));
+        assert!(!valid_credential_name(&"x".repeat(65)));
     }
 
     #[test]

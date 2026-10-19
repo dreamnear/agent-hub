@@ -828,6 +828,115 @@ async fn startup_restores_enabled_plugins_and_reports_dir_missing() {
     assert!(msg.contains("dir-missing"), "故障原因须可定位：{msg}");
 }
 
+/// 凭据界面设置（2026-10-19 预览反馈增量）：设置/清除 值入口 +
+/// 全程零回显（响应、/api/plugins、记录面均不得出现值）+ 落盘 0600。
+#[tokio::test]
+async fn credential_can_be_set_and_cleared_from_management_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_with(&dir);
+    write_plugin(&dir, "demo-plugin");
+    let cred_file = dir.path().join("plugin_credentials.json");
+    let (state, a) = app(cfg);
+    install_demo(a.clone(), "demo-plugin").await;
+
+    // 初始未配置
+    let (_, list, _) = req(a.clone(), "GET", "/api/plugins", None).await;
+    assert_eq!(
+        list[0]["permissions"]["credentials"][0]["configured"],
+        false
+    );
+
+    // 设置：只回状态，不回值
+    let secret = "fake-credential-value-for-test";
+    let (status, body) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/credentials/demo_pat",
+        Some(json!({ "value": secret })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body.contains("configured"), true);
+    assert!(!body.contains(secret), "响应不得回显凭据值：{body}");
+
+    // 状态翻转 + 文件落盘 0600 + 值可读回（仅测试侧直读，非 API 通道）
+    let (_, list, _) = req(a.clone(), "GET", "/api/plugins", None).await;
+    assert_eq!(list[0]["permissions"]["credentials"][0]["configured"], true);
+    assert!(!list.to_string().contains(secret), "清单不得回显凭据值");
+    let raw = std::fs::read_to_string(&cred_file).unwrap();
+    assert!(raw.contains(secret), "值应落盘 hub 侧凭据文件");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&cred_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "凭据文件必须 0600");
+    }
+
+    // 设置后视图/backend 的 hub.credentials.use 立刻取到新值（同进程内即时生效）
+    let (status, res) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.credentials.use", "params": { "name": "demo_pat" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(res.contains(secret), "凭据注入路径可取到值");
+    let (_, records, _) = req(a.clone(), "GET", "/api/plugins/demo-plugin/records", None).await;
+    assert!(
+        !records.to_string().contains(secret),
+        "记录面不得回显凭据值"
+    );
+
+    // 清除：回到未配置态
+    let (status, body) = req_text(
+        a.clone(),
+        "DELETE",
+        "/api/plugins/credentials/demo_pat",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("false"), "{body}");
+    let (_, list, _) = req(a.clone(), "GET", "/api/plugins", None).await;
+    assert_eq!(
+        list[0]["permissions"]["credentials"][0]["configured"],
+        false
+    );
+    assert!(!std::fs::read_to_string(&cred_file)
+        .unwrap()
+        .contains(secret));
+    // 清除后取用失败（未配置），不是静默空值
+    let (status, body) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.credentials.use", "params": { "name": "demo_pat" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("credential-unconfigured"), "{body}");
+
+    // 非法名 / 空值拒绝
+    let (status, _) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/credentials/bad%20name",
+        Some(json!({ "value": "x" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/credentials/demo_pat",
+        Some(json!({ "value": "" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let _ = state;
+}
+
 /// review Round-1 BLOCKER 回归锚：停用条目在重启装载中绝不翻转 enabled——
 /// 用户停用 + 目录被删 → 重启后必须仍是「已停用」，不得漂移为「启用 + 运行故障」
 /// （BR-03 同现同隐 / BR-01 迁移表单一入口）。

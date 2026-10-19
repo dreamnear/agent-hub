@@ -57,6 +57,11 @@ pub fn router() -> Router<SharedState> {
         .route("/api/plugins/audit", post(audit_plugin))
         .route("/api/plugins/install", post(install_plugin))
         .route("/api/plugins/api-schema", get(api_schema))
+        // 凭据值写入口（2026-10-19 预览反馈增量）：设置 / 清除；**只回状态不回值**
+        .route(
+            "/api/plugins/credentials/{name}",
+            post(set_credential).delete(clear_credential),
+        )
         .route("/api/plugins/{id}/enable", post(enable_plugin))
         .route("/api/plugins/{id}/disable", post(disable_plugin))
         .route("/api/plugins/{id}/retry", post(retry_plugin))
@@ -219,6 +224,50 @@ async fn plugin_records(
 
 async fn api_schema() -> Json<api_surface::ApiSchema> {
     Json(api_surface::schema())
+}
+
+#[derive(Deserialize)]
+struct CredentialBody {
+    /// 凭据值（只进不出：响应、日志、审计产物一律不出现其明文）
+    value: String,
+}
+
+/// 设置凭据值（管理页「设置」）：写 `plugin_credentials.json`（0600）。
+/// 响应只回 `{name, configured}`——值零回显（BR-10/11）。
+async fn set_credential(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+    Json(body): Json<CredentialBody>,
+) -> Result<Json<Value>, AppError> {
+    if !crate::plugins::manifest::valid_credential_name(&name) {
+        return Err(AppError::bad("凭据名不合法（字母/数字/_-. ，≤64 字符）"));
+    }
+    if body.value.is_empty() {
+        return Err(AppError::bad("凭据值不能为空（清除请用 DELETE 同一路径）"));
+    }
+    if body.value.len() > 64 * 1024 {
+        return Err(AppError::bad("凭据值过大（上限 64KB）"));
+    }
+    state
+        .plugins
+        .credentials
+        .set(&name, &body.value)
+        .map_err(|e| AppError::bad(format!("写入凭据文件失败：{e}")))?;
+    // 只回状态；值不进响应/日志（handler 侧也不得 tracing 该字段）
+    Ok(Json(json!({ "name": name, "configured": true })))
+}
+
+/// 清除凭据值（管理页「清除」）：从文件移除该名。
+async fn clear_credential(
+    State(state): State<SharedState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    state
+        .plugins
+        .credentials
+        .remove(&name)
+        .map_err(|e| AppError::bad(format!("写入凭据文件失败：{e}")))?;
+    Ok(Json(json!({ "name": name, "configured": false })))
 }
 
 // ===== 调用面 =====

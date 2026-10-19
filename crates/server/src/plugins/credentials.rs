@@ -83,6 +83,37 @@ impl CredentialsStore {
             .collect()
     }
 
+    /// 设置 / 覆盖一个凭据值并原子落盘（0600）。
+    /// 值只在 hub 侧落盘与注入路径出现；调用方（HTTP handler）**不得**把它写进响应或日志。
+    pub fn set(&self, name: &str, value: &str) -> std::io::Result<()> {
+        let mut guard = self.values.write().unwrap_or_else(|e| e.into_inner());
+        guard.insert(name.to_string(), value.to_string());
+        Self::persist(&self.file, &guard)
+    }
+
+    /// 清除一个凭据值；返回是否确实存在过（不存在也视为成功，幂等）。
+    pub fn remove(&self, name: &str) -> std::io::Result<bool> {
+        let mut guard = self.values.write().unwrap_or_else(|e| e.into_inner());
+        let removed = guard.remove(name).is_some();
+        if removed {
+            Self::persist(&self.file, &guard)?;
+        }
+        Ok(removed)
+    }
+
+    /// 原子落盘（tmp + rename）+ 强制 0600（同 instances.json 惯例）。
+    fn persist(file: &Path, values: &BTreeMap<String, String>) -> std::io::Result<()> {
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let raw = serde_json::to_string_pretty(values)?;
+        let tmp = file.with_extension("json.tmp");
+        std::fs::write(&tmp, raw)?;
+        std::fs::rename(&tmp, file)?;
+        crate::platform::harden_0600(file);
+        Ok(())
+    }
+
     /// 所有已配置凭据的值被替换为 `<redacted>`。
     /// 落盘故障摘要、错误响应、日志输出前必过本函数。
     pub fn scrub(&self, s: &str) -> String {
@@ -139,6 +170,33 @@ mod tests {
         let s = store_with(&[("gitlab_pat", "super-secret-token")]);
         let dbg = format!("{s:?}");
         assert!(!dbg.contains("super-secret-token"));
+    }
+
+    #[test]
+    fn set_and_remove_round_trip_with_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plugin_credentials.json");
+        let s = CredentialsStore::load(file.clone());
+        s.set("gitlab_pat", "super-secret-token").unwrap();
+        assert!(s.is_configured("gitlab_pat"));
+        assert_eq!(s.get("gitlab_pat").as_deref(), Some("super-secret-token"));
+        // 重新加载（同文件）可读回：落盘真实生效
+        let s2 = CredentialsStore::load(file.clone());
+        assert_eq!(s2.get("gitlab_pat").as_deref(), Some("super-secret-token"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "凭据文件必须 0600");
+        }
+        // 覆盖写
+        s.set("gitlab_pat", "second-secret-value").unwrap();
+        assert_eq!(s.get("gitlab_pat").as_deref(), Some("second-secret-value"));
+        // 清除（幂等）
+        assert!(s.remove("gitlab_pat").unwrap());
+        assert!(!s.is_configured("gitlab_pat"));
+        assert!(!s.remove("gitlab_pat").unwrap());
+        assert!(CredentialsStore::load(file).get("gitlab_pat").is_none());
     }
 
     #[test]
