@@ -95,9 +95,12 @@ export default function App(): ReactElement {
         : null,
     [pluginView, pluginViewData.data],
   );
-  // 停用/卸载正在查看的插件 → 视图自动关闭（BR-03 同现同隐，无死入口）
+  // 停用/卸载正在查看的插件 → 视图自动关闭（BR-03 同现同隐，无死入口）。
+  // 停用后条目仍在清单（disabled），必须显式判 enabled（tester 2 轮 FAIL-3）
   useEffect(() => {
-    if (pluginView != null && pluginViewPlugin == null) setPluginView(null);
+    if (pluginView != null && (pluginViewPlugin == null || pluginViewPlugin.enabled === false)) {
+      setPluginView(null);
+    }
   }, [pluginView, pluginViewPlugin]);
   // 行名跟随（agent-hub-resume-inplace #21 功能点 5）：原地恢复后该行显示名改为
   // 被恢复会话的名（行 id/任务 id 不变，只覆写展示名）。在数据入口统一派生，

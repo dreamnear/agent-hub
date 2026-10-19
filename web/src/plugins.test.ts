@@ -1,7 +1,7 @@
 // 插件前端纯逻辑（agent-hub-plugin-system B1）：导航派生（BR-03/06/07 的 UI 侧
 // 同现同隐）+ 视图资产 URL（票据门禁形态）。
 import { describe, expect, it } from 'vitest';
-import { navItemsOf, viewAssetUrl, type PluginView } from './plugins';
+import { navItemsOf, unwrapRpcEnvelope, viewAssetUrl, type PluginView } from './plugins';
 
 function pv(over: Partial<PluginView>): PluginView {
   return {
@@ -86,5 +86,27 @@ describe('viewAssetUrl（票据路径段形态，tester 1 轮 FAIL-1 修复）',
   it('子目录引用仍落在票据段之下（浏览器相对解析语义）', () => {
     const url = new URL(viewAssetUrl('p', 'index.html', 'tk'), 'http://x');
     expect(new URL('assets/app.js', url).pathname).toBe('/plugin-view/p/~tk/assets/app.js');
+  });
+});
+
+describe('unwrapRpcEnvelope（tester 2 轮 FAIL-2：宿主桥信封翻译）', () => {
+  it('成功信封 → 解出业务结果（视图契约读 res.content，不读信封）', () => {
+    const out = unwrapRpcEnvelope({ ok: true, result: { content: [{ type: 'text', text: 'x' }] } });
+    expect(out).toEqual({ ok: true, result: { content: [{ type: 'text', text: 'x' }] } });
+  });
+
+  it('错误信封 → rpc-error 载荷（不得当成功结果下发）', () => {
+    const out = unwrapRpcEnvelope({ ok: false, code: 'violation', message: '未声明' });
+    expect(out).toEqual({ ok: false, code: 'violation', message: '未声明' });
+    expect(unwrapRpcEnvelope({ ok: false })).toEqual({
+      ok: false,
+      code: 'plugin_error',
+      message: '',
+    });
+  });
+
+  it('非信封（测试假实现的裸业务结果）→ 原样作为成功结果', () => {
+    expect(unwrapRpcEnvelope({ content: [] })).toEqual({ ok: true, result: { content: [] } });
+    expect(unwrapRpcEnvelope(null)).toEqual({ ok: true, result: null });
   });
 });

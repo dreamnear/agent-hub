@@ -258,6 +258,27 @@ export function navItemsOf(list: PluginView[]): PluginNavItem[] {
   return items;
 }
 
+/// 宿主桥的 rpc 应答解包（tester 2 轮 FAIL-2）：
+/// `/rpc` 返回 HTTP 信封 `{ok:true,result}` / `{ok:false,code,message}`，而
+/// `hub:rpc-result` / `hub:rpc-error` 的载荷契约是**解包后**的业务结果——
+/// 信封必须在宿主侧翻译，不能透传。测试注入的假实现可能直接给业务结果，也兼容。
+export type RpcOutcome =
+  | { ok: true; result: unknown }
+  | { ok: false; code: string; message: string };
+
+export function unwrapRpcEnvelope(res: unknown): RpcOutcome {
+  if (res != null && typeof res === 'object' && 'ok' in (res as Record<string, unknown>)) {
+    const e = res as { ok: boolean; result?: unknown; code?: string; message?: string };
+    if (e.ok === true) return { ok: true, result: e.result };
+    return {
+      ok: false,
+      code: e.code ?? 'plugin_error',
+      message: e.message ?? '',
+    };
+  }
+  return { ok: true, result: res };
+}
+
 /// 视图资产 URL（票据门禁；票据 ≠ hub token，换不到任何 /api 能力）。
 ///
 /// 票据走**路径段**形态 `/plugin-view/{id}/~<ticket>/<asset>`：静态 HTML 里的相对

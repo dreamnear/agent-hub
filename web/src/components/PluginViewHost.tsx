@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { plugins, viewAssetUrl, type PluginNavItem, type PluginView } from '../plugins';
+import { plugins, unwrapRpcEnvelope, viewAssetUrl, type PluginNavItem, type PluginView } from '../plugins';
 import { resolvedTheme, themeAliases, themeTokenSnapshot } from '../lib/themeTokens';
 import { resolveLocale, useI18n } from '../i18n';
 import { useTheme } from '../hooks/useTheme';
@@ -131,9 +131,20 @@ export default function PluginViewHost({ plugin, view, onExit, rpc }: Props): Re
         if (p?.id == null || p.method == null) return;
         const call = rpc ?? ((pid: string, method: string, params: unknown) => plugins.rpc(pid, method, params));
         call(plugin.id, p.method, p.params ?? {})
-          .then((result) =>
-            send({ type: 'hub:rpc-result', payload: { id: p.id!, ok: true, result } }),
-          )
+          .then((res) => {
+            // HTTP 信封在宿主侧翻译成消息契约（tester 2 轮 FAIL-2）：
+            // {ok:true,result} → hub:rpc-result(result)；{ok:false,code,message} →
+            // hub:rpc-error（不能把错误信封当成功结果下发）
+            const outcome = unwrapRpcEnvelope(res);
+            if (outcome.ok) {
+              send({ type: 'hub:rpc-result', payload: { id: p.id!, ok: true, result: outcome.result } });
+            } else {
+              send({
+                type: 'hub:rpc-error',
+                payload: { id: p.id!, ok: false, code: outcome.code, message: outcome.message },
+              });
+            }
+          })
           .catch((e: unknown) => {
             const msg = e instanceof Error ? e.message : String(e);
             send({
