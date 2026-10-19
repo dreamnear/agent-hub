@@ -7,28 +7,11 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- 原生 JS 视图（无框架，控体积）：消费 hub:init / hub:theme 的 --c-* token 字典，
-       数据经 hub:rpc → hub.backend.fetch_issues 全链路获取。零直调 /api/*（CSP
-       connect-src 'none' 结构性禁止）。零内联脚本（CSP script-src 'self'）。 -->
-  <header class="bar">
-    <div class="bar-title">
-      <span class="bar-name">GitLab Issues</span>
-      <span class="bar-project" id="project">—</span>
-    </div>
-    <div class="bar-meta">
-      <span class="theme-indicator" id="theme">主题：—</span>
-      <button type="button" class="btn" id="refresh">刷新</button>
-    </div>
-  </header>
-
+  <div class="view-toolbar" id="picker"></div>
   <main class="board" id="board">
     <div class="state" id="state">正在连接宿主…</div>
   </main>
-
-  <footer class="foot">
-    <span id="meta">—</span>
-  </footer>
-
+  <footer class="foot"><span id="meta"></span></footer>
   <script src="app.js"></script>
 </body>
 </html>
