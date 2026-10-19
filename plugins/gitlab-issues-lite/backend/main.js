@@ -167,7 +167,6 @@ async function fetchIssues(args) {
   return {
     project: target.project,
     host: target.host,
-    originUrl: target.originUrl,
     resolvedVia: target.via,
     apiBase: target.apiBase,
     fetchedAt: new Date().toISOString(),
