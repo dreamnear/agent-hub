@@ -827,3 +827,36 @@ async fn startup_restores_enabled_plugins_and_reports_dir_missing() {
     let msg = list[0].last_fault.as_ref().unwrap().message.clone();
     assert!(msg.contains("dir-missing"), "故障原因须可定位：{msg}");
 }
+
+/// review Round-1 BLOCKER 回归锚：停用条目在重启装载中绝不翻转 enabled——
+/// 用户停用 + 目录被删 → 重启后必须仍是「已停用」，不得漂移为「启用 + 运行故障」
+/// （BR-03 同现同隐 / BR-01 迁移表单一入口）。
+#[tokio::test]
+async fn startup_keeps_disabled_entry_disabled_even_when_dir_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_with(&dir);
+    write_plugin(&dir, "demo-plugin");
+    let (state, a) = app(cfg);
+    install_demo(a.clone(), "demo-plugin").await;
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/demo-plugin/disable", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(state.plugins.list()[0].ui_state, "disabled");
+
+    // 停用 + 目录被删 + 重启
+    std::fs::remove_dir_all(dir.path().join("plugins/demo-plugin")).unwrap();
+    let cfg2 = cfg_with(&dir);
+    let (state2, _a2) = app(cfg2);
+    state2.plugins.startup().await;
+    let list = state2.plugins.list();
+    assert_eq!(list.len(), 1, "停用条目保留注册记录");
+    assert_eq!(list[0].enabled, false, "enabled 位不得被启动装载翻转");
+    assert_eq!(
+        list[0].ui_state, "disabled",
+        "停用 + 目录缺失重启后仍是停用态"
+    );
+    assert_eq!(list[0].state, "stopped");
+    assert!(
+        state2.plugins.nav_entries().is_empty(),
+        "停用态不得出现故障入口（BR-03）"
+    );
+}

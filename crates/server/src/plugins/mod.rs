@@ -250,6 +250,14 @@ impl PluginManager {
         let entries = self.registry.list();
         for p in entries {
             let id = p.entry.id.clone();
+            // 停用条目不参与启动装载（设计 §6.2）：目录缺失 / manifest 损坏都保持停用态，
+            // 不翻转 enabled——否则用户停用 + 目录被删的插件会在重启后漂移为
+            // 「启用 + 运行故障」，侧栏故障入口重现（review Round-1 BLOCKER：
+            // enabled 位绕过 BR-01 迁移表单一入口）。显式启用/重试路径的装载
+            // 失败分支已覆盖 dir-missing 呈态，停用态的呈态无需在此补写。
+            if !p.entry.enabled {
+                continue;
+            }
             if !p.plugin_dir.as_os_str().is_empty() && p.plugin_dir.join("plugin.json").is_file() {
                 // 已解析过目录（同进程内插入）
                 continue;
