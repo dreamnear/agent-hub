@@ -81,7 +81,7 @@ pub fn router() -> Router<SharedState> {
             "/api/plugins/approvals/{apr_id}",
             get(get_approval).post(decide_approval),
         )
-        // 插件 command 贡献物（B2 批4，ADR-0012）：`hub-plugin` 独立来源组，
+        // 插件 command 贡献物（B2 批4，design §12.1 / 需求功能点 5）：`hub-plugin` 独立来源组，
         // 前端 `/` 补全合并渲染（设计 §12.6「前端分组渲染加法」）——commands.rs
         // 的 Claude 插件枚举消费端一行不动（零回归红线）。
         .route("/api/plugins/commands", get(plugin_commands))
@@ -437,7 +437,7 @@ async fn decide_approval(
     ))
 }
 
-// ===== 插件 command 贡献物（B2 批4，ADR-0012）=====
+// ===== 插件 command 贡献物（B2 批4，design §12.1 / 需求功能点 5）=====
 
 /// `/api/plugins/commands` 条目：`hub-plugin` 来源组。`name` 即 manifest 的
 /// command id（`plug_<pluginId>_<cid>`，审计期已锁命名空间）；target 二选一

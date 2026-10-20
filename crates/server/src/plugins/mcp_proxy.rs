@@ -282,8 +282,7 @@ impl McpProxy {
                     t.implementation.kind
                 )));
             }
-            // 经 hub 侧 supervisor 直调会复用同一进程模型；批1代理侧直接返回占位成功（真实调用在批2/3通过 hub HTTP 回调实现）
-            // 为满足端到端可用，批1在代理侧尝试直调本地 backend（若声明 backend）——用 RpcChannel 复用 supervisor 逻辑
+            // 代理侧直调插件 backend 进程（F-2 后 loopback 转发 hub /rpc，闸门在 hub 侧 HubRpcHandler 单点）
             return self.invoke_backend(plugin, &t.id, arguments).await;
         }
         // 否则视为 MCP 工具：路由到对应 MCP server
@@ -429,7 +428,8 @@ impl McpProxy {
             RpcError::Timeout => RpcError::Timeout,
             other => RpcError::PluginError(other.message()),
         })?;
-        // MCP 的 tools/call 返回形态：{content:[...]} 或 {toolResult...}，直接透传但经 scrub
+        // MCP 的 tools/call 返回形态：{content:[...]} 直接透传（MCP 结果不可信
+        // 标记由会话侧呈现，不经 scrub——scrub 仅用于日志/故障记录面）
         Ok(res)
     }
 

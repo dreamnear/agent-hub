@@ -471,7 +471,7 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
             &mut errors,
         );
     }
-    // —— commands：id 命名空间 + kind + target 完整性/合法性（ADR-0012 §12.1）——
+    // —— commands：id 命名空间 + kind + target 完整性/合法性（design §12.1，需求功能点 5）——盘上 ADR-0012 为 content-renderer 扩展点（与 command target 同名），此初判据未单列 ADR——
     let view_ids: std::collections::HashSet<&str> = manifest
         .contributes
         .views
@@ -549,7 +549,7 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
                 Some(risk) if *risk != "read" => errors.push(ManifestIssue::new(
                     format!("contributes.commands[{i}].target.tool"),
                     "command-target-read-only",
-                    format!("target.tool {tid:?} 必须指向 risk:\"read\" 工具（当前 risk:{risk:?}），审计限只读（ADR-0012）"),
+                    format!("target.tool {tid:?} 必须指向 risk:\"read\" 工具（当前 risk:{risk:?}），审计限只读（design §12.1）"),
                 )),
                 _ => {}
             }
