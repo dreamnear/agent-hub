@@ -1,0 +1,66 @@
+/* 高危审批确认卡（backdrop/card/dialog-actions/confirm-banner 复用既有弹窗规范） */
+.apr-backdrop {
+  z-index: 60;
+}
+
+.apr-card {
+  width: min(480px, 92vw);
+}
+
+.apr-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.apr-desc {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--c-sub);
+}
+
+.apr-facts {
+  margin: 0.6rem 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.apr-fact {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.apr-fact dt {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+}
+
+.apr-fact dd {
+  margin: 0;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.apr-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.apr-args {
+  max-height: 6.5em;
+  overflow: auto;
+}
+
+.apr-trace {
+  margin: 0.4rem 0 0;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+}
+
+.apr-untrusted {
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  color: var(--c-sub);
+}

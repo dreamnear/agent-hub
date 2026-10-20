@@ -26,7 +26,8 @@ import QuickChat from './components/QuickChat';
 import SettingsPage, { lastSettingsSection, type SettingsSectionKey } from './components/SettingsPage';
 import PluginNavGroup from './components/PluginNavGroup';
 import PluginViewHost from './components/PluginViewHost';
-import { plugins, type PluginNavItem, type PluginView } from './plugins';
+import HighRiskApprovalDialog from './components/HighRiskApprovalDialog';
+import { plugins, navItemsOf, type PluginNavItem, type PluginView } from './plugins';
 import TokenGate from './components/TokenGate';
 import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialog';
 import SessionHistoryDialog from './components/SessionHistoryDialog';
@@ -350,6 +351,21 @@ export default function App(): ReactElement {
       active: g.active === 'terminal' ? null : g.active,
       terminal: null,
     }));
+  };
+
+  /// 打开插件视图（B2 批4：hub-plugin view 型 command 的执行语义）——复用
+  /// PluginNavGroup 同款 pluginView 态；清单实时拉（启停即生效，BR-03）
+  const openPluginView = (pluginId: string, viewId: string): void => {
+    void plugins
+      .list()
+      .then((list) => {
+        const item = navItemsOf(list).find((n) => n.pluginId === pluginId && n.viewId === viewId);
+        if (item != null) {
+          setPluginView(item);
+          setSettingsSection(null);
+        }
+      })
+      .catch(() => {});
   };
 
   /// 打开/聚焦文件页签（面板树点击与 diff 跳源共用）：未开则新开并聚焦 + 右面板
@@ -701,6 +717,7 @@ export default function App(): ReactElement {
                     setNotesFor((cur) => (cur && cur.cwd === selected.cwd ? null : selected))
                   }
                   onOpenTerminal={selected.cwd != null ? openTerminalTab : undefined}
+                  onOpenPluginView={openPluginView}
                 />
               </div>
               {/* 文件页签面板：全会话组常挂（隐藏不卸载，滚动位置保留，Tab 组按会话
@@ -967,6 +984,8 @@ export default function App(): ReactElement {
         />
       ) : null}
       {toast != null ? <Toast text={toast} /> : null}
+      {/* 高危审批确认卡（B2 批3）：自持轮询，无待确认单时渲染 null */}
+      <HighRiskApprovalDialog />
       {needToken ? <TokenGate onUnlocked={unlock} /> : null}
     </div>
   );

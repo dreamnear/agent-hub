@@ -716,3 +716,17 @@
     flex-direction: column;
   }
 }
+
+/* 插件工具执行回执（B2 批4 tool 型 command）：输入区上方短通知，4s 自清 */
+.chat-plugin-notice {
+  width: 100%;
+  max-width: var(--chat-col-w);
+  margin: 0.35rem auto 0;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  background: var(--c-panel);
+  border: 1px solid var(--c-border);
+  color: var(--c-text);
+  word-break: break-all;
+}

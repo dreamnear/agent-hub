@@ -81,6 +81,10 @@ pub fn router() -> Router<SharedState> {
             "/api/plugins/approvals/{apr_id}",
             get(get_approval).post(decide_approval),
         )
+        // 插件 command 贡献物（B2 批4，ADR-0012）：`hub-plugin` 独立来源组，
+        // 前端 `/` 补全合并渲染（设计 §12.6「前端分组渲染加法」）——commands.rs
+        // 的 Claude 插件枚举消费端一行不动（零回归红线）。
+        .route("/api/plugins/commands", get(plugin_commands))
 }
 
 /// 视图资产路由（不并入 `router()` 的 `/api` 组；挂载点在 `lib.rs`，位于 SPA 通配之前）。
@@ -433,6 +437,69 @@ async fn decide_approval(
     ))
 }
 
+// ===== 插件 command 贡献物（B2 批4，ADR-0012）=====
+
+/// `/api/plugins/commands` 条目：`hub-plugin` 来源组。`name` 即 manifest 的
+/// command id（`plug_<pluginId>_<cid>`，审计期已锁命名空间）；target 二选一
+/// （view 打开插件视图 / tool 触发只读工具，审计限 risk:"read"）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommandItem {
+    pub name: String,
+    pub label: String,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_args: Option<Value>,
+}
+
+/// 启用插件的 command 贡献物清单（停用/故障不出清单，BR-03 同现同隐）。
+async fn plugin_commands(State(state): State<SharedState>) -> Json<Vec<PluginCommandItem>> {
+    let mut out = Vec::new();
+    for p in state.plugins.registry.list() {
+        out.extend(plugin_commands_of(&p));
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(out)
+}
+
+/// 单插件的 command 条目提取（纯函数便于单测）：仅启用且非故障插件；
+/// name = command id（`plug_<pluginId>_<cid>`，manifest 审计期已锁命名空间）。
+fn plugin_commands_of(p: &crate::plugins::registry::InstalledPlugin) -> Vec<PluginCommandItem> {
+    use crate::plugins::registry::PluginState;
+    if !p.entry.enabled || p.entry.state == PluginState::Fault {
+        return Vec::new();
+    }
+    let plugin_name = if p.manifest.name.is_empty() {
+        p.entry.id.clone()
+    } else {
+        p.manifest.name.clone()
+    };
+    p.manifest
+        .contributes
+        .commands
+        .iter()
+        .map(|decl| PluginCommandItem {
+            name: decl.id.clone(),
+            label: decl.name.clone(),
+            source: "hub-plugin",
+            description: decl.description.clone(),
+            plugin_id: p.entry.id.clone(),
+            plugin_name: plugin_name.clone(),
+            target_view: decl.target.view.clone(),
+            target_tool: decl.target.tool.clone(),
+            target_args: decl.target.args.clone(),
+        })
+        .collect()
+}
+
 fn rpc_error_response(e: &RpcError) -> Response {
     let status = match e.kind() {
         "unauthorized" | "violation" => StatusCode::FORBIDDEN,
@@ -714,5 +781,59 @@ mod tests {
         assert_eq!(r.status(), StatusCode::GATEWAY_TIMEOUT);
         let r = rpc_error_response(&RpcError::PluginError("x".into()));
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// B2 批4：插件 command 提取——启用插件产出 hub-plugin 条目（target view/tool
+    /// 透传）；停用/故障插件零条目（BR-03 同现同隐）；name = command id。
+    #[test]
+    fn plugin_commands_extract_from_enabled_only() {
+        use crate::plugins::manifest::{parse, CommandDecl, CommandTarget};
+        use crate::plugins::registry::{PluginEntry, PluginSource, PluginState};
+        let raw = serde_json::json!({
+            "schemaVersion": 1, "id": "cmd-p", "name": "CmdP", "version": "0.1.0",
+            "hub": {"apiVersion": "1"},
+            "contributes": {
+                "views": [{"id": "home", "title": "Home", "entry": "view/index.html"}],
+                "tools": [{"id": "lookup", "name": "Lookup", "risk": "read",
+                           "impl": {"kind": "backend", "ref": "lookup"}}],
+                "commands": [
+                    {"id": "plug_cmd-p_open", "name": "打开工作台", "kind": "info",
+                     "target": {"view": "home"}},
+                    {"id": "plug_cmd-p_find", "name": "快速查询", "kind": "info",
+                     "description": "只读查询", "target": {"tool": "lookup", "args": {"q": "x"}}}
+                ]
+            }
+        })
+        .to_string();
+        let manifest = parse(&raw).unwrap().manifest;
+        let mk = |enabled: bool, state: PluginState| crate::plugins::registry::InstalledPlugin {
+            entry: PluginEntry {
+                id: "cmd-p".into(),
+                version: "0.1.0".into(),
+                content_hash: "sha256:a".into(),
+                permissions_hash: "sha256:b".into(),
+                source: PluginSource::drop_in(),
+                installed_at: "2026-10-21T00:00:00Z".into(),
+                enabled,
+                state,
+                last_fault: None,
+            },
+            manifest: manifest.clone(),
+            plugin_dir: std::path::PathBuf::from("/tmp/cmd-p"),
+            records: vec![],
+        };
+        // 启用：两条目，name/label/target 逐项对齐
+        let items = plugin_commands_of(&mk(true, PluginState::Ready));
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "plug_cmd-p_open");
+        assert_eq!(items[0].source, "hub-plugin");
+        assert_eq!(items[0].target_view.as_deref(), Some("home"));
+        assert_eq!(items[0].target_tool, None);
+        assert_eq!(items[1].name, "plug_cmd-p_find");
+        assert_eq!(items[1].target_tool.as_deref(), Some("lookup"));
+        assert_eq!(items[1].target_args, Some(serde_json::json!({"q": "x"})));
+        // 停用 / 故障：零条目（BR-03）
+        assert!(plugin_commands_of(&mk(false, PluginState::Ready)).is_empty());
+        assert!(plugin_commands_of(&mk(true, PluginState::Fault)).is_empty());
     }
 }

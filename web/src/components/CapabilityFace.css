@@ -1,0 +1,84 @@
+/* 会话侧能力可发现面（B2 批5）：折叠条 + 紧凑行清单；全部走 --c-* token */
+.cap-face {
+  width: 100%;
+  max-width: var(--chat-col-w);
+  margin: 0.35rem auto 0;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+  font-size: 0.75rem;
+}
+
+.cap-face summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+  color: var(--c-text);
+  min-width: 0;
+}
+
+.cap-face-untrusted {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--c-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cap-face-list {
+  margin: 0;
+  padding: 0.2rem 0.7rem 0.45rem;
+  list-style: none;
+  display: grid;
+  gap: 0.25rem;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.cap-face-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.cap-kind {
+  flex: none;
+  padding: 0 0.35rem;
+  border-radius: 6px;
+  border: 1px solid var(--c-border);
+  color: var(--c-sub);
+}
+
+.cap-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text);
+}
+
+.cap-plugin {
+  margin-left: auto;
+  flex: none;
+  color: var(--c-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+.cap-risk {
+  flex: none;
+  color: var(--c-sub);
+}
+
+.cap-risk--high {
+  color: var(--c-danger-text);
+  border: 1px solid var(--c-danger-border);
+  border-radius: 6px;
+  padding: 0 0.35rem;
+}
