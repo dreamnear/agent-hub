@@ -4,6 +4,32 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.0] - 2026-10-21
+
+本批：插件体系 B1 地基（#27，epic agent-hub-mng#11，ADR-0001..0010 首批架构决策）+ 三项预览反馈增量，一次部署上线。
+
+### Added — 插件体系 B1 地基（#27）
+
+- **装载与生命周期**：本地目录 drop-in（`~/.claude-view/plugins/<id>/`，一层深扫描）+ `--plugin-dir` 单次加载；发现（启动 + 10s 周期 + 手动刷新）≠安装，安装前静态审计卡展示贡献物清单与权限触达面（凭据只显名，值零回显）；安装/停用/启用/卸载一律立即生效且提示一致；注册表唯一事实源（单写者 + 同插件操作串行 + install 幂等）；卸载默认不删插件目录
+- **能力侧进程**：每插件一进程 sidecar（插件自带运行时，hub 不内嵌引擎）、懒启动 + 300s 空闲回收 + 握手 10s 超时、崩溃退避 3 次转故障态（原因可查、可「重试加载」整体重登）、进程组终止；stdio 换行 JSON-RPC 2.0（B1 能力面：initialize / tool.invoke / health）
+- **权限与凭据**：按调用类别的判定矩阵——RPC 数据方法判 `data` 域、涉凭据再判 `credentials` 名、未声明即拒绝 + 违规留痕；凭据 hub 代持（`plugin_credentials.json` 0600）、插件按名引用、运行时注入、全局 scrub 兜底
+- **插件视图**：侧栏「插件视图」导航组（sticky 常驻、零插件不渲染）+ 整页 iframe 沙箱宿主（不含 `allow-same-origin`）+ 票据门禁（32B 随机 / 120s / 单插件作用域，路径段形态，票据≠hub token）+ postMessage 固定消息集 + `--c-*` token 主题桥（三态跟随）+ 视图故障层（宿主不白屏）
+- **插件管理页**：新发现区（审计通过/失败/待确认三卡型）、已安装清单（五态芯片、启停/卸载/重试、故障原因可查）、生效时机提示
+- **示例插件 `gitlab-issues-lite`**：1 个 backend 工具（fetch_issues）+ 1 个原生视图；**绑定到工程**——项目下拉列 `hub.projects.effective`，backend 只读 `git remote get-url origin` 反解 GitLab host + namespace/repo（ssh/https 形态全支持），凭据按名注入拉取 issue 清单；零直调 `/api/*`（静态检查门禁锁定）
+- **扩展 API 门禁**：`hub.apiVersion` 整数主版本相等才通过；三段白名单（贡献物 / RPC 方法表 / postMessage 消息集）；宿主侧 bundle 新增 +8.5KB ≤ 15KB 自约束
+- **零回归**：无插件时导航集合 / 可发现能力集合 / 主体行为 / bundle 口径与引入前完全一致（四条断言随卸载自动执行）
+
+### Added — 预览反馈增量（用户实测驱动，同批上线）
+
+- **凭据管理面**：管理页对插件声明的凭据名「设置/清除」——password 框不预填旧值、上行即清、已配置/未配置即时翻转；端点零回显四通道断言（响应/清单/记录/日志）
+- **绑定工程 + git remote 反解**：替代手输项目名与固定 gitlab.com 缺省（自建 GitLab 实例 401 的根治）
+- **`hub.projects.effective` 可验证工程清单**：工程注册表 ∪ 全部 agent cwd 去重（带来源标注）——插件下拉自动反映日常真实工程，无需手工维护注册表
+
+### 工单索引
+
+- 本批：#27（插件体系 B1 地基，epic agent-hub-mng#11）
+- 遗留（不阻断，随批次承接）：permissions 高危分支（B2 启用）、HUB_VERSION 随发版收敛、`hub:rpc-error` message 结构化（B3）、mux_proxy_end_to_end 高载偶发 flake（单列稳定性 issue）
+
 ## [0.5.0] - 2026-10-18
 
 本轮四单批次（#15 / #18 / #19 / #21），一次部署上线。
