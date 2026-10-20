@@ -35,6 +35,10 @@ pub struct ClaudeDriver {
     pub jobs_dir: PathBuf,
     /// 会话 jsonl 根（= config.claude_root；session/subagents/tasks 读取口径）
     pub projects_dir: PathBuf,
+    /// 会话级 MCP config 目录（B2：`plugin_mcp`，每会话一 JSON，不写 `~/.claude`）。
+    pub plugin_mcp_dir: PathBuf,
+    /// hub 二进制路径（B2：注入 `hub-plugins` MCP server 的 command）。
+    pub hub_bin: PathBuf,
     /// 注入/中断 PTY 路由（SessionControl 委托）。与 AppState.message_routes 的
     /// "claude" 条目同一实例、共享 attaches 表——不得另建（双实例 = 双重 attach，
     /// 破坏 TUI 注入时序）。
@@ -62,11 +66,36 @@ impl ClaudeDriver {
         ignored_interactive_file: PathBuf,
         rooms: Arc<RwLock<HashMap<String, broadcast::Sender<ChatEvent>>>>,
     ) -> Self {
+        Self::new_with_mcp(
+            bin,
+            jobs_dir,
+            projects_dir,
+            ignored_interactive_file,
+            rooms,
+            PathBuf::from(format!(
+                "{}/.claude-view/plugin_mcp",
+                crate::platform::home_dir_str()
+            )),
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("server")),
+        )
+    }
+
+    pub fn new_with_mcp(
+        bin: PathBuf,
+        jobs_dir: PathBuf,
+        projects_dir: PathBuf,
+        ignored_interactive_file: PathBuf,
+        rooms: Arc<RwLock<HashMap<String, broadcast::Sender<ChatEvent>>>>,
+        plugin_mcp_dir: PathBuf,
+        hub_bin: PathBuf,
+    ) -> Self {
         let sender = Arc::new(ClaudeSendRouter::new(bin.clone()));
         Self {
             bin,
             jobs_dir,
             projects_dir,
+            plugin_mcp_dir,
+            hub_bin,
             ignored_interactive_file,
             sender,
             rooms,
@@ -378,26 +407,92 @@ impl AgentCatalog for ClaudeDriver {
     }
 
     fn start<'a>(&'a self, spec: &'a StartSpec) -> BoxFuture<'a, Result<String>> {
+        let mcp_dir = self.plugin_mcp_dir.clone();
+        let hub_bin = self.hub_bin.clone();
         Box::pin(async move {
             // 转调 api/agents.rs::start_agent 的 CLI 段；validate_cwd 属信任边界
             // 校验，留在 api 层
+            // B2：会话级 --mcp-config 注入（有启用插件且非 resume 时生效；不写 ~/.claude）
+            // 约束：必须以**真实 bg id**作为 session，需先启动再写 config，因此注入
+            // 分两段——无插件时零行为（纯加法），有插件时先起会话再写 config 并
+            // 追加 --mcp-config 走二次注入（见下方注释）。
+            // 简化 v1：先以真实能力探询决定是否走“注入分支”——有启用插件则在
+            // 起会话前先写一个占位 config（文件名=占位 sid），启动参数带上；返回
+            // 真实 id 后再以真实 id 重写并回收占位文件（fail-soft，不阻断启动）。
+            let needs = if spec.resume_session_id.is_some() {
+                false
+            } else {
+                let dir = mcp_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    let cfg = crate::config::Config::load();
+                    let _ = &dir;
+                    let registry =
+                        crate::plugins::registry::Registry::open(cfg.plugin_state_file.clone());
+                    registry.list().into_iter().any(|p| {
+                        p.entry.enabled
+                            && p.entry.state != crate::plugins::registry::PluginState::Fault
+                    })
+                })
+                .await
+                .unwrap_or(false)
+            };
+            let placeholder_cfg: Option<String> = if !needs {
+                None
+            } else {
+                let sid_placeholder = format!("hub-{}", uuid::Uuid::new_v4());
+                match crate::plugins::mcp_config::write_config_sync(
+                    &mcp_dir,
+                    &hub_bin,
+                    &sid_placeholder,
+                ) {
+                    Ok(path) => Some(path.to_string_lossy().to_string()),
+                    Err(_) => None,
+                }
+            };
             let req = cli::StartReq {
                 prompt: spec.prompt.clone(),
                 name: spec.name.clone(),
                 model: spec.model.clone(),
                 effort: spec.effort.clone(),
                 resume: spec.resume_session_id.clone(),
+                mcp_config: placeholder_cfg.clone(),
             };
-            cli::start_bg(&self.bin, Path::new(&spec.cwd), &req).await
+            let id = cli::start_bg(&self.bin, Path::new(&spec.cwd), &req).await?;
+            if let Some(cfg) = placeholder_cfg.as_deref() {
+                let tmp = std::path::PathBuf::from(cfg);
+                if tmp
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("hub-"))
+                {
+                    let _ = std::fs::remove_file(&tmp);
+                }
+                let _ = crate::plugins::mcp_config::write_config_sync(&mcp_dir, &hub_bin, &id);
+            }
+            Ok(id)
         })
     }
 
     fn stop<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
-        Box::pin(cli::stop(&self.bin, id))
+        let mcp_dir = self.plugin_mcp_dir.clone();
+        let id = id.to_string();
+        let bin = self.bin.clone();
+        Box::pin(async move {
+            let r = cli::stop(&bin, &id).await;
+            crate::plugins::mcp_config::remove_config_sync(&mcp_dir, &id);
+            r
+        })
     }
 
     fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
-        Box::pin(cli::remove(&self.bin, id))
+        let mcp_dir = self.plugin_mcp_dir.clone();
+        let id = id.to_string();
+        let bin = self.bin.clone();
+        Box::pin(async move {
+            let r = cli::remove(&bin, &id).await;
+            crate::plugins::mcp_config::remove_config_sync(&mcp_dir, &id);
+            r
+        })
     }
 
     fn respawn<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {

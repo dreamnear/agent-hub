@@ -1,0 +1,115 @@
+//! 会话级 MCP config 生成（B2，claude --mcp-config 注入）。
+//!
+//! 不写用户 `~/.claude`（`--mcp-config` 为单次调用级开关，纯加法；
+//! `--strict-mcp-config` 不使用——保持用户自有 MCP 不受影响）。
+//! 文件落 `~/.claude-view/plugin_mcp/<session>.json`（Config::plugin_mcp_dir，
+//! env `AGENT_HUB_PLUGIN_MCP_DIR` 覆盖），每会话一文件；会话结束由驱动层回收。
+
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
+
+/// 生成 --mcp-config 所需的 JSON 值（单 server: hub-plugins）。
+pub fn mcp_config_value(hub_bin: &Path, session_id: &str) -> Value {
+    json!({
+        "mcpServers": {
+            "hub-plugins": {
+                "command": hub_bin.to_string_lossy().to_string(),
+                "args": ["mcp-proxy", "--session", session_id]
+            }
+        }
+    })
+}
+
+/// 会话级 config 文件路径：`<mcp_dir>/<session_id>.json`。
+pub fn config_path(mcp_dir: &Path, session_id: &str) -> PathBuf {
+    mcp_dir.join(format!("{}.json", session_id))
+}
+
+/// 同步写 config（原子：tmp + rename；父目录不存在则建）。
+/// 返回写入路径。
+pub fn write_config_sync(
+    mcp_dir: &Path,
+    hub_bin: &Path,
+    session_id: &str,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(mcp_dir)?;
+    let path = config_path(mcp_dir, session_id);
+    let tmp = mcp_dir.join(format!(".{session_id}.tmp"));
+    let value = mcp_config_value(hub_bin, session_id);
+    let raw = serde_json::to_string_pretty(&value)?;
+    std::fs::write(&tmp, raw)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
+}
+
+/// 异步写（驱动层便捷）。
+pub async fn write_config(
+    mcp_dir: PathBuf,
+    hub_bin: PathBuf,
+    session_id: String,
+) -> anyhow::Result<PathBuf> {
+    tokio::task::spawn_blocking(move || write_config_sync(&mcp_dir, &hub_bin, &session_id))
+        .await
+        .map_err(|e| anyhow::anyhow!("mcp config spawn_blocking: {e}"))?
+}
+
+/// 回收会话级 config（不存在忽略）。
+pub fn remove_config_sync(mcp_dir: &Path, session_id: &str) {
+    let path = config_path(mcp_dir, session_id);
+    let _ = std::fs::remove_file(path);
+}
+
+/// 当前 hub 二进制路径（回退字面量 `server`，保证 JSON 仍合法）。
+pub fn hub_bin_path() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("server"))
+}
+
+/// 供测试：判断是否需要注入（有启用插件才注入，零回归——无插件时行为与引入前一致）。
+pub fn needs_injection(enabled_count: usize) -> bool {
+    enabled_count > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn config_value_shape() {
+        let v = mcp_config_value(Path::new("/tmp/server"), "sess-123");
+        assert_eq!(
+            v["mcpServers"]["hub-plugins"]["command"],
+            json!("/tmp/server")
+        );
+        assert_eq!(
+            v["mcpServers"]["hub-plugins"]["args"],
+            json!(["mcp-proxy", "--session", "sess-123"])
+        );
+    }
+
+    #[test]
+    fn write_and_remove_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let mcp_dir = dir.path().join("plugin_mcp");
+        let hub = Path::new("/tmp/hub-bin");
+        let sid = "test-sess-abc";
+        let path = write_config_sync(&mcp_dir, hub, sid).unwrap();
+        assert!(path.is_file());
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["mcpServers"]["hub-plugins"]["args"][2], json!(sid));
+        // 原子无残留 tmp
+        assert!(!mcp_dir.join(format!(".{sid}.tmp")).exists());
+        remove_config_sync(&mcp_dir, sid);
+        assert!(!path.exists());
+        // 重复删除不报错
+        remove_config_sync(&mcp_dir, sid);
+    }
+
+    #[test]
+    fn needs_injection_gate() {
+        assert!(!needs_injection(0));
+        assert!(needs_injection(1));
+    }
+}

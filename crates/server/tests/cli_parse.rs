@@ -61,6 +61,7 @@ async fn fake_cli_integration() {
             model: None,
             effort: None,
             resume: None,
+            mcp_config: None,
         },
     )
     .await
@@ -87,6 +88,7 @@ async fn bg_start_parses_usable_id_for_every_output_shape() {
         model: None,
         effort: None,
         resume: resume.map(Into::into),
+        mcp_config: None,
     };
 
     // 用例非空证：污染 id（整行 / 名字）确实会被 mock 拒绝，红了才算数

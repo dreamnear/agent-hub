@@ -506,6 +506,9 @@ pub struct Config {
     /// transient 插件目录（ADR-0001 第 4 条）：`--plugin-dir` 可重复或 env
     /// `AGENT_HUB_PLUGIN_DIR`（多值 `:` 分隔）；不写注册表持久层
     pub plugin_transient_dirs: Vec<PathBuf>,
+    /// MCP 聚合代理会话级 config 目录（B2）：`~/.claude-view/plugin_mcp`，
+    /// env `AGENT_HUB_PLUGIN_MCP_DIR` 覆盖；每会话一 JSON（不写 `~/.claude`）
+    pub plugin_mcp_dir: PathBuf,
 }
 
 impl Config {
@@ -712,6 +715,15 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            plugin_mcp_dir: std::env::var("AGENT_HUB_PLUGIN_MCP_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.claude-view/plugin_mcp",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
         }
     }
 }

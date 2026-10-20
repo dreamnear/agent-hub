@@ -98,12 +98,14 @@ impl AppState {
         // 单实例共享：sender 由 ClaudeDriver::new 自建，轨一
         // message_routes 取其句柄——attaches 表唯一（双实例 = 双重 attach 破坏
         // TUI 注入时序）
-        let driver = ClaudeDriver::new(
+        let driver = ClaudeDriver::new_with_mcp(
             cfg.claude_bin.clone(),
             cfg.jobs_dir.clone(),
             cfg.claude_root.clone(),
             cfg.ignored_interactive_file.clone(),
             chat_rooms.clone(),
+            cfg.plugin_mcp_dir.clone(),
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("server")),
         );
         // 定时任务目录先取（Self 字面量里 cfg 会被 move）
         let tasks_dir = cfg.tasks_dir.clone();
