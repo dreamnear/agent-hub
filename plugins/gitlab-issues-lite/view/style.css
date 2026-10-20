@@ -78,6 +78,42 @@ body {
   background: var(--bg);
 }
 
+.project-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.project-name {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.project-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-source {
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.project-source--agent-cwd {
+  color: var(--ok, var(--accent));
+  border-color: var(--accent);
+}
+
 .btn {
   min-height: 28px;
   padding: 0 0.7rem;

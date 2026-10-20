@@ -62,16 +62,17 @@
     pickerEl.appendChild(label);
     pickerEl.appendChild(input);
     pickerEl.appendChild(btn);
-    // 下拉列完整工程路径（绑定到工程：选中即按其 git remote 反解取数，反馈第 2 轮）
-    allProjects = (Array.isArray(projects) ? projects : []).map(function (p) { return String(p); });
+    allProjects = [];
     buildPickerList(input);
   }
 
-  var allProjects = [];
+  var allProjects = []; // [{path, source}]
   var pickerListEl = null;
 
   function buildPickerList(inputEl) {
     if (pickerListEl) pickerListEl.remove();
+    pickerListEl = null;
+    if (inputEl == null) return;
     pickerListEl = document.createElement('div');
     pickerListEl.className = 'project-list';
     pickerListEl.hidden = true;
@@ -85,6 +86,13 @@
     });
   }
 
+  // 数据刷新后重建下拉（沿用既有 input 与监听器——review R3 MINOR 的去重口径）
+  function rebuildPickerList(inputEl) {
+    if (inputEl == null || pickerListEl == null) return;
+    renderPickerOptions('', inputEl);
+    pickerListEl.hidden = true;
+  }
+
   function filterPickerList(q) {
     renderPickerOptions(q, null);
     if (pickerListEl) pickerListEl.hidden = false;
@@ -94,19 +102,28 @@
     if (!pickerListEl) return;
     pickerListEl.innerHTML = '';
     var needle = (q || '').toLowerCase();
-    var items = allProjects.filter(function (p) { return !needle || p.toLowerCase().indexOf(needle) !== -1; }).slice(0, 20);
+    var items = allProjects.filter(function (p) {
+      return !needle || p.path.toLowerCase().indexOf(needle) !== -1;
+    }).slice(0, 30);
     if (items.length === 0) {
       var empty = document.createElement('div');
       empty.className = 'project-item';
-      empty.textContent = allProjects.length === 0 ? '暂无工程（先在 hub 注册带 GitLab remote 的工程目录）' : '无匹配工程（可手输名作兜底）';
+      empty.textContent = allProjects.length === 0
+        ? '暂无可验证工程（在 hub 注册工程或让 agent 在工程目录里跑起来）'
+        : '无匹配工程（可手输名作兜底）';
       pickerListEl.appendChild(empty);
       return;
     }
-    items.forEach(function (full) {
+    items.forEach(function (entry) {
+      var full = entry.path;
       var it = document.createElement('div');
       it.className = 'project-item';
-      it.title = full;
-      it.textContent = full.split('/').filter(Boolean).pop() + ' — ' + full;
+      it.title = full + '（' + (entry.source === 'agent-cwd' ? 'agent 工作目录' : '已注册') + '）';
+      it.innerHTML =
+        '<span class="project-name">' + esc(full.split('/').filter(Boolean).pop()) + '</span>' +
+        '<span class="project-path">' + esc(full) + '</span>' +
+        '<span class="project-source project-source--' + esc(entry.source) + '">' +
+        (entry.source === 'agent-cwd' ? 'agent' : '注册') + '</span>';
       it.addEventListener('click', function () {
         currentProject = full;
         var inp = pickerEl.querySelector('.project-input');
@@ -188,13 +205,18 @@
 
   function loadProjects() {
     setState('正在拉取工程清单…', false);
-    callHub('hub.projects.list', {}).then(function (res) {
+    callHub('hub.projects.effective', {}).then(function (res) {
+      // 条目 = {path, source: "registry"|"agent-cwd"}：注册表 ∪ agent cwd 去重
       var list = res && Array.isArray(res.projects) ? res.projects : [];
-      renderPicker(list);
+      allProjects = list
+        .filter(function (it) { return it && typeof it.path === 'string'; })
+        .map(function (it) { return { path: it.path, source: it.source || 'registry' }; });
+      rebuildPickerList(pickerEl.querySelector('.project-input'));
       currentProject = '';
       setState('请从下拉选择工程（选中即取数）。', false);
     }).catch(function () {
-      renderPicker([]);
+      allProjects = [];
+      rebuildPickerList(pickerEl.querySelector('.project-input'));
       setState('工程清单获取失败，可手输名兜底。', true);
     });
   }
