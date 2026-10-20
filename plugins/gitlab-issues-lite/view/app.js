@@ -43,7 +43,9 @@
   var projectPollTimer = null;
   var currentProject = '';
 
-  function renderPicker(projects) {
+  /** 建 toolbar 骨架（input + 查询 + 下拉容器）并灌入工程条目。
+   *  loadProjects 成功/失败分支都必须走到这里——否则 toolbar 恒空（tester R3 FAIL-4）。 */
+  function renderPicker(entries) {
     pickerEl.innerHTML = '';
     var label = document.createElement('span');
     label.className = 'project-label';
@@ -62,7 +64,9 @@
     pickerEl.appendChild(label);
     pickerEl.appendChild(input);
     pickerEl.appendChild(btn);
-    allProjects = [];
+    allProjects = (Array.isArray(entries) ? entries : [])
+      .filter(function (it) { return it && typeof it.path === 'string'; })
+      .map(function (it) { return { path: it.path, source: it.source || 'registry' }; });
     buildPickerList(input);
   }
 
@@ -84,13 +88,6 @@
       if (e.target === inputEl || pickerListEl.contains(e.target)) return;
       pickerListEl.hidden = true;
     });
-  }
-
-  // 数据刷新后重建下拉（沿用既有 input 与监听器——review R3 MINOR 的去重口径）
-  function rebuildPickerList(inputEl) {
-    if (inputEl == null || pickerListEl == null) return;
-    renderPickerOptions('', inputEl);
-    pickerListEl.hidden = true;
   }
 
   function filterPickerList(q) {
@@ -208,15 +205,11 @@
     callHub('hub.projects.effective', {}).then(function (res) {
       // 条目 = {path, source: "registry"|"agent-cwd"}：注册表 ∪ agent cwd 去重
       var list = res && Array.isArray(res.projects) ? res.projects : [];
-      allProjects = list
-        .filter(function (it) { return it && typeof it.path === 'string'; })
-        .map(function (it) { return { path: it.path, source: it.source || 'registry' }; });
-      rebuildPickerList(pickerEl.querySelector('.project-input'));
+      renderPicker(list);
       currentProject = '';
       setState('请从下拉选择工程（选中即取数）。', false);
     }).catch(function () {
-      allProjects = [];
-      rebuildPickerList(pickerEl.querySelector('.project-input'));
+      renderPicker([]);
       setState('工程清单获取失败，可手输名兜底。', true);
     });
   }
