@@ -98,6 +98,32 @@ pub struct Contributes {
     pub mcp: Vec<McpDecl>,
     #[serde(default)]
     pub views: Vec<ViewDecl>,
+    #[serde(default)]
+    pub commands: Vec<CommandDecl>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandDecl {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// v1 仅 `info`（进 `/api/commands` 的 `hub-plugin` 组）
+    pub kind: String,
+    pub target: CommandTarget,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CommandTarget {
+    /// 打开插件视图：`{view:"<viewId>"}`
+    #[serde(default)]
+    pub view: Option<String>,
+    /// 触发只读工具：`{tool:"<toolId>", args?: Value}`
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub args: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -445,6 +471,91 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
             &mut errors,
         );
     }
+    // —— commands：id 命名空间 + kind + target 完整性/合法性（ADR-0012 §12.1）——
+    let view_ids: std::collections::HashSet<&str> = manifest
+        .contributes
+        .views
+        .iter()
+        .map(|v| v.id.as_str())
+        .collect();
+    let tool_risks: std::collections::HashMap<&str, &str> = manifest
+        .contributes
+        .tools
+        .iter()
+        .map(|t| (t.id.as_str(), t.risk.as_str()))
+        .collect();
+    let expected_prefix = format!("plug_{}_", manifest.id);
+    for (i, c) in manifest.contributes.commands.iter().enumerate() {
+        dup("commands", &c.id, &mut errors);
+        if !c.id.starts_with(&expected_prefix) {
+            errors.push(ManifestIssue::new(
+                format!("contributes.commands[{i}].id"),
+                "command-id-namespace",
+                format!(
+                    "command id 必须以 plug_<pluginId>_ 为前缀（期望前缀 {expected_prefix:?}）"
+                ),
+            ));
+        }
+        if c.name.trim().is_empty() {
+            errors.push(ManifestIssue::new(
+                format!("contributes.commands[{i}].name"),
+                "required",
+                "command name 不能为空",
+            ));
+        }
+        if c.kind != "info" {
+            errors.push(ManifestIssue::new(
+                format!("contributes.commands[{i}].kind"),
+                "enum",
+                "command kind 只能是 \"info\"（v1 仅信息型命令）",
+            ));
+        }
+        let has_view = c
+            .target
+            .view
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let has_tool = c
+            .target
+            .tool
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if has_view == has_tool {
+            errors.push(ManifestIssue::new(
+                format!("contributes.commands[{i}].target"),
+                "command-target",
+                "command target 必须且只能声明 view 或 tool 之一",
+            ));
+            continue;
+        }
+        if let Some(vid) = c.target.view.as_deref() {
+            if !view_ids.contains(vid) {
+                errors.push(ManifestIssue::new(
+                    format!("contributes.commands[{i}].target.view"),
+                    "command-target-view",
+                    format!("target.view {vid:?} 不在 contributes.views 声明中"),
+                ));
+            }
+        }
+        if let Some(tid) = c.target.tool.as_deref() {
+            match tool_risks.get(tid) {
+                None => errors.push(ManifestIssue::new(
+                    format!("contributes.commands[{i}].target.tool"),
+                    "command-target-tool",
+                    format!("target.tool {tid:?} 不在 contributes.tools 声明中"),
+                )),
+                Some(risk) if *risk != "read" => errors.push(ManifestIssue::new(
+                    format!("contributes.commands[{i}].target.tool"),
+                    "command-target-read-only",
+                    format!("target.tool {tid:?} 必须指向 risk:\"read\" 工具（当前 risk:{risk:?}），审计限只读（ADR-0012）"),
+                )),
+                _ => {}
+            }
+        }
+        // 禁止多目标形态：同时声明 view 与 tool 已在 has_view==has_tool 分支拒绝
+    }
 
     // —— 权限组 ——
     for (i, p) in manifest.permissions.api.iter().enumerate() {
@@ -561,7 +672,8 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
     let no_contrib = manifest.contributes.tools.is_empty()
         && manifest.contributes.skills.is_empty()
         && manifest.contributes.mcp.is_empty()
-        && manifest.contributes.views.is_empty();
+        && manifest.contributes.views.is_empty()
+        && manifest.contributes.commands.is_empty();
     let no_perm = manifest.permissions.api.is_empty()
         && manifest.permissions.data.is_empty()
         && manifest.permissions.credentials.is_empty()

@@ -13,8 +13,8 @@ pub const PLUGIN_API_VERSION: u32 = 1;
 /// 与 `CHANGELOG.md` 最新已发布版本同步——发版时随 CHANGELOG 一起更新。
 pub const HUB_VERSION: &str = "0.6.0";
 
-/// 贡献物类型（v1 固定四类，ADR-0003 第 3.a 条）。
-pub const CONTRIBUTION_TYPES: [&str; 4] = ["tools", "skills", "mcp", "views"];
+/// 贡献物类型（v1 五类，ADR-0011 加法：commands 新增）。
+pub const CONTRIBUTION_TYPES: [&str; 5] = ["tools", "skills", "mcp", "views", "commands"];
 
 /// `permissions.data` 固定域枚举（ADR-0007 第 2 条）。
 pub const DATA_DOMAINS: [&str; 10] = [
@@ -192,7 +192,7 @@ pub fn api_version_mismatch(declared: &str) -> String {
 pub struct ApiSchema {
     pub api_version: u32,
     pub hub_version: &'static str,
-    pub contributions: [&'static str; 4],
+    pub contributions: [&'static str; 5],
     pub data_domains: [&'static str; 10],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,

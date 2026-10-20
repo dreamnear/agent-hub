@@ -9,6 +9,7 @@ pub mod api_surface;
 pub mod audit;
 pub mod credentials;
 pub mod manifest;
+pub mod mcp_proxy;
 pub mod permissions;
 pub mod registry;
 pub mod rpc;

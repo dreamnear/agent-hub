@@ -409,7 +409,7 @@ async fn plugin_view_asset(
         }
     };
 
-    let mut resp = Response::builder()
+    let resp = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, file.mime)
         .header(header::CONTENT_SECURITY_POLICY, csp_for(&headers))
