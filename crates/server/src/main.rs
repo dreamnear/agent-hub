@@ -14,17 +14,26 @@ use server::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // B2 会话能力桥：聚合代理入口（ADR-0005 §4.4，设计 §4.4）
+    // 形态：`server mcp-proxy --session <id>` 以 stdio MCP server 身份运行，供 claude 会话子进程连接
+    // **必须先于默认 tracing 初始化分流**：stdio 协议面只允许协议帧过 stdout，
+    // 日志一律走 stderr（tester 观察：严格客户端对 stdout 首行非 JSON 帧即崩）
+    if let Some(sid) = mcp_proxy_session_from_args(std::env::args().skip(1)) {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "server=debug,tower_http=info".into()),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+        return server::plugins::mcp_proxy::run_stdio_proxy(sid).await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "server=debug,tower_http=info".into()),
         )
         .init();
-    // B2 会话能力桥：聚合代理入口（ADR-0005 §4.4，设计 §4.4）
-    // 形态：`server mcp-proxy --session <id>` 以 stdio MCP server 身份运行，供 claude 会话子进程连接
-    if let Some(sid) = mcp_proxy_session_from_args(std::env::args().skip(1)) {
-        return server::plugins::mcp_proxy::run_stdio_proxy(sid).await;
-    }
     // node 形态分支（gateway-node P1 任务 2/3）：--node + --gateway/env 进入节点模式
     let args = NodeArgs::parse(std::env::args().skip(1));
     let mut cfg = Config::load();

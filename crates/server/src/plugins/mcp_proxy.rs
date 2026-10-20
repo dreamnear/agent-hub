@@ -327,7 +327,9 @@ impl McpProxy {
         let creds = crate::plugins::credentials::CredentialsStore::load(creds_file.clone());
         // 使用临时 supervisor 实例（单次）
         let supervisor = crate::plugins::supervisor::Supervisor::new();
-        let handler = Arc::new(DummyHandler);
+        let handler = Arc::new(LoopbackHandler {
+            hub: hub_loopback(),
+        });
         let scrub = {
             let f = creds_file.clone();
             Arc::new(move |s: String| {
@@ -364,7 +366,11 @@ impl McpProxy {
         tool_full: &str,
         arguments: &Value,
     ) -> Result<bool, RpcError> {
-        let hub = hub_loopback();
+        let hub = hub_loopback().ok_or_else(|| {
+            RpcError::Busy(
+                "hub loopback 未配置（AGENT_HUB_LOOPBACK 缺失），无法发起高危确认".into(),
+            )
+        })?;
         let digest = args_digest(arguments);
         let created =
             create_approval(&hub, plugin_id, tool_full, &digest, Some(&self.session_id)).await?;
@@ -504,15 +510,67 @@ impl McpProxy {
     }
 }
 
-struct DummyHandler;
-impl crate::plugins::rpc::HubCallHandler for DummyHandler {
+/// backend → hub 回调处理器（tester F-2 修复）：经 loopback HTTP 转发回 hub 主
+/// 进程 `POST /api/plugins/{id}/rpc`——权限判定 / scrub / violation 留痕全部在
+/// hub 侧 HubRpcHandler 单点完成（与视图 RPC 同一条路径），代理侧零复制语义。
+/// `hub: None`（env 缺失，裸跑）时明确失败——绝不缺省打 7800 正式实例。
+struct LoopbackHandler {
+    hub: Option<String>,
+}
+impl crate::plugins::rpc::HubCallHandler for LoopbackHandler {
     fn handle_call(
         &self,
-        _plugin_id: &str,
-        _method: &str,
-        _params: Value,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
     ) -> crate::plugins::rpc::HubFuture {
-        Box::pin(async { Ok(json!({})) })
+        let Some(hub) = self.hub.clone() else {
+            return Box::pin(async {
+                Err(RpcError::PluginError(
+                    "hub loopback 未配置（AGENT_HUB_LOOPBACK 缺失），backend 回调不可用".into(),
+                ))
+            });
+        };
+        let plugin_id = plugin_id.to_string();
+        let method = method.to_string();
+        Box::pin(async move {
+            let body = json!({"method": method, "params": params});
+            let req = axum::http::Request::builder()
+                .method(axum::http::Method::POST)
+                .uri(format!("{hub}/api/plugins/{plugin_id}/rpc"))
+                .header("host", "127.0.0.1")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&body).unwrap_or_default(),
+                ))
+                .map_err(|e| RpcError::PluginError(format!("hub 回调请求构建失败：{e}")))?;
+            let resp = approval_client()
+                .request(req)
+                .await
+                .map_err(|e| RpcError::PluginError(format!("hub 回调失败（hub 不可达）：{e}")))?;
+            let status = resp.status();
+            let bytes = http_body_util::BodyExt::collect(resp.into_body())
+                .await
+                .map_err(|e| RpcError::PluginError(format!("hub 回调响应读取失败：{e}")))?
+                .to_bytes();
+            let v: Value = serde_json::from_slice(&bytes)
+                .map_err(|e| RpcError::PluginError(format!("hub 回调响应解析失败：{e}")))?;
+            // 非 2xx = {ok:false, code, message}（api/plugins.rs rpc_error_response 形态）
+            if !status.is_success() {
+                let code = v.get("code").and_then(Value::as_str).unwrap_or("");
+                let msg = v
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("hub 回调被拒");
+                return Err(match code {
+                    "unauthorized" | "violation" => RpcError::Violation(msg.into()),
+                    "timeout" => RpcError::Timeout,
+                    "busy" => RpcError::Busy(msg.into()),
+                    _ => RpcError::PluginError(msg.into()),
+                });
+            }
+            Ok(v.get("result").cloned().unwrap_or(Value::Null))
+        })
     }
 }
 
@@ -552,7 +610,9 @@ async fn spawn_mcp_server(
     let stdout = child.stdout.take().ok_or("mcp stdout unavailable")?;
     let stderr = child.stderr.take();
     let child_arc = Arc::new(tokio::sync::Mutex::new(child));
-    let handler = Arc::new(DummyHandler);
+    let handler = Arc::new(LoopbackHandler {
+        hub: hub_loopback(),
+    });
     let scrub = {
         let f = creds_file.clone();
         Arc::new(move |s: String| {
@@ -639,10 +699,14 @@ pub const APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(12
 /// 审批状态轮询间隔（UI 决策后 ≤1s 内放行/拒绝）
 pub const APPROVAL_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// hub loopback 地址（mcp config env 注入 `AGENT_HUB_LOOPBACK`；缺省 7800）。
+/// hub loopback 地址（mcp config env 注入 `AGENT_HUB_LOOPBACK`）。
 /// loopback 免 token（auth 中间件对 loopback 直通，与 P8 extension 同款）。
-fn hub_loopback() -> String {
-    std::env::var("AGENT_HUB_LOOPBACK").unwrap_or_else(|_| "http://127.0.0.1:7800".into())
+/// **无缺省**（tester 观察）：env 缺失返回 None——裸跑时审批落单/回调一律
+/// 明确失败，绝不缺省打 7800 正式实例。
+fn hub_loopback() -> Option<String> {
+    std::env::var("AGENT_HUB_LOOPBACK")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 /// 参数摘要（截 200 字符；落 hub 前再经 credentials scrub 兜底——凭据只出现引用名）。

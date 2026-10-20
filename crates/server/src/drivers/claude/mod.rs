@@ -465,7 +465,17 @@ impl AgentCatalog for ClaudeDriver {
                 resume: spec.resume_session_id.clone(),
                 mcp_config: placeholder_cfg.clone(),
             };
-            let id = cli::start_bg(&self.bin, Path::new(&spec.cwd), &req).await?;
+            let id = match cli::start_bg(&self.bin, Path::new(&spec.cwd), &req).await {
+                Ok(id) => id,
+                Err(e) => {
+                    // F-3（tester）：启动失败同样回收占位 config（残留修复——
+                    // 原实现 `?` 早退跳过下方清理，plugin_mcp 留 hub-*.json）
+                    if let Some(cfg) = placeholder_cfg.as_deref() {
+                        let _ = std::fs::remove_file(std::path::PathBuf::from(cfg));
+                    }
+                    return Err(e);
+                }
+            };
             if let Some(cfg) = placeholder_cfg.as_deref() {
                 let tmp = std::path::PathBuf::from(cfg);
                 if tmp
