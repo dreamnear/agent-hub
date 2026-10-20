@@ -70,6 +70,17 @@ pub fn router() -> Router<SharedState> {
         .route("/api/plugins/{id}/view-ticket", post(view_ticket))
         .route("/api/plugins/{id}/rpc", post(plugin_rpc))
         .route("/api/plugins/{id}/tool-invoke", post(tool_invoke))
+        // 高危审批（B2 批3，设计 §3/§6.5）：POST（落单，mcp-proxy loopback 调用）
+        // / GET 清单 / GET 单条（轮询）/ POST 决策。静态段优先于 {id} 参数段，
+        // 与既有 /{id}/* 路由不冲突。
+        .route(
+            "/api/plugins/approvals",
+            post(create_approval).get(list_approvals),
+        )
+        .route(
+            "/api/plugins/approvals/{apr_id}",
+            get(get_approval).post(decide_approval),
+        )
 }
 
 /// 视图资产路由（不并入 `router()` 的 `/api` 组；挂载点在 `lib.rs`，位于 SPA 通配之前）。
@@ -329,6 +340,97 @@ async fn tool_invoke(
         Ok(result) => Json(json!({ "ok": true, "content": result })).into_response(),
         Err(e) => rpc_error_response(&e),
     }
+}
+
+// ===== 高危审批（B2 批3，ADR-0007 第 3 条 / 设计 §6.5）=====
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateApprovalBody {
+    plugin_id: String,
+    /// 工具全名（hubplug_<pluginId>_<tool>）
+    tool: String,
+    /// 参数摘要（mcp-proxy 落单前已 scrub；凭据只出现引用名）
+    #[serde(default)]
+    args_digest: String,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+/// 落单（mcp-proxy loopback 调用；loopback 免 token 与 P8 extension 同款）。
+/// 落单即广播 `plugin_approval_requested`，前端弹确认卡。
+async fn create_approval(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateApprovalBody>,
+) -> Result<Json<Value>, AppError> {
+    let issued = state.plugins.issue_approval(
+        &body.plugin_id,
+        &body.tool,
+        &body.args_digest,
+        body.session_id.as_deref(),
+    );
+    Ok(Json(json!({ "id": issued.id })))
+}
+
+/// 待确认清单（UI 列表；已决策条目不出清单）。
+async fn list_approvals(State(state): State<SharedState>) -> Json<Value> {
+    Json(json!({ "pending": state.plugins.approvals.pending_list() }))
+}
+
+/// 单条读取（mcp-proxy 长轮询 1s 间隔调它；UI 刷新详情）。
+async fn get_approval(
+    State(state): State<SharedState>,
+    Path(apr_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.plugins.approvals.get(&apr_id) {
+        Some((req, decided)) => {
+            let status = match decided {
+                None => "pending",
+                Some(crate::plugins::approvals::Decision::Approve) => "approved",
+                Some(crate::plugins::approvals::Decision::Reject) => "rejected",
+            };
+            Ok(Json(json!({ "approval": req, "status": status })))
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DecideBody {
+    /// `approve` | `reject`
+    decision: String,
+}
+
+/// 决策（UI 确认卡调用）：留痕 Approval/Rejection + 通知等待方执行/放弃。
+async fn decide_approval(
+    State(state): State<SharedState>,
+    Path(apr_id): Path<String>,
+    Json(body): Json<DecideBody>,
+) -> Result<Json<Value>, AppError> {
+    let decision = match body.decision.as_str() {
+        "approve" => crate::plugins::approvals::Decision::Approve,
+        "reject" => crate::plugins::approvals::Decision::Reject,
+        other => {
+            return Err(AppError::bad(format!(
+                "未知决策 {other:?}（approve/reject）"
+            )))
+        }
+    };
+    let req = state
+        .plugins
+        .decide_approval(&apr_id, decision)
+        .map_err(|e| match e {
+            crate::plugins::approvals::DecideError::NotFound => {
+                AppError::not_found(format!("审批单 {apr_id} 不存在（已处理或过期）"))
+            }
+            crate::plugins::approvals::DecideError::AlreadyDecided => {
+                AppError::bad("该审批单已决策（不可重复提交）")
+            }
+        })?;
+    Ok(Json(
+        json!({ "applied": true, "decision": decision.as_str(), "approval": req }),
+    ))
 }
 
 fn rpc_error_response(e: &RpcError) -> Response {

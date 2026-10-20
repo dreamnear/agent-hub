@@ -27,6 +27,17 @@ pub enum HubEvent {
     /// 加法变更——既有变体与序列化名一字未动。
     #[serde(rename = "plugins_changed")]
     PluginsChanged { id: String },
+    /// 高危审批请求（B2 批3，ADR-0007 第 3 条 / 设计 §6.5）：前端弹确认卡，
+    /// 用户决定后 POST /api/plugins/approvals/{id}。加法变更（ADR-0003 只增）。
+    #[serde(rename = "plugin_approval_requested")]
+    PluginApprovalRequested {
+        id: String,
+        plugin_id: String,
+        /// 工具全名（hubplug_<pluginId>_<tool>）
+        tool: String,
+        /// 参数摘要（落单方已 scrub）
+        args_digest: String,
+    },
 }
 
 /// 分页信封（P6 B12/B13）：页内消息 + 首条源行号游标 + 是否还有更早消息。

@@ -39,6 +39,9 @@ pub struct ClaudeDriver {
     pub plugin_mcp_dir: PathBuf,
     /// hub 二进制路径（B2：注入 `hub-plugins` MCP server 的 command）。
     pub hub_bin: PathBuf,
+    /// hub loopback 地址（B2 批3：注入代理 env `AGENT_HUB_LOOPBACK`，高危审批
+    /// 落单/轮询用；loopback 免 token，不下发凭据）。
+    pub hub_loopback: String,
     /// 注入/中断 PTY 路由（SessionControl 委托）。与 AppState.message_routes 的
     /// "claude" 条目同一实例、共享 attaches 表——不得另建（双实例 = 双重 attach，
     /// 破坏 TUI 注入时序）。
@@ -77,6 +80,7 @@ impl ClaudeDriver {
                 crate::platform::home_dir_str()
             )),
             std::env::current_exe().unwrap_or_else(|_| PathBuf::from("server")),
+            loopback_default(),
         )
     }
 
@@ -88,6 +92,7 @@ impl ClaudeDriver {
         rooms: Arc<RwLock<HashMap<String, broadcast::Sender<ChatEvent>>>>,
         plugin_mcp_dir: PathBuf,
         hub_bin: PathBuf,
+        hub_loopback: String,
     ) -> Self {
         let sender = Arc::new(ClaudeSendRouter::new(bin.clone()));
         Self {
@@ -96,6 +101,7 @@ impl ClaudeDriver {
             projects_dir,
             plugin_mcp_dir,
             hub_bin,
+            hub_loopback,
             ignored_interactive_file,
             sender,
             rooms,
@@ -409,6 +415,7 @@ impl AgentCatalog for ClaudeDriver {
     fn start<'a>(&'a self, spec: &'a StartSpec) -> BoxFuture<'a, Result<String>> {
         let mcp_dir = self.plugin_mcp_dir.clone();
         let hub_bin = self.hub_bin.clone();
+        let hub_loopback = self.hub_loopback.clone();
         Box::pin(async move {
             // 转调 api/agents.rs::start_agent 的 CLI 段；validate_cwd 属信任边界
             // 校验，留在 api 层
@@ -443,6 +450,7 @@ impl AgentCatalog for ClaudeDriver {
                 match crate::plugins::mcp_config::write_config_sync(
                     &mcp_dir,
                     &hub_bin,
+                    &hub_loopback,
                     &sid_placeholder,
                 ) {
                     Ok(path) => Some(path.to_string_lossy().to_string()),
@@ -467,7 +475,12 @@ impl AgentCatalog for ClaudeDriver {
                 {
                     let _ = std::fs::remove_file(&tmp);
                 }
-                let _ = crate::plugins::mcp_config::write_config_sync(&mcp_dir, &hub_bin, &id);
+                let _ = crate::plugins::mcp_config::write_config_sync(
+                    &mcp_dir,
+                    &hub_bin,
+                    &hub_loopback,
+                    &id,
+                );
             }
             Ok(id)
         })
@@ -820,4 +833,14 @@ pub fn unlist_interactive(path: &PathBuf, session_id: &str) -> anyhow::Result<()
     let mut set = read_ignored_interactive(path);
     set.insert(session_id.to_string());
     write_ignored_interactive(path, &set)
+}
+
+/// hub loopback 缺省值（new() 测试/独立构造路径用）：AGENT_HUB_BIND 解析端口，
+/// 未设/解析失败回退 7800。生产路径 AppState 用 cfg.bind_addr.port() 传入。
+fn loopback_default() -> String {
+    let port = std::env::var("AGENT_HUB_BIND")
+        .ok()
+        .and_then(|raw| raw.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()))
+        .unwrap_or(7800);
+    format!("http://127.0.0.1:{port}")
 }

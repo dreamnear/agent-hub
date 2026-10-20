@@ -10,12 +10,16 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 /// 生成 --mcp-config 所需的 JSON 值（单 server: hub-plugins）。
-pub fn mcp_config_value(hub_bin: &Path, session_id: &str) -> Value {
+/// `hub_url`：hub loopback（env `AGENT_HUB_LOOPBACK` 注入代理进程）——高危
+/// 审批落单/轮询用（auth 对 loopback 直通免 token，与 P8 extension 同款；
+/// 不下发 hub token，凭据零回显红线不破）。
+pub fn mcp_config_value(hub_bin: &Path, hub_url: &str, session_id: &str) -> Value {
     json!({
         "mcpServers": {
             "hub-plugins": {
                 "command": hub_bin.to_string_lossy().to_string(),
-                "args": ["mcp-proxy", "--session", session_id]
+                "args": ["mcp-proxy", "--session", session_id],
+                "env": { "AGENT_HUB_LOOPBACK": hub_url }
             }
         }
     })
@@ -31,12 +35,13 @@ pub fn config_path(mcp_dir: &Path, session_id: &str) -> PathBuf {
 pub fn write_config_sync(
     mcp_dir: &Path,
     hub_bin: &Path,
+    hub_url: &str,
     session_id: &str,
 ) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(mcp_dir)?;
     let path = config_path(mcp_dir, session_id);
     let tmp = mcp_dir.join(format!(".{session_id}.tmp"));
-    let value = mcp_config_value(hub_bin, session_id);
+    let value = mcp_config_value(hub_bin, hub_url, session_id);
     let raw = serde_json::to_string_pretty(&value)?;
     std::fs::write(&tmp, raw)?;
     std::fs::rename(&tmp, &path)?;
@@ -47,11 +52,14 @@ pub fn write_config_sync(
 pub async fn write_config(
     mcp_dir: PathBuf,
     hub_bin: PathBuf,
+    hub_url: String,
     session_id: String,
 ) -> anyhow::Result<PathBuf> {
-    tokio::task::spawn_blocking(move || write_config_sync(&mcp_dir, &hub_bin, &session_id))
-        .await
-        .map_err(|e| anyhow::anyhow!("mcp config spawn_blocking: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        write_config_sync(&mcp_dir, &hub_bin, &hub_url, &session_id)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("mcp config spawn_blocking: {e}"))?
 }
 
 /// 回收会话级 config（不存在忽略）。
@@ -77,7 +85,11 @@ mod tests {
 
     #[test]
     fn config_value_shape() {
-        let v = mcp_config_value(Path::new("/tmp/server"), "sess-123");
+        let v = mcp_config_value(
+            Path::new("/tmp/server"),
+            "http://127.0.0.1:7909",
+            "sess-123",
+        );
         assert_eq!(
             v["mcpServers"]["hub-plugins"]["command"],
             json!("/tmp/server")
@@ -85,6 +97,11 @@ mod tests {
         assert_eq!(
             v["mcpServers"]["hub-plugins"]["args"],
             json!(["mcp-proxy", "--session", "sess-123"])
+        );
+        // 高危审批通道（B2 批3）：loopback env 注入（免 token，不下发凭据）
+        assert_eq!(
+            v["mcpServers"]["hub-plugins"]["env"]["AGENT_HUB_LOOPBACK"],
+            json!("http://127.0.0.1:7909")
         );
     }
 
@@ -94,7 +111,7 @@ mod tests {
         let mcp_dir = dir.path().join("plugin_mcp");
         let hub = Path::new("/tmp/hub-bin");
         let sid = "test-sess-abc";
-        let path = write_config_sync(&mcp_dir, hub, sid).unwrap();
+        let path = write_config_sync(&mcp_dir, hub, "http://127.0.0.1:7909", sid).unwrap();
         assert!(path.is_file());
         let raw = std::fs::read_to_string(&path).unwrap();
         let v: Value = serde_json::from_str(&raw).unwrap();

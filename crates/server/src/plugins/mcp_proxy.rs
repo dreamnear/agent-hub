@@ -264,10 +264,17 @@ impl McpProxy {
         {
             // backend 工具
             if t.risk == "high" {
-                // 批1：高危需确认，批3改阻塞等待；此处返回明确可重试错误
-                return Err(RpcError::Unauthorized(format!(
-                    "高危工具 {name} 需逐次确认（审批流在 B2 批3交付），当前拒绝执行"
-                )));
+                // 批3：高危走审批门（BR-15）——loopback 落单 + 轮询决策（120s 上限，
+                // 超时 -32005 busy 由会话侧重试）。拒绝/超时一律不执行。
+                match self.await_approval(plugin_id, name, &arguments).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(RpcError::Violation(format!(
+                            "高危工具 {name} 被用户拒绝，未执行"
+                        )));
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             if t.implementation.kind != "backend" {
                 return Err(RpcError::PluginError(format!(
@@ -344,6 +351,49 @@ impl McpProxy {
         {
             Ok(v) => Ok(v),
             Err(e) => Err(e),
+        }
+    }
+
+    /// 高危审批等待（批3，BR-15）：loopback 向 hub 落单 → 1s 轮询决策 →
+    /// Ok(true)=批准（调用方继续执行）/ Ok(false)=拒绝 / Err=落单失败或
+    /// 等待超时（-32005 busy，会话侧重试）。等待上限 APPROVAL_WAIT（120s），
+    /// 决策与留痕在 hub 侧（ApprovalStore::decide + 故障记录域）。
+    async fn await_approval(
+        &self,
+        plugin_id: &str,
+        tool_full: &str,
+        arguments: &Value,
+    ) -> Result<bool, RpcError> {
+        let hub = hub_loopback();
+        let digest = args_digest(arguments);
+        let created =
+            create_approval(&hub, plugin_id, tool_full, &digest, Some(&self.session_id)).await?;
+        let url = format!("{hub}/api/plugins/approvals/{created}");
+        let deadline = tokio::time::Instant::now() + APPROVAL_WAIT;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(RpcError::Busy(
+                    "高危确认等待超时（120s），可重试（-32005 busy）".into(),
+                ));
+            }
+            tokio::time::sleep(APPROVAL_POLL).await;
+            match approval_status(&url).await {
+                Ok(Some(status)) => match status.as_str() {
+                    "approved" => return Ok(true),
+                    "rejected" => return Ok(false),
+                    _ => {} // pending：继续轮询
+                },
+                // 404 = 单已被 TTL 回收（hub 重启等）→ 按超时口径可重试
+                Ok(None) => {
+                    return Err(RpcError::Busy(
+                        "高危审批单已失效（hub 侧回收），可重试".into(),
+                    ));
+                }
+                Err(e) => {
+                    // hub 暂不可达：在等待窗内继续轮询（UI 正在处理时 hub 不会关）
+                    tracing::debug!(error = %e, "approval poll failed; retrying");
+                }
+            }
         }
     }
 
@@ -584,6 +634,108 @@ fn substitute_creds(
     Ok(out)
 }
 
+/// 高危审批等待上限（设计 §7：v1 阻塞等待 + 超时 120s）
+pub const APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+/// 审批状态轮询间隔（UI 决策后 ≤1s 内放行/拒绝）
+pub const APPROVAL_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// hub loopback 地址（mcp config env 注入 `AGENT_HUB_LOOPBACK`；缺省 7800）。
+/// loopback 免 token（auth 中间件对 loopback 直通，与 P8 extension 同款）。
+fn hub_loopback() -> String {
+    std::env::var("AGENT_HUB_LOOPBACK").unwrap_or_else(|_| "http://127.0.0.1:7800".into())
+}
+
+/// 参数摘要（截 200 字符；落 hub 前再经 credentials scrub 兜底——凭据只出现引用名）。
+fn args_digest(arguments: &Value) -> String {
+    let raw = serde_json::to_string(arguments).unwrap_or_default();
+    raw.chars().take(200).collect()
+}
+
+type ApprovalClient = hyper_util::client::legacy::Client<
+    hyper_util::client::legacy::connect::HttpConnector,
+    axum::body::Body,
+>;
+
+fn approval_client() -> &'static ApprovalClient {
+    static CLIENT: std::sync::OnceLock<ApprovalClient> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        use hyper_util::rt::TokioExecutor;
+        hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build_http()
+    })
+}
+
+/// loopback 落单（opencode/http.rs 同款 hyper-util 极简客户端，零新增编译面）。
+async fn create_approval(
+    hub: &str,
+    plugin_id: &str,
+    tool: &str,
+    args_digest: &str,
+    session_id: Option<&str>,
+) -> Result<String, RpcError> {
+    let body = serde_json::json!({
+        "pluginId": plugin_id,
+        "tool": tool,
+        "argsDigest": args_digest,
+        "sessionId": session_id,
+    });
+    let req = axum::http::Request::builder()
+        .method(axum::http::Method::POST)
+        .uri(format!("{hub}/api/plugins/approvals"))
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::to_vec(&body).unwrap_or_default(),
+        ))
+        .map_err(|e| RpcError::PluginError(format!("审批落单请求构建失败：{e}")))?;
+    let resp = approval_client()
+        .request(req)
+        .await
+        .map_err(|e| RpcError::PluginError(format!("审批落单失败（hub 不可达）：{e}")))?;
+    if !resp.status().is_success() {
+        return Err(RpcError::PluginError(format!(
+            "审批落单失败：HTTP {}",
+            resp.status()
+        )));
+    }
+    let bytes = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .map_err(|e| RpcError::PluginError(format!("审批落单响应读取失败：{e}")))?
+        .to_bytes();
+    let v: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| RpcError::PluginError(format!("审批落单响应解析失败：{e}")))?;
+    v.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| RpcError::PluginError("审批落单响应缺 id".into()))
+}
+
+/// 轮询决策状态：Ok(Some(status)) = 单在（pending/approved/rejected）；
+/// Ok(None) = 404（已回收）；Err = 暂不可达（等待窗内可重试）。
+async fn approval_status(url: &str) -> Result<Option<String>, String> {
+    let req = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .uri(url)
+        .header("host", "127.0.0.1")
+        .body(axum::body::Body::empty())
+        .map_err(|e| format!("审批轮询请求构建失败：{e}"))?;
+    let resp = approval_client()
+        .request(req)
+        .await
+        .map_err(|e| format!("审批轮询失败：{e}"))?;
+    if resp.status() == axum::http::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        return Err(format!("审批轮询 HTTP {}", resp.status()));
+    }
+    let bytes = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .map_err(|e| format!("审批轮询响应读取失败：{e}"))?
+        .to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("审批轮询解析失败：{e}"))?;
+    Ok(v.get("status").and_then(Value::as_str).map(str::to_string))
+}
+
 /// stdio MCP 循环（供 main.rs 的 mcp-proxy 分支调用）
 pub async fn run_stdio_proxy(session_id: String) -> anyhow::Result<()> {
     let proxy = Arc::new(McpProxy::new(session_id.clone()));
@@ -724,7 +876,7 @@ mod tests {
             Contributes, HubCompat, Manifest, Permissions, ToolDecl, ToolImpl,
         };
         use crate::plugins::registry::{PluginEntry, PluginSource, PluginState};
-        let mut m = Manifest {
+        let m = Manifest {
             schema_version: 1,
             id: "p1".into(),
             name: "P1".into(),

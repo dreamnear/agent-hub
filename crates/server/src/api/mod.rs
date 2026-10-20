@@ -106,6 +106,7 @@ impl AppState {
             chat_rooms.clone(),
             cfg.plugin_mcp_dir.clone(),
             std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("server")),
+            format!("http://127.0.0.1:{}", cfg.bind_addr.port()),
         );
         // 定时任务目录先取（Self 字面量里 cfg 会被 move）
         let tasks_dir = cfg.tasks_dir.clone();
