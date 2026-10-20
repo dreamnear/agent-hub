@@ -22,7 +22,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
     // node 形态分支（gateway-node P1 任务 2/3）：--node + --gateway/env 进入节点模式
     let args = NodeArgs::parse(std::env::args().skip(1));
-    let cfg = Config::load();
+    let mut cfg = Config::load();
+    // --plugin-dir <path>（可重复）：transient 插件单次加载（ADR-0001 第 4 条），
+    // 与 env AGENT_HUB_PLUGIN_DIR 合并；transient 不写注册表持久层
+    for p in plugin_dirs_from_args(std::env::args().skip(1)) {
+        if !cfg.plugin_transient_dirs.contains(&p) {
+            cfg.plugin_transient_dirs.push(p);
+        }
+    }
     if args.node {
         // N6 前置硬门禁（B1 tester FAIL-1/2 回修）：网关解析与红线校验先于一切
         // bind/后台任务——失败 eprintln + exit(1)，结构上无回退路径，绝不落回
@@ -59,7 +66,31 @@ async fn main() -> anyhow::Result<()> {
     );
     let state = Arc::new(AppState::from_config(cfg.clone()));
     spawn_host_backends(&state, &cfg);
+    // 插件装载序列（ADR-0002 第 2/4 条）：先于 serve 做启动扫描 + 恢复已启用插件；
+    // 单插件失败只写故障记录并置故障态，不阻塞后续插件与主体启动
+    state.plugins.startup().await;
     serve_app(state, bind).await
+}
+
+/// 从命令行提取 `--plugin-dir <path>` / `--plugin-dir=<path>`（可重复）。
+fn plugin_dirs_from_args(args: impl Iterator<Item = String>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut expect = false;
+    for a in args {
+        if expect {
+            out.push(PathBuf::from(a));
+            expect = false;
+            continue;
+        }
+        if a == "--plugin-dir" {
+            expect = true;
+        } else if let Some(v) = a.strip_prefix("--plugin-dir=") {
+            if !v.is_empty() {
+                out.push(PathBuf::from(v));
+            }
+        }
+    }
+    out
 }
 
 /// 宿主本地后台（两形态共用，防漂移）：ACP 会话恢复 / pi 助手 / jobs watcher /
@@ -134,6 +165,8 @@ async fn serve_router(
     .await?;
     // 停机：回收全部 SSH 隧道（kill 进程组防残留孤儿 ssh）
     st.tunnels.shutdown_all().await;
+    // 插件 backend 进程组随 hub 退出回收（ADR-0006 第 2 条：不遗留孤儿）
+    st.plugins.shutdown().await;
     Ok(())
 }
 

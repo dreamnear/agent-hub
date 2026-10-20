@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "gitlab-issues-lite",
+  "name": "GitLab Issues Lite",
+  "version": "0.1.0",
+  "description": "GitLab issue 清单工作台：1 个 backend 工具 + 1 个原生视图（B1 端到端验收载体，不承诺完整 GitLab 集成）",
+  "author": { "name": "agent-hub" },
+  "homepage": "https://github.com/dreamnear/agent-hub",
+  "hub": { "apiVersion": "1" },
+  "contributes": {
+    "tools": [
+      {
+        "id": "fetch_issues",
+        "name": "Fetch GitLab Issues",
+        "description": "拉取一个 GitLab 项目的 issue 清单（只读；凭据由 hub 按名注入，插件侧零落值）",
+        "risk": "read",
+        "impl": { "kind": "backend", "ref": "fetch_issues" }
+      }
+    ],
+    "views": [
+      { "id": "issues", "title": "GitLab Issues", "entry": "view/index.html", "order": 1 }
+    ]
+  },
+  "permissions": {
+    "api": [],
+    "data": ["projects:read", "sessions:read"],
+    "credentials": ["gitlab_pat"],
+    "highRisk": []
+  },
+  "backend": {
+    "command": "node",
+    "args": ["backend/main.js"],
+    "idleTimeoutSecs": 300
+  }
+}

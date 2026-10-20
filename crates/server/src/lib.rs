@@ -10,6 +10,7 @@ pub mod models;
 pub mod nodelink;
 pub mod notes;
 pub mod platform;
+pub mod plugins;
 pub mod projects;
 pub mod remote_install;
 pub mod ssh_cmd;
@@ -59,6 +60,11 @@ pub fn router(state: Arc<api::AppState>) -> Router {
         .merge(api::notes::router())
         .merge(api::pi::router())
         .merge(api::tasks::router())
+        // 插件面（agent-hub-plugin-system B1）：管理/调用在 /api/plugins（token 门禁），
+        // 视图资产在 /plugin-view（票据门禁，见 api::plugins::view_router）——
+        // 两者都是一次性挂好的固定路由，插件变化不重建路由树（ADR-0002 第 1 条）
+        .merge(api::plugins::router())
+        .merge(api::plugins::view_router())
         // SPA 静态托管：根与通配放在 API 之后挂（API 未命中时才落到这里）
         .route("/", get(static_assets::index))
         .route("/{*path}", get(static_assets::asset))

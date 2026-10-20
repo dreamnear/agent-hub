@@ -1,0 +1,363 @@
+/* 插件管理视图（ui.md 层级 1）。色值全走 --c-* token（三态主题纪律）。 */
+
+.plugin-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 880px;
+}
+
+.plugin-l0-title,
+.plugin-l1-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.plugin-scan-at {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--c-faint);
+}
+
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 0.6rem;
+  background: var(--c-panel);
+}
+
+.plugin-card--fault {
+  border-color: var(--c-danger-border);
+}
+
+.plugin-card--disabled {
+  opacity: 0.75;
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.plugin-card-name {
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.plugin-card-version,
+.plugin-card-assets {
+  font-size: 0.75rem;
+  color: var(--c-sub);
+}
+
+.plugin-card-path {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--c-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+
+.plugin-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 状态芯片（ui.md：启用绿/停用灰/故障红/审计绿/审计失败红/更新琥珀） */
+.plugin-chip {
+  font-size: 0.72rem;
+  border-radius: 999px;
+  padding: 1px 8px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+
+.plugin-chip--enabled,
+.plugin-chip--audit_ok {
+  color: var(--c-green-text);
+  border-color: var(--c-accent);
+  background: transparent;
+}
+
+.plugin-chip--disabled {
+  color: var(--c-sub);
+  border-color: var(--c-border);
+}
+
+.plugin-chip--fault,
+.plugin-chip--audit_failed {
+  color: var(--c-danger-text);
+  border-color: var(--c-danger);
+}
+
+.plugin-chip--update {
+  color: var(--c-warn-text);
+  border-color: var(--c-warn-border);
+}
+
+.plugin-chip--transient {
+  color: var(--c-sub);
+  border-color: var(--c-border-input);
+}
+
+.plugin-fault-line {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--c-danger-text);
+}
+
+/* 贡献物清单 */
+.plugin-contrib {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plugin-contrib li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--c-text);
+  flex-wrap: wrap;
+}
+
+.plugin-contrib-kind {
+  font-size: 0.7rem;
+  color: var(--c-sub);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  padding: 0 5px;
+}
+
+.plugin-contrib-high {
+  color: var(--c-warn-text);
+  font-size: 0.7rem;
+  border: 1px solid var(--c-warn-border);
+  border-radius: 6px;
+  padding: 0 5px;
+}
+
+.plugin-contrib-path {
+  color: var(--c-faint);
+  font-size: 0.72rem;
+}
+
+.plugin-contrib-desc {
+  color: var(--c-sub);
+}
+
+.plugin-empty-line {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--c-faint);
+}
+
+.plugin-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--c-sub);
+  border: 1px dashed var(--c-border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  background: var(--c-panel);
+}
+
+/* 凭据入口（预览反馈增量） */
+.plugin-cred-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plugin-cred-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+
+.plugin-cred-name {
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.plugin-cred-input {
+  min-width: 180px;
+  flex: 1;
+  min-height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--c-border-input);
+  border-radius: 8px;
+  background: var(--c-panel);
+  color: var(--c-text);
+  font-size: 0.85rem;
+}
+
+.plugin-cred-plain {
+  font-size: 0.82rem;
+}
+
+.plugin-cred-input::placeholder {
+  color: var(--c-faint);
+}
+
+/* 权限声明面 */
+.plugin-perm {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 0.6rem;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.plugin-perm dt {
+  color: var(--c-sub);
+}
+
+.plugin-perm dd {
+  margin: 0;
+  color: var(--c-text);
+  word-break: break-word;
+}
+
+/* 审计结论（可定位错因：字段名 + 规则名） */
+.plugin-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78rem;
+}
+
+.plugin-issues li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.plugin-issues--error {
+  color: var(--c-danger-text);
+}
+
+.plugin-issues--warning {
+  color: var(--c-warn-text);
+}
+
+.plugin-warn-tag {
+  border: 1px solid var(--c-warn-border);
+  border-radius: 6px;
+  padding: 0 4px;
+  font-size: 0.68rem;
+}
+
+.plugin-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.2rem;
+}
+
+.plugin-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--c-faint);
+}
+
+/* 故障记录表（L2） */
+.plugin-records {
+  border-top: 1px dashed var(--c-border);
+  padding-top: 0.5rem;
+  overflow-x: auto;
+}
+
+.plugin-records table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.plugin-records th,
+.plugin-records td {
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid var(--c-border);
+  vertical-align: top;
+}
+
+.plugin-records th {
+  color: var(--c-sub);
+  font-weight: 600;
+}
+
+/* 弹窗与 toast */
+.plugin-dialog {
+  max-width: min(560px, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.plugin-dialog h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.plugin-radio {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.plugin-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 60;
+  max-width: min(420px, 92vw);
+  padding: 0.6rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid var(--c-border);
+  background: var(--c-sidebar-item);
+  color: var(--c-sidebar-text-sel);
+  box-shadow: var(--shadow-dialog);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 768px) {
+  .plugin-card-path {
+    display: none;
+  }
+
+  .plugin-card-actions button {
+    min-height: 44px;
+  }
+
+  .plugin-toast {
+    left: 1rem;
+    right: 1rem;
+    bottom: 4.2rem; /* 避开手机迷你底栏 */
+  }
+}

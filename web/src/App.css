@@ -311,13 +311,31 @@ button {
   overflow: hidden;
 }
 
-/* 左：agent 深色栏（260px 固定） */
+/* 左：agent 深色栏（260px 固定；反馈 2026-10-19 预览增量 #2：插件视图组 sticky 常驻） */
 .pane-left {
   width: var(--left-w);
   flex-shrink: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--c-sidebar);
   color: var(--c-inverse);
+  overflow-y: auto;
+}
+
+/* agent 列表占主滚动区，插件组在底部不跟列表滚动（不被列表顶出视口） */
+.pane-left > .agent-list {
+  flex-shrink: 0;
+}
+
+/* 插件视图组：sticky 底部常驻，不滚动即可达；零插件时组件不渲染，本规则无副作用（BR-06） */
+.pane-left > .plugin-nav {
+  position: sticky;
+  bottom: 0;
+  flex-shrink: 0;
+  margin-top: auto;
+  background: var(--c-sidebar);
+  border-top-color: var(--c-sidebar-line);
 }
 
 /* 中：对话主区（relative：Git diff 覆盖层锚定此区，≤768px 随 pane-main 全屏） */

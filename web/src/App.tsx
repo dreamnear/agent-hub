@@ -24,6 +24,9 @@ import AgentList from './components/AgentList';
 import ChatTab from './components/ChatTab';
 import QuickChat from './components/QuickChat';
 import SettingsPage, { lastSettingsSection, type SettingsSectionKey } from './components/SettingsPage';
+import PluginNavGroup from './components/PluginNavGroup';
+import PluginViewHost from './components/PluginViewHost';
+import { plugins, type PluginNavItem, type PluginView } from './plugins';
 import TokenGate from './components/TokenGate';
 import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialog';
 import SessionHistoryDialog from './components/SessionHistoryDialog';
@@ -75,6 +78,30 @@ export default function App(): ReactElement {
   const queryClient = useQueryClient();
   const t = useI18n();
   const { data: polled, registry, tree } = useAgents();
+  // 插件视图（agent-hub-plugin-system B1）：与设置页同级的整页视图（ADR-0004 第 2 条
+  // 「主内容区整页」），由 /api/plugins 数据动态驱动；null = 未打开（零插件时不存在
+  // 任何入口，导航集合与引入前一致）
+  const [pluginView, setPluginView] = useState<PluginNavItem | null>(null);
+  // 当前打开视图的插件快照（查询数据驱动；卸载/停用后自动回落关闭）
+  const pluginViewData = useQuery({
+    queryKey: ['plugins'],
+    queryFn: plugins.list,
+    refetchInterval: 10_000,
+  });
+  const pluginViewPlugin: PluginView | null = useMemo(
+    () =>
+      pluginView != null
+        ? (pluginViewData.data?.find((p) => p.id === pluginView.pluginId) ?? null)
+        : null,
+    [pluginView, pluginViewData.data],
+  );
+  // 停用/卸载正在查看的插件 → 视图自动关闭（BR-03 同现同隐，无死入口）。
+  // 停用后条目仍在清单（disabled），必须显式判 enabled（tester 2 轮 FAIL-3）
+  useEffect(() => {
+    if (pluginView != null && (pluginViewPlugin == null || pluginViewPlugin.enabled === false)) {
+      setPluginView(null);
+    }
+  }, [pluginView, pluginViewPlugin]);
   // 行名跟随（agent-hub-resume-inplace #21 功能点 5）：原地恢复后该行显示名改为
   // 被恢复会话的名（行 id/任务 id 不变，只覆写展示名）。在数据入口统一派生，
   // 侧栏行 / 主区标题 / 弹窗标题等全部下游自然跟随，无需逐组件传透
@@ -550,10 +577,29 @@ export default function App(): ReactElement {
               setLeftOpen(false);
             }}
           />
+          {/* 插件视图导航组（ADR-0004 第 2 条）：数据驱动、动态挂载；零插件不渲染 */}
+          <PluginNavGroup
+            onOpenView={(item) => {
+              setPluginView(item);
+              setSettingsSection(null);
+              setLeftOpen(false); // 手机上开视图即收抽屉（并关已展开的设置页，防遮挡）
+            }}
+            onOpenManager={() => {
+              setSettingsSection('plugins');
+              setLeftOpen(false);
+            }}
+            activePluginId={pluginView?.pluginId ?? null}
+          />
           </aside>
         ) : null}
         <main className="pane-main">
-          {selected != null ? (
+          {pluginView != null && pluginViewPlugin != null ? (
+            <PluginViewHost
+              plugin={pluginViewPlugin}
+              view={pluginView}
+              onExit={() => setPluginView(null)}
+            />
+          ) : selected != null ? (
             <>
               {/* 主区页签条（F2 v2）：仅有文件/终端页签时出现（纯聊天不占一行），
                   聊天为常驻首位页签；≤768px 横向滚动可用 */}
