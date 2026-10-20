@@ -176,6 +176,13 @@ struct RetryState {
     next_at: Option<Instant>,
 }
 
+/// agent cwd 提供方（`hub.projects.effective` 聚合用）：返回全部 agent 的 cwd 列表。
+pub type AgentCwdProvider = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send>>
+        + Send
+        + Sync,
+>;
+
 pub struct PluginManager {
     pub paths: PluginPaths,
     pub registry: Arc<Registry>,
@@ -183,6 +190,9 @@ pub struct PluginManager {
     pub credentials: Arc<CredentialsStore>,
     pub tickets: Arc<view_ticket::TicketStore>,
     pub events_tx: broadcast::Sender<HubEvent>,
+    /// 装配后回填的 agent cwd 提供方（`hub.projects.effective` 聚合用；
+    /// 构造期为 None——drivers 在 AppState 装配序列里晚于插件门面建成）
+    agent_cwds: StdMutex<Option<AgentCwdProvider>>,
     scan_cache: RwLock<scanner::ScanOutcome>,
     locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     retries: StdMutex<HashMap<String, RetryState>>,
@@ -209,11 +219,19 @@ impl PluginManager {
             tickets: Arc::new(view_ticket::TicketStore::default()),
             events_tx,
             paths,
+            agent_cwds: StdMutex::new(None),
             scan_cache: RwLock::new(scanner::ScanOutcome::default()),
             locks: StdMutex::new(HashMap::new()),
             retries: StdMutex::new(HashMap::new()),
             asset_cache: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// 装配接线（AppState::from_config 末段调用）：drivers 全部注册完成后回填
+    /// agent cwd 提供方，供 `hub.projects.effective` 聚合。
+    pub fn set_agent_cwd_provider(&self, provider: AgentCwdProvider) {
+        let mut guard = self.agent_cwds.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(provider);
     }
 
     fn broadcast(&self, id: &str) {
@@ -230,11 +248,18 @@ impl PluginManager {
     }
 
     fn handler(self: &Arc<Self>) -> Arc<dyn HubCallHandler> {
+        let agent_cwds = self
+            .agent_cwds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| Arc::new(|| Box::pin(async { Vec::new() })));
         Arc::new(HubRpcHandler {
             registry: self.registry.clone(),
             credentials: self.credentials.clone(),
             data_dir: self.paths.data_dir.clone(),
             projects_file: self.paths.projects_file.clone(),
+            agent_cwds,
         })
     }
 
@@ -1066,6 +1091,7 @@ struct HubRpcHandler {
     credentials: Arc<CredentialsStore>,
     data_dir: PathBuf,
     projects_file: PathBuf,
+    agent_cwds: AgentCwdProvider,
 }
 
 impl HubCallHandler for HubRpcHandler {
@@ -1076,6 +1102,7 @@ impl HubCallHandler for HubRpcHandler {
         let credentials = self.credentials.clone();
         let data_dir = self.data_dir.clone();
         let projects_file = self.projects_file.clone();
+        let agent_cwds = self.agent_cwds.clone();
         let violation_self = Arc::new(());
         let _ = violation_self;
         Box::pin(async move {
@@ -1163,6 +1190,29 @@ impl HubCallHandler for HubRpcHandler {
                         .and_then(|raw| serde_json::from_str(&raw).ok())
                         .unwrap_or_default();
                     Ok(json!({ "projects": projects }))
+                }
+                "hub.projects.effective" => {
+                    // 可验证工程清单（预览反馈第 3 轮）：工程注册表 ∪ 全部 agent cwd 去重，
+                    // 每项含 path 与 source（registry | agent-cwd）——视图下拉据此让用户
+                    // 看到自己日常的真实工程。聚合既有数据源，无新状态（ADR-0003 只增）。
+                    let mut items: Vec<Value> = Vec::new();
+                    let mut seen = std::collections::HashSet::new();
+                    let registry_projects: Vec<String> = std::fs::read_to_string(&projects_file)
+                        .ok()
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                        .unwrap_or_default();
+                    for p in registry_projects {
+                        if seen.insert(p.clone()) {
+                            items.push(json!({ "path": p, "source": "registry" }));
+                        }
+                    }
+                    // agent cwd：`all=1` 全量清单（含已完成会话），cwd 缺失的条目跳过
+                    for cwd in agent_cwds().await {
+                        if seen.insert(cwd.clone()) {
+                            items.push(json!({ "path": cwd, "source": "agent-cwd" }));
+                        }
+                    }
+                    Ok(json!({ "projects": items }))
                 }
                 other => {
                     let _ = registry.push_record(

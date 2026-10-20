@@ -937,6 +937,135 @@ async fn credential_can_be_set_and_cleared_from_management_api() {
     let _ = state;
 }
 
+/// 可验证工程清单（preview 第 3 轮增量）：`hub.projects.effective` =
+/// 工程注册表 ∪ 全部 agent cwd 去重（source 标注）+ 未声明 data 域的插件被拒。
+#[tokio::test]
+async fn projects_effective_unions_registry_and_agent_cwds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = cfg_with(&dir);
+    // 工程注册表两项
+    std::fs::write(
+        dir.path().join("projects.json"),
+        serde_json::to_string_pretty(&[
+            "/Users/me/Works/lizu/dev-guide".to_string(),
+            "/Users/me/Works/agent-hub-mng/src/claude-view".to_string(),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    // 注册表缺失的第三个工程，由 agent cwd 补上
+    let cwd = dir.path().join("cwd-proj");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::write(dir.path().join("jobs"), b"").ok();
+
+    let (state, a) = app(cfg);
+    // 覆盖 cwd 提供方（正常装配走 AppState::from_config 的 set_drivers；测试直注固定值）
+    state.plugins.set_agent_cwd_provider({
+        let cwd = cwd.clone();
+        Arc::new(move || {
+            let cwd = cwd.clone();
+            Box::pin(async move {
+                vec![
+                    cwd.to_string_lossy().into_owned(),
+                    "/Users/me/Works/agent-hub-mng/src/claude-view".into(),
+                ]
+            })
+        })
+    });
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+
+    let (status, res) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.projects.effective", "params": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{res}");
+    let items: Vec<Value> = serde_json::from_str(&res)
+        .ok()
+        .map(|v: Value| {
+            v["result"]["projects"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let paths: Vec<String> = items
+        .iter()
+        .filter_map(|i| i["path"].as_str().map(str::to_string))
+        .collect();
+    // 去重：注册表 2 + agent cwd 2，交集 1 → 3 项
+    assert_eq!(paths.len(), 3, "{res}");
+    assert!(paths.contains(&"/Users/me/Works/lizu/dev-guide".to_string()));
+    assert!(paths.contains(&cwd.to_string_lossy().into_owned()));
+    // source 标注：交集项归 registry，纯 cwd 项标 agent-cwd
+    for item in &items {
+        let src = item["source"].as_str().unwrap();
+        assert!(src == "registry" || src == "agent-cwd", "{item}");
+    }
+    let by_path = |p: &str| {
+        items
+            .iter()
+            .find(|i| i["path"].as_str() == Some(p))
+            .unwrap()["source"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(by_path("/Users/me/Works/lizu/dev-guide"), "registry");
+    assert_eq!(by_path(&cwd.to_string_lossy()), "agent-cwd");
+
+    // 未声明 data 域的插件被拒（BR-12）+ 留痕
+    let denied = dir.path().join("plugins").join("no-perm-plugin");
+    std::fs::create_dir_all(&denied).unwrap();
+    std::fs::write(
+        denied.join("plugin.json"),
+        r#"{"schemaVersion":1,"id":"no-perm-plugin","name":"NoPerm","version":"0.1.0",
+           "hub":{"apiVersion":"1"}}"#,
+    )
+    .unwrap();
+    let (status, _) = req_text(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, disc, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    let item = disc["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "no-perm-plugin")
+        .unwrap();
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/install",
+        Some(json!({ "id": "no-perm-plugin", "contentHash": item["report"]["contentHash"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/no-perm-plugin/rpc",
+        Some(json!({ "method": "hub.projects.effective", "params": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.contains("projects:read"), "{body}");
+    let (_, records, _) = req(
+        a.clone(),
+        "GET",
+        "/api/plugins/no-perm-plugin/records",
+        None,
+    )
+    .await;
+    assert!(records["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["kind"] == "violation"));
+}
+
 /// review Round-1 BLOCKER 回归锚：停用条目在重启装载中绝不翻转 enabled——
 /// 用户停用 + 目录被删 → 重启后必须仍是「已停用」，不得漂移为「启用 + 运行故障」
 /// （BR-03 同现同隐 / BR-01 迁移表单一入口）。

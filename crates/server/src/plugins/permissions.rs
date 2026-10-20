@@ -155,6 +155,18 @@ mod tests {
     }
 
     #[test]
+    fn projects_effective_maps_projects_read() {
+        let call = PluginCall {
+            method: "hub.projects.effective".into(),
+            params: json!({}),
+        };
+        assert_eq!(check(&call, &decl()), Ok(()));
+        let mut d = decl();
+        d.data.clear();
+        assert_eq!(check(&call, &d).unwrap_err().kind, DenyKind::DataDenied);
+    }
+
+    #[test]
     fn data_domain_missing_is_denied() {
         let mut d = decl();
         d.data.clear();

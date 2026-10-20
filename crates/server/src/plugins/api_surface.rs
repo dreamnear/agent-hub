@@ -114,6 +114,14 @@ pub const RPC_METHODS: &[RpcMethodDef] = &[
         available: true,
         description: "工程清单",
     },
+    RpcMethodDef {
+        method: "hub.projects.effective",
+        data_domains: &["projects:read"],
+        credentials: &[],
+        high_risk: &[],
+        available: true,
+        description: "可验证工程清单（工程注册表 ∪ 全部 agent cwd 去重，每项含 path 与 source）",
+    },
     // —— 以下为 v1 目标方法，B3 注册（只增不改；未注册期间调用 = 未知方法拒绝）——
     RpcMethodDef {
         method: "hub.sessions.list",

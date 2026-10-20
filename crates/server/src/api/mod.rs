@@ -192,6 +192,19 @@ impl AppState {
             "pi".into(),
             pi_driver.clone() as Arc<dyn crate::drivers::MessageSender>,
         );
+        // 插件 RPC「可验证工程清单」（hub.projects.effective）聚合 agent cwd：
+        // drivers 全部注册完成后回填提供方（加法接线，不动既有字段）
+        let drivers_for_plugins = drivers.clone();
+        plugins.set_agent_cwd_provider(Arc::new(move || {
+            let drivers = drivers_for_plugins.clone();
+            Box::pin(async move {
+                drivers
+                    .list_all(true)
+                    .await
+                    .map(|agents| agents.into_iter().filter_map(|a| a.cwd).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+        }));
         Self {
             cfg,
             events_tx,
