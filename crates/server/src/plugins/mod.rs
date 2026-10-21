@@ -259,6 +259,10 @@ pub struct PluginManager {
     /// 装配后回填的 agent cwd 提供方（`hub.projects.effective` 聚合用；
     /// 构造期为 None——drivers 在 AppState 装配序列里晚于插件门面建成）
     agent_cwds: StdMutex<Option<AgentCwdProvider>>,
+    /// 工程便签存储路径（B3 `hub.notes.read/write`；与 /api/notes 同一文件）
+    notes_file: StdMutex<Option<PathBuf>>,
+    /// 定时任务管理器回填（B3 `hub.tasks.list/toggle`；与 /api/tasks 同一实例）
+    tasks: StdMutex<Option<Arc<crate::tasks::TaskManager>>>,
     scan_cache: RwLock<scanner::ScanOutcome>,
     locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     retries: StdMutex<HashMap<String, RetryState>>,
@@ -287,6 +291,8 @@ impl PluginManager {
             events_tx,
             paths,
             agent_cwds: StdMutex::new(None),
+            notes_file: StdMutex::new(None),
+            tasks: StdMutex::new(None),
             scan_cache: RwLock::new(scanner::ScanOutcome::default()),
             locks: StdMutex::new(HashMap::new()),
             retries: StdMutex::new(HashMap::new()),
@@ -299,6 +305,22 @@ impl PluginManager {
     pub fn set_agent_cwd_provider(&self, provider: AgentCwdProvider) {
         let mut guard = self.agent_cwds.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(provider);
+    }
+
+    /// 回填便签文件路径（B3；AppState 装配序列调用）
+    pub fn set_notes_file(&self, path: PathBuf) {
+        self.notes_file
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(path);
+    }
+
+    /// 回填定时任务管理器（B3；AppState 装配序列调用）
+    pub fn set_tasks_handle(&self, tm: Arc<crate::tasks::TaskManager>) {
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(tm);
     }
 
     fn broadcast(&self, id: &str) {
@@ -321,12 +343,24 @@ impl PluginManager {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| Arc::new(|| Box::pin(async { Vec::new() })));
+        let notes_file = self
+            .notes_file
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Arc::new(HubRpcHandler {
             registry: self.registry.clone(),
             credentials: self.credentials.clone(),
             data_dir: self.paths.data_dir.clone(),
             projects_file: self.paths.projects_file.clone(),
             agent_cwds,
+            notes_file,
+            tasks,
             approvals: self.approvals.clone(),
             events_tx: self.events_tx.clone(),
         })
@@ -1318,6 +1352,10 @@ struct HubRpcHandler {
     credentials: Arc<CredentialsStore>,
     data_dir: PathBuf,
     projects_file: PathBuf,
+    /// 工程便签文件（B3 hub.notes.*；None = 未装配，方法拒答）
+    notes_file: Option<PathBuf>,
+    /// 定时任务管理器（B3 hub.tasks.*；None = 未装配，方法拒答）
+    tasks: Option<Arc<crate::tasks::TaskManager>>,
     agent_cwds: AgentCwdProvider,
     /// 高危审批单表（B2 批3）：`hub.sessions.send` 等高危方法命中
     /// HighRiskNeedsApproval 时落单阻塞等待（设计 §7）
@@ -1336,6 +1374,8 @@ impl HubCallHandler for HubRpcHandler {
         let agent_cwds = self.agent_cwds.clone();
         let approvals = self.approvals.clone();
         let events_tx = self.events_tx.clone();
+        let notes_file = self.notes_file.clone();
+        let tasks = self.tasks.clone();
         Box::pin(async move {
             let Some(p) = registry.get(&plugin_id) else {
                 return Err(RpcError::Unauthorized(format!("插件 {plugin_id} 未安装")));
@@ -1468,6 +1508,83 @@ impl HubCallHandler for HubRpcHandler {
                     let msg = params.get("message").and_then(Value::as_str).unwrap_or("");
                     tracing::info!(plugin = %plugin_id, "plugin log: {}", credentials.scrub(msg));
                     Ok(json!({ "ok": true }))
+                }
+                // —— B3 视图 API 完整化（notes/tasks 数据域；sessions 族单列缺口）——
+                "hub.notes.read" => {
+                    let path = params
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 path 参数".into()))?;
+                    if path.contains("..") {
+                        return Err(RpcError::PluginError("路径不允许包含 ..".into()));
+                    }
+                    let notes_file = notes_file.clone().ok_or_else(|| {
+                        RpcError::PluginError("notes 存储未装配（hub 内部状态）".into())
+                    })?;
+                    // 与 /api/notes 同一存储（NotesStore；键 = 规范化 cwd，async 同源）
+                    let store = crate::notes::NotesStore { file: notes_file };
+                    let content = store.get(path).await;
+                    Ok(json!({ "content": content }))
+                }
+                "hub.notes.write" => {
+                    let path = params
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 path 参数".into()))?;
+                    let content = params
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 content 参数".into()))?;
+                    if path.contains("..") {
+                        return Err(RpcError::PluginError("路径不允许包含 ..".into()));
+                    }
+                    if content.len() > 256 * 1024 {
+                        return Err(RpcError::PluginError("便签写入上限 256KB".into()));
+                    }
+                    let notes_file = notes_file.clone().ok_or_else(|| {
+                        RpcError::PluginError("notes 存储未装配（hub 内部状态）".into())
+                    })?;
+                    let store = crate::notes::NotesStore { file: notes_file };
+                    store
+                        .set(path, content)
+                        .await
+                        .map_err(|e| RpcError::PluginError(format!("写入失败：{e}")))?;
+                    Ok(json!({ "ok": true }))
+                }
+                "hub.tasks.list" => {
+                    let tm = tasks.clone().ok_or_else(|| {
+                        RpcError::PluginError("tasks 未装配（hub 内部状态）".into())
+                    })?;
+                    let tasks: Vec<Value> = tm
+                        .list()
+                        .iter()
+                        .map(|t| {
+                            json!({
+                                "id": t.id,
+                                "name": t.name,
+                                "cron": t.cron,
+                                "enabled": t.enabled,
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "tasks": tasks }))
+                }
+                "hub.tasks.toggle" => {
+                    let id = params
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 id 参数".into()))?;
+                    let tm = tasks.clone().ok_or_else(|| {
+                        RpcError::PluginError("tasks 未装配（hub 内部状态）".into())
+                    })?;
+                    let mut spec = tm.get(id).ok_or_else(|| {
+                        RpcError::PluginError(format!("任务 {id} 不存在"))
+                    })?;
+                    spec.enabled = !spec.enabled;
+                    let enabled = spec.enabled;
+                    tm.upsert(spec)
+                        .map_err(|e| RpcError::PluginError(format!("启停失败：{e}")))?;
+                    Ok(json!({ "id": id, "enabled": enabled }))
                 }
                 "hub.projects.list" => {
                     let projects: Vec<String> = std::fs::read_to_string(&projects_file)

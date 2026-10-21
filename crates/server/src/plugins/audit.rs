@@ -684,12 +684,23 @@ fn scan_view_assets(
 }
 
 /// 常见硬编码色值形态计数（轻量扫描器；只做 warning，不阻断，ADR-0004 拍板结论 4）。
+/// B3 正式化：`--*: <兜底值>` 变量定义行豁免——视图 CSS 的 :root 兜底默认值是
+/// 声明式首帧形态（hub:init token 到达即被宿主值覆盖，见示例插件注释），与
+/// 「属性直写散值」不同类；扫描只计后者。
 fn count_color_literals(text: &str) -> usize {
     let bytes = text.as_bytes();
     let mut hits = 0;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'#' {
+            // 变量定义行豁免：`#` 所在行的行首（去空白）以 `--` 开头且 `#` 前有 `:`——
+            // `--bg: #ffffff` 形态（首帧兜底变量），不算散值
+            let line_start = text[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let before_hash = &text[line_start..i];
+            if before_hash.trim_start().starts_with("--") && before_hash.contains(':') {
+                i += 1;
+                continue;
+            }
             // #rgb / #rrggbb / #rrggbbaa
             let mut n = 0;
             while i + 1 + n < bytes.len() && n < 8 && bytes[i + 1 + n].is_ascii_hexdigit() {
