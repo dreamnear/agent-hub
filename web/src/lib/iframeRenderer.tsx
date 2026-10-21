@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useI18n } from '../i18n';
 import { plugins, viewAssetUrl } from '../plugins';
 import { useThemeSignal } from './themeSignal';
+import { themeTokenSnapshot } from './themeTokens';
 
 /// 渲染器 iframe 档（B3 尾批，ADR-0012 拍板 2 + §12.2 契约）：插件声明
 /// `engine:"plugin-iframe"` → 宿主把格式（fence/ext）映射到插件的渲染页
@@ -27,17 +28,6 @@ export interface IframeRenderProps {
   lang: string;
   /** 回退：源码块（不假渲染） */
   fallback: ReactElement;
-}
-
-function currentTokens(): Record<string, string> {
-  // 宿主 --c-* 生效值快照（getComputedStyle 逐 token 取——三态跟随的运行期值）
-  const cs = getComputedStyle(document.documentElement);
-  const tokens: Record<string, string> = {};
-  for (const name of ['--c-bg', '--c-panel', '--c-text', '--c-sub', '--c-border', '--c-accent']) {
-    const v = cs.getPropertyValue(name).trim();
-    if (v) tokens[name] = v;
-  }
-  return tokens;
 }
 
 export function DeclarativeIframeRenderer({ pluginId, entry, source, lang, fallback }: IframeRenderProps): ReactElement {
@@ -97,20 +87,24 @@ export function DeclarativeIframeRenderer({ pluginId, entry, source, lang, fallb
       setFailReason(t('plugin.render.timeout'));
       setFailed(true);
     }, RENDER_TIMEOUT_MS);
+    // load 驱动（M19）：iframe 文档就绪才发 render（固定 300ms 补发对慢加载渲染页
+    // 会超时误回退）；重发幂等由渲染页自行处理
+    let sent = false;
     const send = (): void => {
+      if (sent) return;
+      sent = true;
       frameRef.current?.contentWindow?.postMessage(
-        { type: 'render', payload: { source, lang, theme, tokens: currentTokens() } },
+        { type: 'render', payload: { source, lang, theme, tokens: themeTokenSnapshot() } },
         '*',
       );
-      // 首帧后补发（iframe onload 时才能收消息；重复发渲染页按幂等处理）
-      window.setTimeout(() => {
-        frameRef.current?.contentWindow?.postMessage(
-          { type: 'render', payload: { source, lang, theme, tokens: currentTokens() } },
-          '*',
-        );
-      }, 300);
     };
-    send();
+    const frame = frameRef.current;
+    if (frame == null) return;
+    if (frame.contentWindow?.document.readyState === 'complete') {
+      send();
+    } else {
+      frame.addEventListener('load', send, { once: true });
+    }
     return () => window.clearTimeout(timer);
   }, [mounted, ticket, source, lang, theme, failed]);
 

@@ -1721,7 +1721,10 @@ fn view_root(p: &InstalledPlugin) -> Option<PathBuf> {
 /// （root=插件目录，逃逸判定不放宽）。
 fn renderer_asset_root(p: &InstalledPlugin, rel: &str) -> Option<(PathBuf, String)> {
     let clean = rel.trim_start_matches('/');
-    if clean.is_empty() {
+    if clean.is_empty() || clean.contains("..") {
+        // M20：含 .. 段不做前缀命中（归一化前缀会放宽逃逸面——render/../backend
+        // 形态可达渲染器目录之外的插件根内文件，与「entry 目录内」语义不符；
+        // 该形态落入 view_root/插件根 canonicalize 检查的原判定路径）
         return None;
     }
     for r in &p.manifest.contributes.renderers {
