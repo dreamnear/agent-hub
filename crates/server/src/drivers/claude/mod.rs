@@ -56,6 +56,10 @@ pub struct ClaudeDriver {
     /// interactive「从列表移除」忽略清单文件（R8）：按 sessionId 持久过滤前台
     /// 会话条目；进程消失后懒清理
     pub ignored_interactive_file: PathBuf,
+    /// F-6：会话 id → 注入 config 实际路径（占位名 `hub-<uuid>.json`，原地重写
+    /// 保留）——stop/remove 按此回收文件。hub 重启丢映射 → plugin_mcp 目录残留
+    /// 死文件（无害：config 只在 mcp-proxy 拉起时读一次），治理归 B4。
+    pub mcp_config_paths: Arc<std::sync::Mutex<HashMap<String, PathBuf>>>,
 }
 
 impl ClaudeDriver {
@@ -106,6 +110,7 @@ impl ClaudeDriver {
             sender,
             rooms,
             interrupted_at: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            mcp_config_paths: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -476,21 +481,24 @@ impl AgentCatalog for ClaudeDriver {
                     return Err(e);
                 }
             };
-            if let Some(cfg) = placeholder_cfg.as_deref() {
-                let tmp = std::path::PathBuf::from(cfg);
-                if tmp
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("hub-"))
-                {
-                    let _ = std::fs::remove_file(&tmp);
-                }
-                let _ = crate::plugins::mcp_config::write_config_sync(
-                    &mcp_dir,
+            if let Some(cfg) = placeholder_cfg.clone() {
+                // F-6（tester，preview 反馈轮）：占位 config **原地重写**而非删除另写——
+                // `--mcp-config` 参数指向的就是这个文件，claude --bg 由 CLI daemon 托管，
+                // 会话进程读 config 的时点不受 hub 控制（多会话/长生命周期下明显滞后），
+                // 删除后晚读即落空（工具清单缺失的直接根因）。tmp+rename 原子替换，
+                // daemon 读到旧内容（session 占位）或新内容（真实 id）都完整可用。
+                // 文件保留至 stop/remove 回收（映射登记）。
+                let path = std::path::PathBuf::from(&cfg);
+                let _ = crate::plugins::mcp_config::write_config_at_sync(
+                    &path,
                     &hub_bin,
                     &hub_loopback,
                     &id,
                 );
+                self.mcp_config_paths
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), path);
             }
             Ok(id)
         })
@@ -500,8 +508,14 @@ impl AgentCatalog for ClaudeDriver {
         let mcp_dir = self.plugin_mcp_dir.clone();
         let id = id.to_string();
         let bin = self.bin.clone();
+        let injected = self.mcp_config_paths.lock().unwrap().remove(&id);
         Box::pin(async move {
             let r = cli::stop(&bin, &id).await;
+            // F-6：优先按映射回收实际注入文件（占位名 hub-<uuid>.json）；
+            // remove_config_sync 兜底（`<id>.json` 命名约定，映射缺失时唯一线索）
+            if let Some(p) = injected {
+                let _ = std::fs::remove_file(p);
+            }
             crate::plugins::mcp_config::remove_config_sync(&mcp_dir, &id);
             r
         })
@@ -511,8 +525,12 @@ impl AgentCatalog for ClaudeDriver {
         let mcp_dir = self.plugin_mcp_dir.clone();
         let id = id.to_string();
         let bin = self.bin.clone();
+        let injected = self.mcp_config_paths.lock().unwrap().remove(&id);
         Box::pin(async move {
             let r = cli::remove(&bin, &id).await;
+            if let Some(p) = injected {
+                let _ = std::fs::remove_file(p);
+            }
             crate::plugins::mcp_config::remove_config_sync(&mcp_dir, &id);
             r
         })

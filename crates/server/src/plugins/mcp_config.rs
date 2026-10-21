@@ -38,14 +38,34 @@ pub fn write_config_sync(
     hub_url: &str,
     session_id: &str,
 ) -> anyhow::Result<PathBuf> {
-    std::fs::create_dir_all(mcp_dir)?;
     let path = config_path(mcp_dir, session_id);
-    let tmp = mcp_dir.join(format!(".{session_id}.tmp"));
-    let value = mcp_config_value(hub_bin, hub_url, session_id);
-    let raw = serde_json::to_string_pretty(&value)?;
-    std::fs::write(&tmp, raw)?;
-    std::fs::rename(&tmp, &path)?;
+    write_config_at_sync(&path, hub_bin, hub_url, session_id)?;
     Ok(path)
+}
+
+/// 同步写 config 到**指定路径**（F-6，preview 反馈轮）：文件名允许与 session_id
+/// 无关——start 期真实会话 id 未知，占位文件（hub-<uuid>.json）先写、claude
+/// daemon 拿到 id 后**原地重写内容**。daemon 对 --mcp-config 的读取时点不受
+/// hub 控制（多会话/长生命周期下明显滞后），删除另写会让晚读的 daemon 落空；
+/// tmp+rename 原子替换保证读侧要么完整旧内容要么完整新内容。
+pub fn write_config_at_sync(
+    path: &Path,
+    hub_bin: &Path,
+    hub_url: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{file_name}.tmp"));
+    let raw = serde_json::to_string_pretty(&mcp_config_value(hub_bin, hub_url, session_id))?;
+    std::fs::write(&tmp, raw)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 /// 异步写（驱动层便捷）。
@@ -128,5 +148,22 @@ mod tests {
     fn needs_injection_gate() {
         assert!(!needs_injection(0));
         assert!(needs_injection(1));
+    }
+
+    #[test]
+    fn write_at_keeps_placeholder_name_with_real_session() {
+        // F-6：占位路径原地重写——文件名保持 hub-<uuid>.json，内容 session 换真实 id
+        let dir = TempDir::new().unwrap();
+        let mcp_dir = dir.path().join("plugin_mcp");
+        let hub = Path::new("/tmp/hub-bin");
+        let placeholder = write_config_sync(&mcp_dir, hub, "http://127.0.0.1:7909", "hub-abc")
+            .unwrap();
+        write_config_at_sync(&placeholder, hub, "http://127.0.0.1:7909", "real-sess-1").unwrap();
+        assert!(placeholder.is_file(), "占位文件必须原地保留（不删另写）");
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(&placeholder).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["hub-plugins"]["args"][2], json!("real-sess-1"));
+        // 原子无残留 tmp
+        assert!(!mcp_dir.join(".hub-abc.json.tmp").exists());
     }
 }
