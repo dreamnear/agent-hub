@@ -1,7 +1,8 @@
 /* 左侧栏（Sidebar-v2）：顶部品牌条 + 全宽会话列表 + 底部功能菜单；色值全走 App.css token */
 
 .agent-list {
-  height: 100%;
+  /* 高度由 .pane-left > .agent-list 的 flex:1 1 0 给定（App.css）——此处不得再声明
+     height:100%，否则未来选择器调整时会顶出下方 plugin-nav（M12 走查锚） */
   display: flex;
   flex-direction: column;
   color: var(--c-inverse);

@@ -497,7 +497,7 @@ impl AgentCatalog for ClaudeDriver {
                 );
                 self.mcp_config_paths
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .insert(id.clone(), path);
             }
             Ok(id)
@@ -508,7 +508,11 @@ impl AgentCatalog for ClaudeDriver {
         let mcp_dir = self.plugin_mcp_dir.clone();
         let id = id.to_string();
         let bin = self.bin.clone();
-        let injected = self.mcp_config_paths.lock().unwrap().remove(&id);
+        let injected = self
+            .mcp_config_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         Box::pin(async move {
             let r = cli::stop(&bin, &id).await;
             // F-6：优先按映射回收实际注入文件（占位名 hub-<uuid>.json）；
@@ -525,7 +529,11 @@ impl AgentCatalog for ClaudeDriver {
         let mcp_dir = self.plugin_mcp_dir.clone();
         let id = id.to_string();
         let bin = self.bin.clone();
-        let injected = self.mcp_config_paths.lock().unwrap().remove(&id);
+        let injected = self
+            .mcp_config_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         Box::pin(async move {
             let r = cli::remove(&bin, &id).await;
             if let Some(p) = injected {
