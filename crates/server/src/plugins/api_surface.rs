@@ -203,7 +203,7 @@ pub const RPC_METHODS: &[RpcMethodDef] = &[
         credentials: &[],
         high_risk: &["send-messages-as-user"],
         available: false,
-        description: "代发消息（B2/B3，逐次确认）",
+        description: "代发消息（B4 承接，v1 不注册；未来若开须高危审批 + 专项 ADR）",
     },
 ];
 

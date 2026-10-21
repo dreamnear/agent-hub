@@ -115,7 +115,8 @@ export function MermaidBlock({ code, lang }: FenceProps): ReactElement {
         if (alive) setFailed(true);
         return;
       }
-      // securityLevel strict：图源视为不可信输入，输出经库内消毒（ADR-0012 消毒路径）
+      // securityLevel strict：图源视为不可信输入，输出经库内消毒（ADR-0012 消毒路径）。
+      // 供应链注记（M15）：mermaid 升级须回归 XSS 用例（strict 行为随版本可能变化）
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',

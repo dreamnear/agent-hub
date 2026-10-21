@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { useEffect, useState } from 'react';
 import { plugins } from '../plugins';
-import { useDeco } from '../lib/fileDeco';
+import { decoExt, useDeco } from '../lib/fileDeco';
 
 /// Material Icon Theme 风格的精选子集文件图标（Git 变更列表用，工单限定范围仅 GitPanel）。
 /// 色彩例外依据（同驱动徽标 C/O/P/D 先例）：文件类型配色是图标本体艺术——
@@ -88,13 +88,6 @@ export function extFor(name: string): string {
   if (dot < 0) return 'file';
   const ext = base.slice(dot + 1);
   return ext in COLOR ? ext : 'file';
-}
-
-/// 小写裸 ext（去点）——装饰表键形态。
-export function decoExt(name: string): string {
-  const base = (name.split('/').pop() ?? name).toLowerCase();
-  const dot = base.lastIndexOf('.');
-  return dot >= 0 ? base.slice(dot + 1) : '';
 }
 
 function PluginDecoIcon({ pluginId, icon }: { pluginId: string; icon: string }): ReactElement {
