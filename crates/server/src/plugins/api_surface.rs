@@ -75,10 +75,10 @@ pub fn high_risk_label(item: &str) -> &'static str {
     }
 }
 
-/// postMessage 消息类型（ADR-0004 第 5 条，v1 固定集合）。
-pub const HOST_TO_VIEW_MESSAGES: [&str; 4] =
-    ["hub:init", "hub:theme", "hub:rpc-result", "hub:rpc-error"];
-pub const VIEW_TO_HOST_MESSAGES: [&str; 3] = ["hub:ready", "hub:rpc", "hub:notify"];
+/// postMessage 消息类型（ADR-0004 第 5 条 + ADR-0012 §12.2 渲染器契约，固定集合）。
+pub const HOST_TO_VIEW_MESSAGES: [&str; 5] =
+    ["hub:init", "hub:theme", "hub:rpc-result", "hub:rpc-error", "render"];
+pub const VIEW_TO_HOST_MESSAGES: [&str; 4] = ["hub:ready", "hub:rpc", "hub:notify", "rendered"];
 
 /// 一个 RPC 方法的定义：签名、绑定权限、B1 是否已注册。
 #[derive(Debug, Clone, Serialize)]
@@ -222,8 +222,8 @@ pub struct ApiSchema {
     pub data_domains: [&'static str; 13],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,
-    pub host_to_view_messages: [&'static str; 4],
-    pub view_to_host_messages: [&'static str; 3],
+    pub host_to_view_messages: [&'static str; 5],
+    pub view_to_host_messages: [&'static str; 4],
     /// 弃用项（ADR-0003 第 2 条）：v1 无弃用项
     pub deprecated: Vec<String>,
     /// v1 权限面说明（ADR-0003 拍板结论 4/5）：`api` 类声明接受但无消费者

@@ -170,3 +170,19 @@
   border-radius: 8px;
   background: var(--c-panel);
 }
+
+/* —— B3 尾批：渲染器 iframe 档（ADR-0012 §12.2；色值全走 token） —— */
+.iframe-render-wrap {
+  margin: 8px 0;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-panel);
+  overflow: hidden;
+}
+.iframe-render-frame {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  border: none;
+  background: transparent;
+}

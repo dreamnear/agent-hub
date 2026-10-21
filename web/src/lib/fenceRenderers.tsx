@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useI18n } from '../i18n';
 import BuiCodeBlock from '../components/bui/CodeBlock';
 import { plantumlSvgUrlWith } from './plantuml';
+import { useThemeSignal } from './themeSignal';
+import { DeclarativeIframeRenderer } from './iframeRenderer';
 
 /// 围栏渲染注册表（B3，ADR-0012 声明档）：markdown 围栏按语言分流到
 /// 「宿主内置引擎」——插件只声明 `{fence/ext → engine}` 映射，**插件零代码进宿主**。
@@ -64,18 +66,6 @@ export function FenceFallback({
       <p className="md-fence-hint">{t(hintKey)}</p>
     </>
   );
-}
-
-/** 当前主题态（data-theme），属性翻转时通知订阅者——引擎重渲染用 */
-export function useThemeSignal(): string {
-  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? 'auto');
-  useEffect(() => {
-    const el = document.documentElement;
-    const ob = new MutationObserver(() => setTheme(el.dataset.theme ?? 'auto'));
-    ob.observe(el, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => ob.disconnect();
-  }, []);
-  return theme;
 }
 
 // —— 内置引擎：mermaid（B3 首批，ADR-0012 拍板 1）——
@@ -197,7 +187,7 @@ registerFenceRenderer({ id: 'builtin:mermaid', fences: ['mermaid'], component: M
 /** 由插件声明组装引擎组件（宿主转译：声明 → 内置引擎实例，插件零代码） */
 export function componentForEngine(
   engine: string,
-  opts: { service?: string; source?: string },
+  opts: { service?: string; source?: string; entry?: string },
 ): ((props: FenceProps) => ReactElement) | null {
   switch (engine) {
     case 'mermaid':
@@ -208,6 +198,24 @@ export function componentForEngine(
       return ImageBlock;
     case 'html-sanitized':
       return HtmlSanitizedBlock;
+    case 'plugin-iframe': {
+      // iframe 档（B3 尾批，ADR-0012 拍板 2）：渲染页跑沙箱 iframe（票据+无
+      // allow-same-origin），宿主上下文零执行；失败/超时回退源码
+      const pid = opts.source ?? '';
+      const entry = opts.entry ?? 'index.html';
+      return (p: FenceProps) => {
+        const fb = <FenceFallback code={p.code} lang={p.lang} hintKey="md.fenceRenderFailed" />;
+        return (
+          <DeclarativeIframeRenderer
+            pluginId={pid}
+            entry={entry}
+            source={p.code}
+            lang={p.lang}
+            fallback={fb}
+          />
+        );
+      };
+    }
     default:
       return null;
   }

@@ -569,6 +569,8 @@ export const en: Record<string, string> = {
   'md.copied': 'Copied',
   'md.plantumlNeedConfig': 'PlantUML render service not configured (Settings → Documents); showing source for now.',
   'md.fenceRenderFailed': 'Render failed - falling back to source view',
+  'plugin.render.timeout': 'Render page timed out - falling back to source view',
+  'plugin.render.failReason': 'Render failed: ',
   'sys.stdout': 'Output',
   'sys.defaultLabel': 'System notice',
 
