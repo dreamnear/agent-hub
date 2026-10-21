@@ -257,6 +257,23 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
             }
         }
     }
+    // 文件装饰图标（B3，ADR-0013）：图标文件必须存在（禁逃逸已在 manifest 段阻断）
+    for (i, d) in m.contributes.file_decorations.iter().enumerate() {
+        let field = format!("contributes.fileDecorations[{i}].icon");
+        match resolve_inside(root, &d.icon) {
+            Ok(p) => {
+                if !p.is_file() {
+                    errors.push(
+                        ManifestIssue::new(field, "path-not-file", "装饰图标不是文件")
+                            .with_path(d.icon.clone()),
+                    );
+                }
+            }
+            Err(why) => errors.push(
+                ManifestIssue::new(field, why.rule(), why.message()).with_path(d.icon.clone()),
+            ),
+        }
+    }
     // 渲染器（B3，ADR-0012）：plugin-iframe 档的 entry 同样走路径校验
     for (i, r) in m.contributes.renderers.iter().enumerate() {
         if let Some(entry) = &r.entry {
@@ -474,6 +491,38 @@ pub fn contributions_of(m: &super::manifest::Manifest) -> Vec<Contribution> {
             description: Some(match_desc),
             risk: "-".into(),
             path: r.entry.clone(),
+        });
+    }
+    if let Some(tt) = &m.contributes.theme_tokens {
+        for token in tt.tokens.keys() {
+            out.push(Contribution {
+                kind: "themeTokens".into(),
+                id: token.clone(),
+                name: token.clone(),
+                description: None,
+                risk: "-".into(),
+                path: None,
+            });
+        }
+    }
+    for d in &m.contributes.file_decorations {
+        out.push(Contribution {
+            kind: "fileDecoration".into(),
+            id: d.id.clone(),
+            name: format!("ext:{}", d.match_rule.ext.join("|")),
+            description: None,
+            risk: "-".into(),
+            path: Some(d.icon.clone()),
+        });
+    }
+    for svc in &m.contributes.services {
+        out.push(Contribution {
+            kind: "service".into(),
+            id: svc.id.clone(),
+            name: svc.label.clone(),
+            description: svc.placeholder.clone(),
+            risk: "-".into(),
+            path: None,
         });
     }
     out

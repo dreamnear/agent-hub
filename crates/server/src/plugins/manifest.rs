@@ -106,6 +106,15 @@ pub struct Contributes {
     /// 渲染器声明档（B3，ADR-0012）：`{id, match:{ext,fence}, engine, config?, entry?}`
     #[serde(default)]
     pub renderers: Vec<RendererDecl>,
+    /// 主题 token 覆盖（B3，ADR-0013）：`tokens: { "--c-*": {light, dark}}`
+    #[serde(default)]
+    pub theme_tokens: Option<ThemeTokensDecl>,
+    /// 文件装饰（B3，ADR-0013）：被动静态映射 ext→icon/color
+    #[serde(default)]
+    pub file_decorations: Vec<FileDecorationDecl>,
+    /// 服务地址声明（B3，ADR-0013 §12.1：设置项占位 label/placeholder/default）
+    #[serde(default)]
+    pub services: Vec<ServiceDecl>,
 }
 
 /// 渲染器命中规则（ADR-0012 第 3 条）：ext / fence 全 hub 唯一（含内置占用，
@@ -134,6 +143,48 @@ pub struct RendererDecl {
     /// `engine:"plugin-iframe"` 时必填（相对路径，禁逃逸）
     #[serde(default)]
     pub entry: Option<String>,
+}
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeTokenEntry {
+    pub light: String,
+    pub dark: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ThemeTokensDecl {
+    #[serde(default)]
+    pub tokens: std::collections::BTreeMap<String, ThemeTokenEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDecorationDecl {
+    pub id: String,
+    #[serde(rename = "match")]
+    pub match_rule: FileDecorationMatch,
+    pub icon: String,
+    /// 成对值 {light, dark} 或 引用 "$token:--c-*"（字符串形态，非对象）
+    #[serde(default)]
+    pub color: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDecorationMatch {
+    #[serde(default)]
+    pub ext: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceDecl {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    #[serde(default)]
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -731,7 +782,207 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         }
     }
 
-    // —— 权限组 ——
+    // —— 主题 token 覆盖（B3，ADR-0013 覆盖档）——
+    if let Some(tt) = &manifest.contributes.theme_tokens {
+        if tt.tokens.is_empty() {
+            errors.push(ManifestIssue::new(
+                "contributes.themeTokens",
+                "theme-tokens-empty",
+                "themeTokens.tokens 为空（无实际覆盖）",
+            ));
+        }
+        let builtins = crate::plugins::theme_tokens::builtin_tokens();
+        let mut ov: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+        for (token, pair) in &tt.tokens {
+            let field = format!("contributes.themeTokens.tokens[{token:?}]");
+            // token 名形态
+            if !token.starts_with("--c-") {
+                errors.push(ManifestIssue::new(
+                    field.clone(),
+                    "theme-token-name",
+                    format!("token 名必须为 --c-* 形态（当前 {token:?}）"),
+                ));
+            } else if !builtins.contains_key(token) {
+                errors.push(ManifestIssue::new(
+                    field.clone(),
+                    "theme-token-whitelist",
+                    format!("token {token:?} 不在宿主白名单（139 token，App.css 解析）"),
+                ));
+            }
+            // 值形态与 light/dark 成对（语法上 manifest 已保证成对；这里只判形态）
+            for side in [&pair.light, &pair.dark] {
+                if !crate::plugins::theme_tokens::valid_color_value(side) {
+                    errors.push(ManifestIssue::new(
+                        field.clone(),
+                        "theme-token-value",
+                        format!("非合法色值 {side:?}（仅 #rgb/#rrggbb）"),
+                    ));
+                }
+            }
+            ov.insert(token.clone(), (pair.light.clone(), pair.dark.clone()));
+        }
+        // 语义配对表对比度硬校验（ADR-0013 §12.1/§12.7）
+        if errors
+            .iter()
+            .all(|e| !e.field.contains("contributes.themeTokens.tokens"))
+        {
+            for fail in crate::plugins::theme_tokens::check_overrides(&ov, &builtins) {
+                errors.push(ManifestIssue::new(
+                    "contributes.themeTokens.tokens",
+                    "theme-token-contrast",
+                    format!(
+                        "{} × {} 在 {} 仅 {:.2}:1 < 4.5:1（WCAG AA）",
+                        fail.text_token, fail.bg_token, fail.theme, fail.ratio
+                    ),
+                ));
+            }
+        }
+        // 警告：内嵌敏感关键字值（非阻断——凭据应走 credentials，经统一定位提示）
+        if let Ok(raw) = serde_json::to_string(tt) {
+            let lower = raw.to_ascii_lowercase();
+            if ["token", "key", "password"].iter().any(|k| lower.contains(k)) {
+                warnings.push(ManifestIssue::new(
+                    "contributes.themeTokens",
+                    "no-effect",
+                    "主题覆盖不应携带 token/key/password 值——敏感值应走 permissions.credentials",
+                ));
+            }
+        }
+    }
+
+    // —— 文件装饰（B3，ADR-0013 装饰档）——
+    for (i, d) in manifest.contributes.file_decorations.iter().enumerate() {
+        let field = |suffix: &str| format!("contributes.fileDecorations[{i}].{suffix}");
+        if d.id.trim().is_empty() {
+            errors.push(ManifestIssue::new(field("id"), "decoration-id", "装饰 id 不能为空"));
+        }
+        if d.match_rule.ext.is_empty() {
+            errors.push(ManifestIssue::new(
+                field("match.ext"),
+                "decoration-match-empty",
+                "match.ext 必须至少声明一项扩展名",
+            ));
+        }
+        // 图标：相对路径禁逃逸
+        check_relative_path(&d.icon, &field("icon"), &mut errors);
+        // 色彩：空 = 无色装饰（合法）；成对值或 "$token:--c-*" 引用
+        if let Some(c) = &d.color {
+            let blocked_colors = ["red", "blue", "green", "black", "white"];
+            // 取值形态分三档：1) "$token:" 前缀→ token 白名单；2) 对象 {light,dark}→ 3:1 校验；3) 裸字符串 hex→ 3:1
+            let builtins = crate::plugins::theme_tokens::builtin_tokens();
+            if let Some(s) = c.as_str() {
+                if let Some(tok) = s.strip_prefix("$token:") {
+                    if !builtins.contains_key(tok) {
+                        errors.push(ManifestIssue::new(
+                            field("color"),
+                            "decoration-color-token",
+                            format!("引用的 token {tok:?} 不在白名单"),
+                        ));
+                    }
+                } else if crate::plugins::theme_tokens::valid_color_value(s) {
+                    for (theme, eff_bg) in [
+                        ("light", builtins.get("--c-bg").map(|b| b.light.clone())),
+                        ("dark", builtins.get("--c-bg").map(|b| b.dark.clone())),
+                    ] {
+                        if let Some(bg) = eff_bg {
+                            if let Some(r) = crate::plugins::theme_tokens::contrast_ratio(s, &bg) {
+                                if r < 3.0 {
+                                    errors.push(ManifestIssue::new(
+                                        field("color"),
+                                        "decoration-contrast",
+                                        format!("装饰色 {s:?} 在 {theme} 背景（--c-bg {bg:?}）对比度 {:.2}:1 < 3:1（非文字标准）", r),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    errors.push(ManifestIssue::new(
+                        field("color"),
+                        "decoration-color-form",
+                        format!("color 必须是 {{\"light\",\"dark\"}} 对象或 hex 或 $token 引用（当前 {s:?}）"),
+                    ));
+                }
+            } else if let Some(obj) = c.as_object() {
+                if obj.get("light").is_none() || obj.get("dark").is_none() {
+                    errors.push(ManifestIssue::new(
+                        field("color"),
+                        "decoration-color-form",
+                        "color 对象必须含 light + dark 两端",
+                    ));
+                } else {
+                    for side in ["light", "dark"] {
+                        if let Some(v) = obj.get(side).and_then(|x| x.as_str()) {
+                            if !crate::plugins::theme_tokens::valid_color_value(v) {
+                                errors.push(ManifestIssue::new(
+                                    field(&format!("color.{side}")),
+                                    "decoration-color-form",
+                                    format!("非合法色值 {v:?}"),
+                                ));
+                            }
+                        } else {
+                            errors.push(ManifestIssue::new(
+                                field(&format!("color.{side}")),
+                                "decoration-color-form",
+                                format!("color.{side} 必须是色值字符串"),
+                            ));
+                        }
+                    }
+                    // 3:1 非文字标准（与各态 --c-bg 比较）
+                    for side in ["light", "dark"] {
+                        let fg = obj
+                            .get(side)
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("");
+                        let bg = if side == "light" {
+                            builtins.get("--c-bg").map(|b| b.light.as_str()).unwrap_or("#ffffff")
+                        } else {
+                            builtins.get("--c-bg").map(|b| b.dark.as_str()).unwrap_or("#171717")
+                        };
+                        if let Some(r) = crate::plugins::theme_tokens::contrast_ratio(fg, bg) {
+                            if r < 3.0 {
+                                errors.push(ManifestIssue::new(
+                                    field("color"),
+                                    "decoration-contrast",
+                                    format!("装饰色 {fg:?} 在 {side} 背景对比度 {:.2}:1 < 3:1", r),
+                                ));
+                            }
+                        }
+                    }
+                }
+            } else {
+                errors.push(ManifestIssue::new(
+                    field("color"),
+                    "decoration-color-form",
+                    "color 必须是 hex 字符串或 {\"light\",\"dark\"} 对象或 $token 引用",
+                ));
+            }
+            // 掩蔽未使用的局部绑定（clippy 静默——合并后逻辑已完整）
+            let _ = &builtins;
+        }
+    }
+
+    // —— 服务声明（B3，ADR-0011 §12.1：label 含敏感关键字给 warning）——
+    for (i, svc) in manifest.contributes.services.iter().enumerate() {
+        if svc.id.trim().is_empty() {
+            errors.push(ManifestIssue::new(
+                format!("contributes.services[{i}].id"),
+                "service-id",
+                "服务 id 不能为空",
+            ));
+        }
+        let svc_label_lower = svc.label.to_ascii_lowercase();
+        if svc_label_lower.contains("token")
+            || svc_label_lower.contains("key")
+            || svc_label_lower.contains("password")
+        {
+            warnings.push(ManifestIssue::new(
+                format!("contributes.services[{i}].label"),
+                "service-sensitive-hint",
+                format!("label 含敏感关键字 {:?}——需要凭据的通道请走 permissions.credentials（hub 代持）", svc.label),
+            ));
+        }
+    }
     for (i, p) in manifest.permissions.api.iter().enumerate() {
         if let Err(why) = valid_api_pattern(p) {
             errors.push(ManifestIssue::new(
@@ -783,7 +1034,21 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         .iter()
         .filter(|t| t.risk == "high")
         .collect();
-    if high_tools.is_empty() && !manifest.permissions.high_risk.is_empty() {
+    // M9（review-2，B1 存量，最高优先）：高危工具无对应 highRisk 声明 → 审计失败
+    // （ADR-0001 拍板 4：权限与贡献物声明不一致 = 拒绝安装，错因可定位）
+    if !high_tools.is_empty() && manifest.permissions.high_risk.is_empty() {
+        for t in &high_tools {
+            errors.push(ManifestIssue::new(
+                "permissions.highRisk",
+                "high-tool-undeclared",
+                format!(
+                    "工具 {} 标记为高危但 permissions.highRisk 声明缺失——缺高危审计面可定位失败（ADR-0001 拍板 4）",
+                    t.name
+                ),
+            ));
+        }
+        // 阻断：后续 pending 默认走 warning 支不需要
+    } else if high_tools.is_empty() && !manifest.permissions.high_risk.is_empty() {
         warnings.push(ManifestIssue::new(
             "permissions.highRisk",
             "declared-without-high-contribution",

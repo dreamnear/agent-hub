@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod mcp_config;
 pub mod mcp_proxy;
 pub mod permissions;
+pub mod theme_tokens;
 pub mod registry;
 pub mod rpc;
 pub mod scanner;
@@ -144,6 +145,10 @@ pub struct PluginView {
     /// 渲染器声明（B3，ADR-0012）：宿主转译进围栏/文件渲染注册表的数据源
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub renderers: Vec<RendererEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_tokens: Option<ThemeTokensView>,
+    pub file_decorations: Vec<FileDecorationView>,
+    pub services: Vec<ServiceView>,
     pub backend: BackendInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
@@ -165,6 +170,41 @@ pub struct RendererEntry {
     /// plugin-iframe 档的入口路径
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeTokensView {
+    pub tokens: std::collections::BTreeMap<String, ThemeTokenEntryView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeTokenEntryView {
+    pub light: String,
+    pub dark: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDecorationView {
+    pub id: String,
+    pub matchExt: Vec<String>,
+    pub icon: String,
+    /// 成对值 {light,dark} 或 引用 "$token:..."（字符串形态，非对象）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceView {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -580,6 +620,43 @@ impl PluginManager {
                         .and_then(|s| s.as_str())
                         .map(str::to_string),
                     entry: r.entry.clone(),
+                })
+                .collect(),
+            theme_tokens: m.contributes.theme_tokens.as_ref().map(|tt| ThemeTokensView {
+                tokens: tt
+                    .tokens
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            ThemeTokenEntryView {
+                                light: v.light.clone(),
+                                dark: v.dark.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            }),
+            file_decorations: m
+                .contributes
+                .file_decorations
+                .iter()
+                .map(|d| FileDecorationView {
+                    id: d.id.clone(),
+                    matchExt: d.match_rule.ext.iter().map(|e| e.to_ascii_lowercase().trim_start_matches('.').to_string()).collect(),
+                    icon: d.icon.clone(),
+                    color: d.color.clone(),
+                })
+                .collect(),
+            services: m
+                .contributes
+                .services
+                .iter()
+                .map(|s| ServiceView {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    placeholder: s.placeholder.clone(),
+                    default: s.default.clone(),
                 })
                 .collect(),
             backend: BackendInfo {
@@ -1081,10 +1158,53 @@ impl PluginManager {
             return Err(RpcError::Violation(msg));
         };
         if tool.risk == "high" {
-            // B1 无审批流（B2 交付）：高危工具拒绝执行而不是静默放行
-            return Err(RpcError::Unauthorized(format!(
-                "高危工具 {tool_id} 需逐次确认（审批流在 B2 交付），当前版本拒绝执行"
-            )));
+            // B2 审批流已交付（会话注入 / mcp-proxy 双路对称化，M2 清账）——
+            // 此处落单阻塞等待与 HubRpcHandler 同路径（批准继续执行，拒绝不执行）
+            let digest = {
+                let scrubbed = self.credentials.scrub(&params.to_string());
+                let mut s: String = scrubbed.chars().take(200).collect();
+                if s.is_empty() {
+                    s = "{}".into();
+                }
+                s
+            };
+            let sess = params.get("sessionId").and_then(serde_json::Value::as_str);
+            let tool_full = format!("hubplug_{id}_{tool_id}");
+            let issued = self
+                .approvals
+                .issue(id, &tool_full, &digest, sess, &now_rfc3339());
+            let _ = self.events_tx.send(HubEvent::PluginApprovalRequested {
+                id: issued.id.clone(),
+                plugin_id: id.to_string(),
+                tool: tool_full.clone(),
+                args_digest: digest.clone(),
+            });
+            let decision = match tokio::time::timeout(approvals::APPROVAL_WAIT, issued.rx).await {
+                Ok(Ok(d)) => d,
+                Ok(Err(_)) | Err(_) => {
+                    return Err(RpcError::Busy("高危确认等待超时（120s），可重试".into()));
+                }
+            };
+            let (kind, verb) = match decision {
+                approvals::Decision::Approve => (FaultKind::Approval, "批准"),
+                approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
+            };
+            let _ = self.registry.push_record(
+                id,
+                FaultRecord {
+                    at: now_rfc3339(),
+                    kind,
+                    message: self.credentials.scrub(&format!(
+                        "高危工具 {tool_full} · 用户{verb} · {} · 参数 {}",
+                        issued.id, digest
+                    )),
+                },
+            );
+            if decision == approvals::Decision::Reject {
+                return Err(RpcError::Violation(format!(
+                    "高危工具 {tool_full} 被用户拒绝，未执行"
+                )));
+            }
         }
         if tool.implementation.kind != "backend" {
             return Err(RpcError::PluginError(format!(

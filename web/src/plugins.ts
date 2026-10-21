@@ -97,6 +97,9 @@ export interface PluginView {
   views: ViewEntry[];
   /** 渲染器声明（B3，ADR-0012）：宿主转译进围栏/文件渲染注册表的数据源 */
   renderers?: RendererEntryView[];
+  themeTokens?: { tokens: Record<string, { light: string; dark: string }> };
+  fileDecorations?: FileDecorationView[];
+  services?: ServiceView[];
   backend: BackendInfo;
   lastFault?: FaultRecord;
   assetBytes: number;
@@ -109,6 +112,20 @@ export interface RendererEntryView {
   engine: string;
   service?: string;
   entry?: string;
+}
+
+export interface FileDecorationView {
+  id: string;
+  matchExt: string[];
+  icon: string;
+  color?: string | { light: string; dark: string };
+}
+
+export interface ServiceView {
+  id: string;
+  label: string;
+  placeholder?: string;
+  default?: string;
 }
 
 export interface AuditIssue {

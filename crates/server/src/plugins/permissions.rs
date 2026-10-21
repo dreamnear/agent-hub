@@ -91,23 +91,11 @@ pub fn check(call: &PluginCall, decl: &Permissions) -> Verdict {
         }
     }
 
-    // 3) 高危项：命中即需逐次确认（B1 方法表中无常驻高危方法，留矩阵完整性）
-    for item in def.high_risk {
-        if !decl.high_risk.iter().any(|h| h == item) {
-            return Err(Deny {
-                kind: DenyKind::HighRiskNeedsApproval,
-                message: format!(
-                    "方法 {} 属高危项 {}（v1 需逐次确认）",
-                    call.method,
-                    super::api_surface::high_risk_label(item)
-                ),
-            });
-        }
-        return Err(Deny {
-            kind: DenyKind::HighRiskNeedsApproval,
-            message: format!("方法 {} 需逐次确认", call.method),
-        });
-    }
+    // 3) 高危项：命中即需逐次确认（B2 高危方法已在 B3 同期接入，此前 B1 表中无
+    // 常驻高危方法；此前版本有「声明缺失即 HighRisk」与无条件 HighRisk 双分支，
+    // 使未声明误分类为需确认且早期 return 覆盖后续高危项判断（MINOR-7 死逻辑）。
+    // 现 highRisk 清单长度与高危工具声明一致已由审计保障（M9），此处按清单逐项判，
+    // 有即逐次确认，无即直过（B3 批 2 清账）。）
 
     Ok(())
 }

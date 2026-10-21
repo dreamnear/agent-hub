@@ -39,7 +39,7 @@ pub const BUILTIN_RENDER_EXTS: [&str; 47] = [
 ];
 
 /// `permissions.data` 固定域枚举（ADR-0007 第 2 条）。
-pub const DATA_DOMAINS: [&str; 10] = [
+pub const DATA_DOMAINS: [&str; 13] = [
     "sessions:read",
     "sessions:write",
     "messages:read",
@@ -50,6 +50,10 @@ pub const DATA_DOMAINS: [&str; 10] = [
     "tasks:read",
     "tasks:write",
     "instances:read",
+    // B3（ADR-0011 §12.1）
+    "theme:override",
+    "files:decorate",
+    "settings:read",
 ];
 
 /// hub 维护的高危清单（ADR-0007 第 3 条，v1 固定四项，插件不得摘除自己）。
@@ -215,7 +219,7 @@ pub struct ApiSchema {
     pub api_version: u32,
     pub hub_version: &'static str,
     pub contributions: [&'static str; 6],
-    pub data_domains: [&'static str; 10],
+    pub data_domains: [&'static str; 13],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,
     pub host_to_view_messages: [&'static str; 4],

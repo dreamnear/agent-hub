@@ -127,7 +127,10 @@ pub fn scan(
             }
             for e in &r.match_rule.ext {
                 claimed
-                    .entry(("ext".into(), e.to_ascii_lowercase()))
+                    .entry((
+                        "ext".into(),
+                        e.to_ascii_lowercase().trim_start_matches('.').to_string(),
+                    ))
                     .or_insert_with(|| owner.clone());
             }
         }
@@ -162,6 +165,107 @@ pub fn scan(
             format!("{kind} {value:?} 已被插件 {owner:?} 占用（match 全 hub 唯一，ADR-0012 拍板 3）——本插件（{self_id:?}）拒绝安装"),
         ));
         r.installable = false;
+    }
+
+    // 主题插件互斥（B3，ADR-0013 拍板 1 确定性规则——第二个主题插件拒装，错因指明占用方）。
+    // 候选内互撞：后到的拒；与已装冲突：候选拒。
+    {
+        let mut theme_owner: Option<String> = None;
+        for p in registry.list() {
+            if p.manifest.contributes.theme_tokens.is_some() {
+                theme_owner = Some(p.entry.id.clone());
+                break;
+            }
+        }
+        let mut pending_owner: Option<String> = None;
+        for (i, c) in candidates.iter_mut().enumerate() {
+            if c.2.plugin_id.is_empty() || c.2.plugin_id.starts_with('\0') {
+                continue;
+            }
+            let has_theme = c.2.contributions.iter().any(|cc| cc.kind == "themeTokens");
+            if !has_theme {
+                continue;
+            }
+            if let Some(ref owner) = theme_owner.clone().or_else(|| pending_owner.clone()) {
+                if cand_id(c) != *owner {
+                    let field = "contributes.themeTokens";
+                    c.2.errors.push(ManifestIssue::new(
+                        field,
+                        "theme-mutex",
+                        format!("主题插件已由 {:?} 占用（互斥 1/1，ADR-0013 拍板 1）——本插件（{:?}）拒绝安装", owner, cand_id(c)),
+                    ));
+                    c.2.installable = false;
+                }
+            } else {
+                pending_owner = Some(cand_id(c));
+            }
+            let _ = i;
+        }
+    }
+
+    // 文件装饰 ext 互斥（B3，ADR-0013 §12.1：ext 全 hub 唯一——同 renderers 同口径）
+    {
+        let mut file_claimed: BTreeMap<String, String> = BTreeMap::new();
+        for p in registry.list() {
+            for d in &p.manifest.contributes.file_decorations {
+                for e in &d.match_rule.ext {
+                    file_claimed
+                        .entry(e.to_ascii_lowercase().trim_start_matches('.').to_string())
+                        .or_insert_with(|| p.entry.id.clone());
+                }
+            }
+        }
+        let mut file_conflicts: Vec<(usize, String, String)> = Vec::new();
+        for (i, c) in candidates.iter().enumerate() {
+            for d in &c.2.contributions {
+                if d.kind != "fileDecoration" {
+                    continue;
+                }
+                let ext = d.name.trim_start_matches("ext:").to_string();
+                for e in ext.split('|') {
+                    let e_l = e.to_ascii_lowercase().trim_start_matches('.').to_string();
+                    let owner = match file_claimed.get(&e_l) {
+                        Some(o) => Some(o.clone()),
+                        None => candidates.iter().enumerate().find_map(|(j, cj)| {
+                            (j != i).then(|| {
+                                cj.2.contributions.iter().any(|x| {
+                                    if x.kind != "fileDecoration" {
+                                        return false;
+                                    }
+                                    let xs: Vec<String> = x
+                                        .name
+                                        .trim_start_matches("ext:")
+                                        .split('|')
+                                        .map(|s| s.to_ascii_lowercase().trim_start_matches('.').to_string())
+                                        .collect();
+                                    xs.contains(&e_l)
+                                })
+                                .then(|| cand_id(cj))
+                            })
+                            .flatten()
+                        }),
+                    };
+                    if let Some(owner) = owner {
+                        file_conflicts.push((i, e_l, owner));
+                    } else {
+                        file_claimed.entry(e_l).or_insert_with(|| cand_id(&candidates[i]));
+                    }
+                }
+            }
+        }
+        for (i, ext, owner) in file_conflicts {
+            if candidates[i].2.errors.iter().any(|e| e.rule == "renderer-match-conflict") {
+                continue;
+            }
+            let self_id = cand_id(&candidates[i]);
+            let r = &mut candidates[i].2;
+            r.errors.push(ManifestIssue::new(
+                "contributes.fileDecorations.match.ext",
+                "decoration-match-conflict",
+                format!("ext {ext:?} 的文件装饰已被 {:?} 占用（ext 全 hub 唯一）——本插件（{self_id:?}）拒绝安装", owner),
+            ));
+            r.installable = false;
+        }
     }
 
     let mut items = Vec::new();
