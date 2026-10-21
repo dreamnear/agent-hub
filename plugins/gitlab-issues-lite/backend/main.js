@@ -9,7 +9,9 @@
 //! - 绑定到工程（预览反馈第 2 轮）：选中 hub 工程后用 `git remote get-url origin`
 //!   （只读）反解 GitLab host + 项目路径，PAT 天然对上自建实例。
 //!
-//! 支持方法：initialize / tool.invoke(fetch_issues) / health；通知 shutdown 后退出。
+//! 支持方法：initialize / tool.invoke(fetch_issues | add_issue_note) / health；通知 shutdown 后退出。
+//! add_issue_note（B2 预览反馈增量）：高危写工具演示——risk:"high" 经 hub 高危审批门
+//! （逐次确认 + 留痕），本进程只在审批通过后被调用，自身不做二次判定（闸门单点在 hub）。
 //! 环境变量：GITLAB_API_BASE（最高优先——E2E mock 链路；设置后跳过 git 反解）、
 //!           GITLAB_PROJECT（仅 env 形态下的缺省项目标识）。
 
@@ -174,17 +176,58 @@ async function fetchIssues(args) {
   };
 }
 
+/** 工具实现（高危）：目标 issue → POST notes 写备注；调用前 hub 侧已走高危审批门。 */
+async function addIssueNote(args) {
+  const iid = Number(args && args.issue_iid);
+  if (!Number.isInteger(iid) || iid <= 0) {
+    throw new Error('bad-arg: issue_iid 必须是正整数（目标 issue 的 iid）');
+  }
+  const note = typeof (args && args.note) === 'string' ? args.note.trim() : '';
+  if (!note) {
+    throw new Error('bad-arg: note 不能为空（要写入的备注正文）');
+  }
+  const target = resolveTarget(args);
+  const pat = await getGitlabPat();
+  const encoded = encodeURIComponent(target.project);
+  const url = `${target.apiBase}/projects/${encoded}/issues/${iid}/notes`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'PRIVATE-TOKEN': pat, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ body: note }),
+  });
+  if (resp.status === 401) {
+    throw new Error(
+      `gitlab-auth-failed: 凭据被 ${target.host} 拒绝（401）——请确认 gitlab_pat 对该 GitLab 实例有效`,
+    );
+  }
+  if (!resp.ok) {
+    throw new Error(`gitlab-http-${resp.status}: POST ${target.host}/${target.project}#${iid} notes`);
+  }
+  const raw = await resp.json();
+  return {
+    project: target.project,
+    host: target.host,
+    resolvedVia: target.via,
+    issueIid: iid,
+    noteId: raw && raw.id != null ? raw.id : null,
+    createdAt: raw && raw.created_at ? raw.created_at : null,
+    wroteAt: new Date().toISOString(),
+  };
+}
+
 async function handleToolInvoke(params) {
   const toolId = params.toolId;
   const args = params.args || {};
-  if (toolId !== 'fetch_issues') {
+  const impls = { fetch_issues: fetchIssues, add_issue_note: addIssueNote };
+  const impl = impls[toolId];
+  if (!impl) {
     return { content: [{ type: 'text', text: JSON.stringify({ error: `unknown tool: ${toolId}` }) }] };
   }
   try {
-    const data = await fetchIssues(args);
+    const data = await impl(args);
     return { content: [{ type: 'text', text: JSON.stringify(data) }] };
   } catch (e) {
-    log(`fetch_issues failed: ${e.message}`);
+    log(`${toolId} failed: ${e.message}`);
     return { content: [{ type: 'text', text: JSON.stringify({ error: e.message }) }] };
   }
 }

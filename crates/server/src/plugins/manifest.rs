@@ -183,6 +183,8 @@ pub struct ViewDecl {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")] // manifest 契约键即 camelCase（highRisk）；缺失时 high_risk 以
+// snake 键解析，manifest 的 "highRisk" 声明被静默丢弃（B2 预览反馈轮修正）
 pub struct Permissions {
     /// `"<METHOD> <path-pattern>"`，单段 `*`（v1 预留，见 ADR-0003 拍板结论 5）
     #[serde(default)]
