@@ -42,7 +42,7 @@ export interface PluginSource {
 }
 
 export interface Contribution {
-  kind: 'tool' | 'skill' | 'mcp' | 'view';
+  kind: 'tool' | 'skill' | 'mcp' | 'view' | 'command';
   id: string;
   name: string;
   description?: string;
@@ -149,6 +149,30 @@ export interface RegressionReport {
   checks: RegressionCheck[];
 }
 
+/// 插件 command 贡献物（B2 批4，ADR-0012）：`hub-plugin` 来源组；target 二选一
+/// （view 打开插件视图 / tool 触发只读工具）。
+export interface PluginCommandItem {
+  name: string;
+  label: string;
+  source: 'hub-plugin';
+  description?: string;
+  pluginId: string;
+  pluginName: string;
+  targetView?: string;
+  targetTool?: string;
+  targetArgs?: unknown;
+}
+
+/// 高危审批单（B2 批3，ADR-0007 第 3 条）。
+export interface ApprovalRequest {
+  id: string;
+  pluginId: string;
+  tool: string;
+  argsDigest: string;
+  sessionId?: string;
+  requestedAt: string;
+}
+
 export interface UninstallReceipt {
   removed: boolean;
   id: string;
@@ -243,6 +267,33 @@ export const plugins = {
     rpcMethods: { method: string; available: boolean; description: string }[];
     notes: string[];
   }> => request('/api/plugins/api-schema'),
+
+  /// 插件 command 贡献物（B2 批4）：`/` 补全的 hub-plugin 组数据源
+  commands: (): Promise<PluginCommandItem[]> => request('/api/plugins/commands'),
+
+  /// 会话注入侧只读工具触发（tool 型 command 的执行语义；闸门在 hub 侧）
+  invokeTool: (
+    id: string,
+    toolId: string,
+    args: unknown,
+    sessionId?: string,
+  ): Promise<{ ok: boolean; content?: unknown; code?: string; message?: string }> =>
+    request(`/api/plugins/${encodeURIComponent(id)}/tool-invoke`, {
+      method: 'POST',
+      body: JSON.stringify({ toolId, args, sessionId }),
+    }),
+
+  /// 高危审批：待确认清单 + 决策（approve/reject；双侧均留痕）
+  approvals: (): Promise<{ pending: ApprovalRequest[] }> => request('/api/plugins/approvals'),
+
+  decideApproval: (
+    aprId: string,
+    decision: 'approve' | 'reject',
+  ): Promise<{ applied: boolean; decision: string }> =>
+    request(`/api/plugins/approvals/${encodeURIComponent(aprId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ decision }),
+    }),
 };
 
 /// 从已安装清单派生侧栏导航条目（BR-03：停用/卸载后入口消失；

@@ -18,6 +18,8 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import ModelPanel from './ModelPanel';
 import DriverBadge from './DriverBadge';
 import type { AgentSummary, DocEntry, SubagentEntry } from '../types';
+import { plugins, type PluginCommandItem } from '../plugins';
+import CapabilityFace from './CapabilityFace';
 import './ChatTab.css';
 
 interface Props {
@@ -37,6 +39,8 @@ interface Props {
   initialDraft?: string;
   /** 草稿上行（每次变更回报 App，由其按会话键存表）；不传则纯本组件内态 */
   onDraftChange?: (text: string) => void;
+  /** hub-plugin view 型 command：打开插件视图（B2 批4，App 持 pluginView 态） */
+  onOpenPluginView?: (pluginId: string, viewId: string) => void;
 }
 
 /// 对话主区域（P5 A1）：选中 agent 即对话；顶栏含状态与操作（logs/stop/respawn/rm）；
@@ -168,6 +172,7 @@ export default function ChatTab({
   api = localApi,
   initialDraft = '',
   onDraftChange,
+  onOpenPluginView,
 }: Props): ReactElement | null {
   const t = useI18n();
   // 会话视图（Agent/文档）：本地状态即可——App 以 key={`${instanceId}:${id}`} 挂载，
@@ -611,7 +616,8 @@ export default function ChatTab({
   // 按 agent cwd 请求（S2，切不同 cwd 的 agent 清单随之变化），来源扩
   // builtin/custom/skill/plugin。
   const slashQuery = draft.startsWith('/') ? draft.slice(1).toLowerCase() : null;
-  const slashMatches = useSlashMatches(slashQuery, api, agent.cwd ?? null);
+  const pluginCmds = usePluginCommands();
+  const slashMatches = useSlashMatches(slashQuery, api, agent.cwd ?? null, pluginCmds);
   // S5 可用性裁量：分组展示 + 总候选上限 50——前缀过滤先行（输入越窄候选越少），
   // 空查询百条级清单按来源序截前 50 条（组头不计入），菜单沿用既有 max-height
   // 滚动；不做键盘导航（现状本无，保持改动面），长尾靠前缀过滤触达。
@@ -621,10 +627,11 @@ export default function ChatTab({
       custom: t('chat.slashGroupCustom'),
       skill: t('chat.slashGroupSkill'),
       plugin: t('chat.slashGroupPlugin'),
+      'hub-plugin': t('chat.slashGroupHubPlugin'),
     };
     const groups: { source: string; label: string; items: typeof slashMatches }[] = [];
     let count = 0;
-    for (const source of ['builtin', 'custom', 'skill', 'plugin']) {
+    for (const source of ['builtin', 'custom', 'skill', 'plugin', 'hub-plugin']) {
       const items = slashMatches.filter((c) => c.source === source);
       if (items.length === 0) continue;
       const take = items.slice(0, Math.max(0, SLASH_GROUP_CAP - count));
@@ -656,7 +663,39 @@ export default function ChatTab({
     setSlashDismissed(false);
   }, [slashQuery]);
   const slashOpen = slashQuery != null && !slashDismissed && slashFlat.length > 0;
+  // 插件工具执行回执（B2 批4 tool 型 command）：输入区上方一行短通知，4s 自清
+  const [pluginNotice, setPluginNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (pluginNotice == null) return;
+    const timer = setTimeout(() => setPluginNotice(null), 4_000);
+    return () => clearTimeout(timer);
+  }, [pluginNotice]);
   const pickSlash = (name: string): void => {
+    // hub-plugin command：hub 侧语义（打开视图 / 触发只读工具），不插文本给 CLI
+    const pc = pluginCmds.find((c) => c.name === name);
+    if (pc != null && pc.targetView != null) {
+      onOpenPluginView?.(pc.pluginId, pc.targetView);
+      setDraft('');
+      return;
+    }
+    if (pc != null && pc.targetTool != null) {
+      plugins
+        .invokeTool(pc.pluginId, pc.targetTool, pc.targetArgs ?? {})
+        .then((res) => {
+          setPluginNotice(
+            res.ok
+              ? t('chat.pluginToolDone')
+              : `${t('chat.pluginToolFail')}: ${res.message ?? ''}`,
+          );
+        })
+        .catch((e: unknown) => {
+          setPluginNotice(
+            `${t('chat.pluginToolFail')}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        });
+      setDraft('');
+      return;
+    }
     setDraft(`/${name} `);
     inputRef.current?.focus();
   };
@@ -858,6 +897,8 @@ export default function ChatTab({
                 {focusSubagent ? t('chat.emptySubagent') : t('chat.empty')}
               </p>
             ) : null}
+            {/* 会话侧能力可发现面（B2 批5）：折叠条，零插件不渲染（零回归） */}
+            {focusSubagent == null ? <CapabilityFace /> : null}
             <ChatMessageRegion
               items={items}
               streaming={streaming}
@@ -972,6 +1013,9 @@ export default function ChatTab({
                 </ul>
               ) : null}
           </> ) : null}
+          {pluginNotice != null ? (
+            <div className="chat-plugin-notice" role="status">{pluginNotice}</div>
+          ) : null}
           {focusSubagent == null && driver === 'omp' ? (
             <p className="omp-takeover-hint">{t('chat.ompTakeoverHint')}</p>
           ) : null}
@@ -1167,11 +1211,13 @@ const SLASH_GROUP_CAP = 50;
 
 /// C4：/ 补全候选（内置/自定义/技能/插件，前缀过滤）。agent-hub-slash-skills：
 /// 清单按当前实例 api + agent cwd 拉取（S2，cwd 变化即重取），上限截断在渲染侧
-/// 分组执行（SLASH_GROUP_CAP）。
+/// 分组执行（SLASH_GROUP_CAP）。B2 批4：合并 hub-plugin 组（插件 command 贡献物，
+/// 独立来源；commands.rs 消费端不动，前端分组渲染加法——设计 §12.6）。
 function useSlashMatches(
   query: string | null,
   api: Api,
   cwd: string | null,
+  pluginCmds: PluginCommandItem[],
 ): { name: string; source: string; description: string | null }[] {
   const [all, setAll] = useState<{ name: string; source: string; description: string | null }[]>([]);
   useEffect(() => {
@@ -1189,7 +1235,41 @@ function useSlashMatches(
     };
   }, [api, cwd]);
   if (query == null) return [];
+  const merged = [
+    ...all,
+    ...pluginCmds.map((c) => ({
+      name: c.name,
+      source: 'hub-plugin' as const,
+      description: c.description ?? c.label,
+    })),
+  ];
   // round 2 人审（S5）：前缀匹配改模糊查找——大小写不敏感子序列，连续/前缀/
   // 词首优先排序、短名优先，空查询回落全量原序（分组截 50 在渲染侧不变）
-  return fuzzyFilter(all, query);
+  return fuzzyFilter(merged, query);
+}
+
+/// hub-plugin command 清单（B2 批4）：hub 本地概念（与实例无关），挂载拉一次 +
+/// 30s 轮询（启停插件即生效，BR-03；失败静默回空——补全零插件组即零回归）。
+function usePluginCommands(): PluginCommandItem[] {
+  const [cmds, setCmds] = useState<PluginCommandItem[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const fetch = (): void => {
+      plugins
+        .commands()
+        .then((list) => {
+          if (alive) setCmds(list);
+        })
+        .catch(() => {
+          if (alive) setCmds([]);
+        });
+    };
+    fetch();
+    const timer = setInterval(fetch, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  return cmds;
 }

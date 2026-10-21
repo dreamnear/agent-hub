@@ -311,7 +311,10 @@ button {
   overflow: hidden;
 }
 
-/* 左：agent 深色栏（260px 固定；反馈 2026-10-19 预览增量 #2：插件视图组 sticky 常驻） */
+/* 左：agent 深色栏（260px 固定）。B2 预览反馈：B1 的「整列滚动 + 插件组 sticky 底部」
+   覆盖式实现会在列表滚动中段让钉住的插件组盖住列表尾部与底栏——改为弹性布局流内
+   固定项：本栏不滚动（overflow hidden），agent 列表自滚动（flex:1 内缩），插件组
+   作为其下普通 flex 项常驻（ADR-0004 左侧栏导航组契约不变，实现方式修正） */
 .pane-left {
   width: var(--left-w);
   flex-shrink: 0;
@@ -320,20 +323,18 @@ button {
   min-height: 0;
   background: var(--c-sidebar);
   color: var(--c-inverse);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-/* agent 列表占主滚动区，插件组在底部不跟列表滚动（不被列表顶出视口） */
+/* agent 列表吃掉剩余高度，滚动发生在列表内部（插件组与底栏不被顶出/不被盖住） */
 .pane-left > .agent-list {
-  flex-shrink: 0;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
-/* 插件视图组：sticky 底部常驻，不滚动即可达；零插件时组件不渲染，本规则无副作用（BR-06） */
+/* 插件视图组：流内固定项，列表滚多长都不遮挡；零插件时组件不渲染，本规则无副作用（BR-06） */
 .pane-left > .plugin-nav {
-  position: sticky;
-  bottom: 0;
   flex-shrink: 0;
-  margin-top: auto;
   background: var(--c-sidebar);
   border-top-color: var(--c-sidebar-line);
 }
@@ -524,7 +525,7 @@ button {
   }
 
   .layout.left-open .pane-left {
-    display: block;
+    display: flex; /* 抽屉打开：恢复弹性列（基础规则即 flex，此处显式翻转 display:none） */
   }
 
   .pane-right {

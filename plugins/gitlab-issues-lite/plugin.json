@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "gitlab-issues-lite",
   "name": "GitLab Issues Lite",
-  "version": "0.1.0",
-  "description": "GitLab issue 清单工作台：1 个 backend 工具 + 1 个原生视图（B1 端到端验收载体，不承诺完整 GitLab 集成）",
+  "version": "0.2.0",
+  "description": "GitLab issue 清单工作台：2 个 backend 工具（1 只读 + 1 高危写） + 1 个原生视图（B1/B2 端到端验收载体，不承诺完整 GitLab 集成）",
   "author": { "name": "agent-hub" },
   "homepage": "https://github.com/dreamnear/agent-hub",
   "hub": { "apiVersion": "1" },
@@ -15,6 +15,13 @@
         "description": "拉取一个 GitLab 项目的 issue 清单（只读；凭据由 hub 按名注入，插件侧零落值）",
         "risk": "read",
         "impl": { "kind": "backend", "ref": "fetch_issues" }
+      },
+      {
+        "id": "add_issue_note",
+        "name": "Add Issue Note",
+        "description": "向指定 GitLab issue 写一条备注（高危写操作——每次调用前须在 hub 侧经用户确认；凭据由 hub 按名注入，插件侧零落值）",
+        "risk": "high",
+        "impl": { "kind": "backend", "ref": "add_issue_note" }
       }
     ],
     "views": [
@@ -25,7 +32,7 @@
     "api": [],
     "data": ["projects:read", "sessions:read"],
     "credentials": ["gitlab_pat"],
-    "highRisk": []
+    "highRisk": ["exfiltrate-data"]
   },
   "backend": {
     "command": "node",

@@ -70,6 +70,21 @@ pub fn router() -> Router<SharedState> {
         .route("/api/plugins/{id}/view-ticket", post(view_ticket))
         .route("/api/plugins/{id}/rpc", post(plugin_rpc))
         .route("/api/plugins/{id}/tool-invoke", post(tool_invoke))
+        // 高危审批（B2 批3，设计 §3/§6.5）：POST（落单，mcp-proxy loopback 调用）
+        // / GET 清单 / GET 单条（轮询）/ POST 决策。静态段优先于 {id} 参数段，
+        // 与既有 /{id}/* 路由不冲突。
+        .route(
+            "/api/plugins/approvals",
+            post(create_approval).get(list_approvals),
+        )
+        .route(
+            "/api/plugins/approvals/{apr_id}",
+            get(get_approval).post(decide_approval),
+        )
+        // 插件 command 贡献物（B2 批4，design §12.1 / 需求功能点 5）：`hub-plugin` 独立来源组，
+        // 前端 `/` 补全合并渲染（设计 §12.6「前端分组渲染加法」）——commands.rs
+        // 的 Claude 插件枚举消费端一行不动（零回归红线）。
+        .route("/api/plugins/commands", get(plugin_commands))
 }
 
 /// 视图资产路由（不并入 `router()` 的 `/api` 组；挂载点在 `lib.rs`，位于 SPA 通配之前）。
@@ -331,6 +346,160 @@ async fn tool_invoke(
     }
 }
 
+// ===== 高危审批（B2 批3，ADR-0007 第 3 条 / 设计 §6.5）=====
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateApprovalBody {
+    plugin_id: String,
+    /// 工具全名（hubplug_<pluginId>_<tool>）
+    tool: String,
+    /// 参数摘要（mcp-proxy 落单前已 scrub；凭据只出现引用名）
+    #[serde(default)]
+    args_digest: String,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+/// 落单（mcp-proxy loopback 调用；loopback 免 token 与 P8 extension 同款）。
+/// 落单即广播 `plugin_approval_requested`，前端弹确认卡。
+async fn create_approval(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateApprovalBody>,
+) -> Result<Json<Value>, AppError> {
+    let issued = state.plugins.issue_approval(
+        &body.plugin_id,
+        &body.tool,
+        &body.args_digest,
+        body.session_id.as_deref(),
+    );
+    Ok(Json(json!({ "id": issued.id })))
+}
+
+/// 待确认清单（UI 列表；已决策条目不出清单）。
+async fn list_approvals(State(state): State<SharedState>) -> Json<Value> {
+    Json(json!({ "pending": state.plugins.approvals.pending_list() }))
+}
+
+/// 单条读取（mcp-proxy 长轮询 1s 间隔调它；UI 刷新详情）。
+async fn get_approval(
+    State(state): State<SharedState>,
+    Path(apr_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.plugins.approvals.get(&apr_id) {
+        Some((req, decided)) => {
+            let status = match decided {
+                None => "pending",
+                Some(crate::plugins::approvals::Decision::Approve) => "approved",
+                Some(crate::plugins::approvals::Decision::Reject) => "rejected",
+            };
+            Ok(Json(json!({ "approval": req, "status": status })))
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DecideBody {
+    /// `approve` | `reject`
+    decision: String,
+}
+
+/// 决策（UI 确认卡调用）：留痕 Approval/Rejection + 通知等待方执行/放弃。
+async fn decide_approval(
+    State(state): State<SharedState>,
+    Path(apr_id): Path<String>,
+    Json(body): Json<DecideBody>,
+) -> Result<Json<Value>, AppError> {
+    let decision = match body.decision.as_str() {
+        "approve" => crate::plugins::approvals::Decision::Approve,
+        "reject" => crate::plugins::approvals::Decision::Reject,
+        other => {
+            return Err(AppError::bad(format!(
+                "未知决策 {other:?}（approve/reject）"
+            )))
+        }
+    };
+    let req = state
+        .plugins
+        .decide_approval(&apr_id, decision)
+        .map_err(|e| match e {
+            crate::plugins::approvals::DecideError::NotFound => {
+                AppError::not_found(format!("审批单 {apr_id} 不存在（已处理或过期）"))
+            }
+            crate::plugins::approvals::DecideError::AlreadyDecided => {
+                AppError::bad("该审批单已决策（不可重复提交）")
+            }
+        })?;
+    Ok(Json(
+        json!({ "applied": true, "decision": decision.as_str(), "approval": req }),
+    ))
+}
+
+// ===== 插件 command 贡献物（B2 批4，design §12.1 / 需求功能点 5）=====
+
+/// `/api/plugins/commands` 条目：`hub-plugin` 来源组。`name` 即 manifest 的
+/// command id（`plug_<pluginId>_<cid>`，审计期已锁命名空间）；target 二选一
+/// （view 打开插件视图 / tool 触发只读工具，审计限 risk:"read"）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCommandItem {
+    pub name: String,
+    pub label: String,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_args: Option<Value>,
+}
+
+/// 启用插件的 command 贡献物清单（停用/故障不出清单，BR-03 同现同隐）。
+async fn plugin_commands(State(state): State<SharedState>) -> Json<Vec<PluginCommandItem>> {
+    let mut out = Vec::new();
+    for p in state.plugins.registry.list() {
+        out.extend(plugin_commands_of(&p));
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(out)
+}
+
+/// 单插件的 command 条目提取（纯函数便于单测）：仅启用且非故障插件；
+/// name = command id（`plug_<pluginId>_<cid>`，manifest 审计期已锁命名空间）。
+fn plugin_commands_of(p: &crate::plugins::registry::InstalledPlugin) -> Vec<PluginCommandItem> {
+    use crate::plugins::registry::PluginState;
+    if !p.entry.enabled || p.entry.state == PluginState::Fault {
+        return Vec::new();
+    }
+    let plugin_name = if p.manifest.name.is_empty() {
+        p.entry.id.clone()
+    } else {
+        p.manifest.name.clone()
+    };
+    p.manifest
+        .contributes
+        .commands
+        .iter()
+        .map(|decl| PluginCommandItem {
+            name: decl.id.clone(),
+            label: decl.name.clone(),
+            source: "hub-plugin",
+            description: decl.description.clone(),
+            plugin_id: p.entry.id.clone(),
+            plugin_name: plugin_name.clone(),
+            target_view: decl.target.view.clone(),
+            target_tool: decl.target.tool.clone(),
+            target_args: decl.target.args.clone(),
+        })
+        .collect()
+}
+
 fn rpc_error_response(e: &RpcError) -> Response {
     let status = match e.kind() {
         "unauthorized" | "violation" => StatusCode::FORBIDDEN,
@@ -409,7 +578,7 @@ async fn plugin_view_asset(
         }
     };
 
-    let mut resp = Response::builder()
+    let resp = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, file.mime)
         .header(header::CONTENT_SECURITY_POLICY, csp_for(&headers))
@@ -612,5 +781,59 @@ mod tests {
         assert_eq!(r.status(), StatusCode::GATEWAY_TIMEOUT);
         let r = rpc_error_response(&RpcError::PluginError("x".into()));
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// B2 批4：插件 command 提取——启用插件产出 hub-plugin 条目（target view/tool
+    /// 透传）；停用/故障插件零条目（BR-03 同现同隐）；name = command id。
+    #[test]
+    fn plugin_commands_extract_from_enabled_only() {
+        use crate::plugins::manifest::{parse, CommandDecl, CommandTarget};
+        use crate::plugins::registry::{PluginEntry, PluginSource, PluginState};
+        let raw = serde_json::json!({
+            "schemaVersion": 1, "id": "cmd-p", "name": "CmdP", "version": "0.1.0",
+            "hub": {"apiVersion": "1"},
+            "contributes": {
+                "views": [{"id": "home", "title": "Home", "entry": "view/index.html"}],
+                "tools": [{"id": "lookup", "name": "Lookup", "risk": "read",
+                           "impl": {"kind": "backend", "ref": "lookup"}}],
+                "commands": [
+                    {"id": "plug_cmd-p_open", "name": "打开工作台", "kind": "info",
+                     "target": {"view": "home"}},
+                    {"id": "plug_cmd-p_find", "name": "快速查询", "kind": "info",
+                     "description": "只读查询", "target": {"tool": "lookup", "args": {"q": "x"}}}
+                ]
+            }
+        })
+        .to_string();
+        let manifest = parse(&raw).unwrap().manifest;
+        let mk = |enabled: bool, state: PluginState| crate::plugins::registry::InstalledPlugin {
+            entry: PluginEntry {
+                id: "cmd-p".into(),
+                version: "0.1.0".into(),
+                content_hash: "sha256:a".into(),
+                permissions_hash: "sha256:b".into(),
+                source: PluginSource::drop_in(),
+                installed_at: "2026-10-21T00:00:00Z".into(),
+                enabled,
+                state,
+                last_fault: None,
+            },
+            manifest: manifest.clone(),
+            plugin_dir: std::path::PathBuf::from("/tmp/cmd-p"),
+            records: vec![],
+        };
+        // 启用：两条目，name/label/target 逐项对齐
+        let items = plugin_commands_of(&mk(true, PluginState::Ready));
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "plug_cmd-p_open");
+        assert_eq!(items[0].source, "hub-plugin");
+        assert_eq!(items[0].target_view.as_deref(), Some("home"));
+        assert_eq!(items[0].target_tool, None);
+        assert_eq!(items[1].name, "plug_cmd-p_find");
+        assert_eq!(items[1].target_tool.as_deref(), Some("lookup"));
+        assert_eq!(items[1].target_args, Some(serde_json::json!({"q": "x"})));
+        // 停用 / 故障：零条目（BR-03）
+        assert!(plugin_commands_of(&mk(false, PluginState::Ready)).is_empty());
+        assert!(plugin_commands_of(&mk(true, PluginState::Fault)).is_empty());
     }
 }

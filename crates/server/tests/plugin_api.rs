@@ -627,7 +627,7 @@ async fn audit_gate_rejects_and_hash_mismatch_is_blocked() {
     let (status, schema, _) = req(a.clone(), "GET", "/api/plugins/api-schema", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(schema["apiVersion"], 1);
-    assert_eq!(schema["contributions"].as_array().unwrap().len(), 4);
+    assert_eq!(schema["contributions"].as_array().unwrap().len(), 5);
     assert_eq!(schema["highRisk"].as_array().unwrap().len(), 4);
     let methods = schema["rpcMethods"].as_array().unwrap();
     assert!(methods.iter().any(|m| m["method"] == "hub.credentials.use"));
@@ -698,12 +698,17 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
     // 安装（drop-in 发现面）
     let body = install_demo(a.clone(), "gitlab-issues-lite").await;
     assert_eq!(body["plugin"]["uiState"], "enabled");
-    // 审计卡内容：贡献物 2 条 + 凭据按名
+    // 审计卡内容：贡献物 3 条（2 工具 + 1 视图）+ 凭据按名 + 高危声明随高危工具同步
     let plugin = &body["plugin"];
-    assert_eq!(plugin["contributions"].as_array().unwrap().len(), 2);
+    assert_eq!(plugin["contributions"].as_array().unwrap().len(), 3);
     assert_eq!(
         plugin["permissions"]["credentials"][0]["name"],
         "gitlab_pat"
+    );
+    assert_eq!(
+        plugin["permissions"]["highRisk"][0],
+        "对外传输数据",
+        "高危写工具须在 permissions.highRisk 声明（审计一致性；视图层已转展示名）"
     );
     let raw = plugin.to_string();
     assert!(

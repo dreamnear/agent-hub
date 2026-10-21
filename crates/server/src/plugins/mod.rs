@@ -6,9 +6,12 @@
 //! 路由树固定（catch-all 派发），永不因插件变化重建。
 
 pub mod api_surface;
+pub mod approvals;
 pub mod audit;
 pub mod credentials;
 pub mod manifest;
+pub mod mcp_config;
+pub mod mcp_proxy;
 pub mod permissions;
 pub mod registry;
 pub mod rpc;
@@ -189,6 +192,9 @@ pub struct PluginManager {
     pub supervisor: Arc<Supervisor>,
     pub credentials: Arc<CredentialsStore>,
     pub tickets: Arc<view_ticket::TicketStore>,
+    /// 高危审批单表（B2 批3）：mcp-proxy 经 loopback 落单 + UI 决策，
+    /// Approval/Rejection 决定入插件故障记录域
+    pub approvals: Arc<approvals::ApprovalStore>,
     pub events_tx: broadcast::Sender<HubEvent>,
     /// 装配后回填的 agent cwd 提供方（`hub.projects.effective` 聚合用；
     /// 构造期为 None——drivers 在 AppState 装配序列里晚于插件门面建成）
@@ -217,6 +223,7 @@ impl PluginManager {
             supervisor: Arc::new(Supervisor::new()),
             credentials,
             tickets: Arc::new(view_ticket::TicketStore::default()),
+            approvals: Arc::new(approvals::ApprovalStore::new()),
             events_tx,
             paths,
             agent_cwds: StdMutex::new(None),
@@ -260,6 +267,8 @@ impl PluginManager {
             data_dir: self.paths.data_dir.clone(),
             projects_file: self.paths.projects_file.clone(),
             agent_cwds,
+            approvals: self.approvals.clone(),
+            events_tx: self.events_tx.clone(),
         })
     }
 
@@ -1071,6 +1080,56 @@ impl PluginManager {
         );
     }
 
+    /// 高危审批落单（B2 批3）：mcp-proxy 经 loopback POST 调用。落单即广播
+    /// `plugin_approval_requested`（设计 §3：/ws/events 推送驱动 UI 弹确认）。
+    /// 返回 (审批单 id, 决策接收端)——mcp-proxy await 之（120s 上限在其侧）。
+    pub fn issue_approval(
+        &self,
+        plugin_id: &str,
+        tool: &str,
+        args_digest: &str,
+        session_id: Option<&str>,
+    ) -> approvals::Issued {
+        let issued = self
+            .approvals
+            .issue(plugin_id, tool, args_digest, session_id, &now_rfc3339());
+        let _ = self.events_tx.send(HubEvent::PluginApprovalRequested {
+            id: issued.id.clone(),
+            plugin_id: plugin_id.to_string(),
+            tool: tool.to_string(),
+            args_digest: args_digest.to_string(),
+        });
+        issued
+    }
+
+    /// 审批决策（UI 端点调用）：留痕 Approval/Rejection 入插件故障记录域 +
+    /// 通知等待方。插件已卸载时决定照常生效（留痕目标已消失则跳过落痕）。
+    pub fn decide_approval(
+        &self,
+        id: &str,
+        decision: approvals::Decision,
+    ) -> Result<approvals::ApprovalRequest, approvals::DecideError> {
+        let req = self.approvals.decide(id, decision)?;
+        let (kind, verb) = match decision {
+            approvals::Decision::Approve => (FaultKind::Approval, "批准"),
+            approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
+        };
+        if self.registry.get(&req.plugin_id).is_some() {
+            let _ = self.registry.push_record(
+                &req.plugin_id,
+                FaultRecord {
+                    at: now_rfc3339(),
+                    kind,
+                    message: self.credentials.scrub(&format!(
+                        "高危调用 {} · 用户{verb} · {} · 参数 {}",
+                        req.tool, req.id, req.args_digest
+                    )),
+                },
+            );
+        }
+        Ok(req)
+    }
+
     pub fn records(&self, id: &str, limit: usize) -> Vec<FaultRecord> {
         let mut r = self.registry.records(id);
         if limit > 0 && r.len() > limit {
@@ -1092,6 +1151,10 @@ struct HubRpcHandler {
     data_dir: PathBuf,
     projects_file: PathBuf,
     agent_cwds: AgentCwdProvider,
+    /// 高危审批单表（B2 批3）：`hub.sessions.send` 等高危方法命中
+    /// HighRiskNeedsApproval 时落单阻塞等待（设计 §7）
+    approvals: Arc<approvals::ApprovalStore>,
+    events_tx: broadcast::Sender<HubEvent>,
 }
 
 impl HubCallHandler for HubRpcHandler {
@@ -1103,8 +1166,8 @@ impl HubCallHandler for HubRpcHandler {
         let data_dir = self.data_dir.clone();
         let projects_file = self.projects_file.clone();
         let agent_cwds = self.agent_cwds.clone();
-        let violation_self = Arc::new(());
-        let _ = violation_self;
+        let approvals = self.approvals.clone();
+        let events_tx = self.events_tx.clone();
         Box::pin(async move {
             let Some(p) = registry.get(&plugin_id) else {
                 return Err(RpcError::Unauthorized(format!("插件 {plugin_id} 未安装")));
@@ -1117,24 +1180,78 @@ impl HubCallHandler for HubRpcHandler {
                 params: params.clone(),
             };
             if let Err(deny) = permissions::check(&call, &p.manifest.permissions) {
-                // 每次越界留痕（BR-12）
-                let _ = registry.push_record(
-                    &plugin_id,
-                    FaultRecord {
-                        at: now_rfc3339(),
-                        kind: FaultKind::Violation,
-                        message: credentials
-                            .scrub(&format!("越界调用 {}：{}", method, deny.message)),
-                    },
-                );
-                return Err(match deny.kind {
-                    permissions::DenyKind::CredentialUnknown
-                    | permissions::DenyKind::DataDenied
-                    | permissions::DenyKind::HighRiskNeedsApproval => {
-                        RpcError::Violation(deny.message)
+                match deny.kind {
+                    permissions::DenyKind::HighRiskNeedsApproval => {
+                        // 批3 高危审批门（ADR-0007 第 3 条 / 设计 §7）：落单阻塞
+                        // 等待（120s 超时 -32005 busy 由调用方重试）；决策留痕
+                        // Approval/Rejection；拒绝不执行。确认点恒在 hub（BR-15）
+                        let digest = {
+                            let scrubbed = credentials.scrub(&params.to_string());
+                            let mut s: String = scrubbed.chars().take(200).collect();
+                            if s.is_empty() {
+                                s = "{}".into();
+                            }
+                            s
+                        };
+                        let issued =
+                            approvals.issue(&plugin_id, &method, &digest, None, &now_rfc3339());
+                        let _ = events_tx.send(HubEvent::PluginApprovalRequested {
+                            id: issued.id.clone(),
+                            plugin_id: plugin_id.clone(),
+                            tool: method.clone(),
+                            args_digest: digest,
+                        });
+                        let decision =
+                            match tokio::time::timeout(approvals::APPROVAL_WAIT, issued.rx).await {
+                                Ok(Ok(d)) => d,
+                                Ok(Err(_)) | Err(_) => {
+                                    return Err(RpcError::Busy(
+                                        "高危确认等待超时（120s），可重试".into(),
+                                    ));
+                                }
+                            };
+                        let (kind, verb) = match decision {
+                            approvals::Decision::Approve => (FaultKind::Approval, "批准"),
+                            approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
+                        };
+                        let _ = registry.push_record(
+                            &plugin_id,
+                            FaultRecord {
+                                at: now_rfc3339(),
+                                kind,
+                                message: credentials.scrub(&format!(
+                                    "高危方法 {method} · 用户{verb} · {}",
+                                    issued.id
+                                )),
+                            },
+                        );
+                        if decision == approvals::Decision::Reject {
+                            return Err(RpcError::Violation(format!(
+                                "高危方法 {method} 被用户拒绝，未执行"
+                            )));
+                        }
+                        // 批准：继续执行该方法（落到下方 match）
                     }
-                    permissions::DenyKind::NotDeclared => RpcError::Unauthorized(deny.message),
-                });
+                    other => {
+                        // 每次越界留痕（BR-12）
+                        let _ = registry.push_record(
+                            &plugin_id,
+                            FaultRecord {
+                                at: now_rfc3339(),
+                                kind: FaultKind::Violation,
+                                message: credentials
+                                    .scrub(&format!("越界调用 {}：{}", method, deny.message)),
+                            },
+                        );
+                        return Err(match other {
+                            permissions::DenyKind::CredentialUnknown
+                            | permissions::DenyKind::DataDenied => {
+                                RpcError::Violation(deny.message)
+                            }
+                            _ => RpcError::Unauthorized(deny.message),
+                        });
+                    }
+                }
             }
 
             match method.as_str() {

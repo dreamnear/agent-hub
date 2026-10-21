@@ -19,7 +19,7 @@ const ASSET_WARN_BYTES: u64 = 900 * 1024;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Contribution {
-    /// `tool` | `skill` | `mcp` | `view`
+    /// `tool` | `skill` | `mcp` | `view` | `command`
     pub kind: String,
     pub id: String,
     pub name: String,
@@ -57,6 +57,20 @@ pub struct Reachability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<Vec<String>>,
     pub mcp: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<CommandReach>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandReach {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,6 +278,15 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
         cmd.extend(mcp.args.iter().cloned());
         reach.mcp.push(cmd);
     }
+    for c in &m.contributes.commands {
+        reach.commands.push(CommandReach {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            kind: c.kind.clone(),
+            target_view: c.target.view.clone(),
+            target_tool: c.target.tool.clone(),
+        });
+    }
 
     // —— 视图资产体积 + 硬编码色值 warning（ADR-0010 / ADR-0004 第 6 条）——
     let mut asset_bytes = 0u64;
@@ -363,6 +386,23 @@ pub fn contributions_of(m: &super::manifest::Manifest) -> Vec<Contribution> {
             description: None,
             risk: "-".into(),
             path: Some(v.entry.clone()),
+        });
+    }
+    for c in &m.contributes.commands {
+        let target_desc = if let Some(vid) = &c.target.view {
+            format!("view:{vid}")
+        } else if let Some(tid) = &c.target.tool {
+            format!("tool:{tid}")
+        } else {
+            String::new()
+        };
+        out.push(Contribution {
+            kind: "command".into(),
+            id: c.id.clone(),
+            name: c.name.clone(),
+            description: c.description.clone().or(Some(target_desc)),
+            risk: "-".into(),
+            path: None,
         });
     }
     out

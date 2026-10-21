@@ -309,6 +309,55 @@ export default function (pi: ExtensionAPI) {
       return text({ saved, note: "assistant restarting to apply" });
     },
   });
+
+  // B2 会话能力桥：启用插件的 backend 工具经 hub loopback 注册进助手
+  //（P8 先例加法；闸门在 hub 侧 /api/plugins/{id}/tool-invoke，高危项 hub
+  //  拒绝执行——本扩展不做任何权限判断）。工具描述带「未经 hub 审定」标注
+  //（BR-14：描述永不进入信任边界，注入失败静默降级为无插件工具，零回归）。
+  (async () => {
+    try {
+      const plugins = (await api("/api/plugins")) as Array<Record<string, unknown>>;
+      for (const p of plugins) {
+        if (p.enabled !== true || p.uiState !== "enabled") continue;
+        const pid = typeof p.id === "string" ? p.id : "";
+        if (!pid) continue;
+        const contribs = (p.contributions ?? []) as Array<Record<string, unknown>>;
+        for (const c of contribs) {
+          if (c.kind !== "tool") continue;
+          const toolId = typeof c.id === "string" ? c.id : "";
+          if (!toolId) continue;
+          const risk = typeof c.risk === "string" ? c.risk : "read";
+          const desc = typeof c.description === "string" ? c.description : "";
+          pi.registerTool({
+            name: `hubplug_${pid}_${toolId}`,
+            label: typeof c.name === "string" ? c.name : toolId,
+            description: `[from plugin ${pid}, not reviewed by hub] ${desc} (risk: ${risk})`,
+            parameters: Type.Object({
+              args: Type.Optional(
+                Type.String({ description: "JSON-encoded arguments object for the plugin tool" }),
+              ),
+            }),
+            async execute(_toolCallId, params) {
+              let args: unknown = {};
+              try {
+                args = params.args ? JSON.parse(params.args) : {};
+              } catch {
+                args = {};
+              }
+              const res = (await api(`/api/plugins/${encodeURIComponent(pid)}/tool-invoke`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ toolId, args, sessionId: "hub-assistant" }),
+              })) as Record<string, unknown>;
+              return text(res);
+            },
+          });
+        }
+      }
+    } catch {
+      // 插件面不可用：助手保持零插件工具（零回归，不阻塞既有工具面）
+    }
+  })();
 }
 "#;
 
@@ -379,6 +428,34 @@ mod tests {
         assert!(
             ASSISTANT_SYSTEM_PROMPT.contains("document/confirmation triage"),
             "管家提示须含文档确认工作流"
+        );
+        // —— B2 会话能力桥：插件工具经 loopback 注册进助手 ——
+        // 注册走 /api/plugins/{id}/tool-invoke 闸端点（与 §4.4 同一条路径，
+        // 高危闸门在 hub 侧，扩展不做权限判断）
+        assert!(
+            HUB_EXTENSION_TS.contains("/tool-invoke"),
+            "插件工具必须经 tool-invoke 闸端点"
+        );
+        // BR-14：描述带「未经 hub 审定」标注
+        assert!(
+            HUB_EXTENSION_TS.contains("not reviewed by hub"),
+            "插件工具描述必须带不可信标注"
+        );
+        // 工具全名 hubplug_<pluginId>_<toolId>（ADR-0005 拍板结论 1）
+        assert!(
+            HUB_EXTENSION_TS.contains("hubplug_${pid}_${toolId}"),
+            "插件工具全名必须走 hubplug_ 命名"
+        );
+        // 启用闸：只注册 enabled+uiState==enabled 插件（BR-03 同现同隐）
+        assert!(
+            HUB_EXTENSION_TS.contains("uiState !== \"enabled\"")
+                || HUB_EXTENSION_TS.contains("uiState !== 'enabled'"),
+            "必须按启用态过滤插件"
+        );
+        // 注入失败静默降级（零回归红线）
+        assert!(
+            HUB_EXTENSION_TS.contains("插件面不可用"),
+            "注入失败必须静默降级（零回归）"
         );
     }
 

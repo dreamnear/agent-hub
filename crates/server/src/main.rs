@@ -14,6 +14,20 @@ use server::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // B2 会话能力桥：聚合代理入口（ADR-0005 §4.4，设计 §4.4）
+    // 形态：`server mcp-proxy --session <id>` 以 stdio MCP server 身份运行，供 claude 会话子进程连接
+    // **必须先于默认 tracing 初始化分流**：stdio 协议面只允许协议帧过 stdout，
+    // 日志一律走 stderr（tester 观察：严格客户端对 stdout 首行非 JSON 帧即崩）
+    if let Some(sid) = mcp_proxy_session_from_args(std::env::args().skip(1)) {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "server=debug,tower_http=info".into()),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+        return server::plugins::mcp_proxy::run_stdio_proxy(sid).await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -70,6 +84,26 @@ async fn main() -> anyhow::Result<()> {
     // 单插件失败只写故障记录并置故障态，不阻塞后续插件与主体启动
     state.plugins.startup().await;
     serve_app(state, bind).await
+}
+
+fn mcp_proxy_session_from_args(args: impl Iterator<Item = String>) -> Option<String> {
+    let mut iter = args.peekable();
+    while let Some(a) = iter.next() {
+        if a == "mcp-proxy" {
+            // 形如 `server mcp-proxy --session <id>` 或 `mcp-proxy --session <id>`（hub bin 透传 args）
+            while let Some(n) = iter.next() {
+                if n == "--session" {
+                    if let Some(v) = iter.next() {
+                        if !v.trim().is_empty() {
+                            return Some(v);
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 从命令行提取 `--plugin-dir <path>` / `--plugin-dir=<path>`（可重复）。

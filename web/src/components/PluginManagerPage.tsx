@@ -413,6 +413,15 @@ export default function PluginManagerPage(): ReactElement {
                         {t('plugin.action.rescan')}
                       </button>
                     </>
+                  ) : item.status === 'update' ? (
+                    <>
+                      {/* B2 无更新流（B4 交付）：对已安装插件点安装必被 hash 判定拒绝
+                          （400）——不再渲染死按钮，明示「旧版继续可用」（ADR-0007 保持旧版） */}
+                      <span className="plugin-hint">{t('plugin.update.deferred')}</span>
+                      <button type="button" className="btn-ghost" onClick={refresh}>
+                        {t('plugin.action.rescan')}
+                      </button>
+                    </>
                   ) : (
                     <>
                       <button

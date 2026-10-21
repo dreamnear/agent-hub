@@ -38,10 +38,14 @@ pub struct StartReq {
     /// 「start a copy」分支、死会话走「continues under the same ID」。恢复路径
     /// 不传 --name（CLI 自动带原会话 saved options，见 woke 输出实测）。
     pub resume: Option<String>,
+    /// 会话启动期注入：`--mcp-config <file>`（B2，claude 实测可行）。为纯加法
+    ///（不用 `--strict-mcp-config`），文件由 hub 在会话侧生成（不写 `~/.claude`）。
+    pub mcp_config: Option<String>,
 }
 
 /// 启动参数构造（纯函数便于单测）：`--bg` 打头 → `--resume`（恢复）→
 /// `--name` → `--model` → `--effort` → prompt 尾随（空 = 不追加）。
+/// 当 `mcp_config` 提供时追加 `--mcp-config <file>`（位置在其它开关之后、prompt 之前）。
 fn build_start_args(req: &StartReq) -> Vec<String> {
     let mut args: Vec<String> = vec!["--bg".into()];
     if let Some(sid) = &req.resume {
@@ -59,6 +63,10 @@ fn build_start_args(req: &StartReq) -> Vec<String> {
     if let Some(e) = &req.effort {
         args.push("--effort".into());
         args.push(e.clone());
+    }
+    if let Some(cfg) = &req.mcp_config {
+        args.push("--mcp-config".into());
+        args.push(cfg.clone());
     }
     if !req.prompt.is_empty() {
         args.push(req.prompt.clone());
@@ -302,6 +310,7 @@ mod tests {
             model: None,
             effort: None,
             resume: resume.map(Into::into),
+            mcp_config: None,
         }
     }
 
@@ -337,6 +346,21 @@ mod tests {
                 "opus".to_string(),
                 "--effort".to_string(),
                 "high".to_string(),
+                "hello".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn mcp_config_appended_before_prompt() {
+        let mut r = req("hello", None, None);
+        r.mcp_config = Some("/tmp/plugin_mcp/sess.json".into());
+        assert_eq!(
+            build_start_args(&r),
+            vec![
+                "--bg".to_string(),
+                "--mcp-config".to_string(),
+                "/tmp/plugin_mcp/sess.json".to_string(),
                 "hello".to_string()
             ]
         );
