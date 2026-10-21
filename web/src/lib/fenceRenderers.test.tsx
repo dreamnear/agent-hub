@@ -4,6 +4,7 @@ import {
   registerFenceRenderer,
   unregisterPluginRenderers,
   resolveFenceRenderer,
+  cleanupMermaidArtifacts,
   PlantumlServerBlock,
   HtmlSanitizedBlock,
   type FenceRendererDef,
@@ -49,5 +50,23 @@ describe('内置引擎回退语义（不假渲染）', () => {
     );
     const iframe = container.querySelector('iframe');
     expect(iframe?.getAttribute('sandbox')).toBe('');
+  });
+});
+
+describe('F-7：mermaid 库错误横幅残留清理', () => {
+  it('cleanupMermaidArtifacts 移除 body 上 dhub-mmd-* 注入元素（页面级驻留防泄漏）', () => {
+    const inject = document.createElement('div');
+    inject.id = 'dhub-mmd-1';
+    document.body.appendChild(inject);
+    const inject2 = document.createElement('div');
+    inject2.id = 'dhub-mmd-42';
+    document.body.appendChild(inject2);
+    const unrelated = document.createElement('div');
+    unrelated.id = 'dmmd-unrelated';
+    document.body.appendChild(unrelated);
+    cleanupMermaidArtifacts();
+    expect(document.getElementById('dhub-mmd-1')).toBeNull();
+    expect(document.getElementById('dhub-mmd-42')).toBeNull();
+    expect(document.getElementById('dmmd-unrelated')).not.toBeNull();
   });
 });

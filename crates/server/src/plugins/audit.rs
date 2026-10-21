@@ -372,7 +372,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                 })
                 .chain(r.match_rule.ext.iter().map(|e| RenderClaim {
                     kind: "ext".into(),
-                    value: e.to_ascii_lowercase(),
+                    value: e.to_ascii_lowercase().trim_start_matches('.').to_string(),
                 }))
         })
         .collect();

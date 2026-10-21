@@ -91,6 +91,15 @@ function loadMermaid(): Promise<typeof import('mermaid')['default'] | null> {
 
 let mermaidSeq = 0;
 
+/**
+ * 清理 mermaid 库注入 body 的错误横幅残留（F-7，tester B3-1）：render 失败时库会
+ * 向 body append `d<渲染id>` 错误元素——失败回退源码（ADR 语义）后这些页面级驻留
+ * 元素必须移除，否则跨消息持续可见。
+ */
+export function cleanupMermaidArtifacts(): void {
+  document.querySelectorAll('[id^="dhub-mmd-"]').forEach((el) => el.remove());
+}
+
 export function MermaidBlock({ code, lang }: FenceProps): ReactElement {
   const theme = useThemeSignal();
   const [svg, setSvg] = useState<string | null>(null);
@@ -112,11 +121,18 @@ export function MermaidBlock({ code, lang }: FenceProps): ReactElement {
         securityLevel: 'strict',
         theme: theme === 'dark' ? 'dark' : 'default',
       });
+      // 离屏容器隔离渲染（F-7）：库的中间产物/错误注入不落正文 DOM
+      const container = document.createElement('div');
+      container.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden;';
+      document.body.appendChild(container);
       try {
-        const { svg: out } = await mermaid.render(`hub-mmd-${seq.current}`, code);
+        const { svg: out } = await mermaid.render(`hub-mmd-${seq.current}`, code, container);
         if (alive) setSvg(out);
       } catch {
         if (alive) setFailed(true);
+      } finally {
+        container.remove();
+        cleanupMermaidArtifacts();
       }
     })();
     return () => {

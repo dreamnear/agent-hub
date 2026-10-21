@@ -615,18 +615,19 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         }
         for (j, e) in r.match_rule.ext.iter().enumerate() {
             let e_lower = e.to_ascii_lowercase();
+            let bare = e_lower.trim_start_matches('.').to_string();
             if e_lower.starts_with('.') {
                 errors.push(ManifestIssue::new(
                     field(&format!("match.ext[{j}]")),
                     "renderer-ext-form",
-                    format!("ext 写裸扩展名（不带点）：{e:?} → \"{e_lower}\""),
+                    format!("ext 写裸扩展名（不带点）：{e:?} → {bare:?}"),
                 ));
             }
-            if BUILTIN_RENDER_EXTS.contains(&e_lower.as_str()) {
+            if BUILTIN_RENDER_EXTS.contains(&bare.as_str()) {
                 errors.push(ManifestIssue::new(
                     field(&format!("match.ext[{j}]")),
                     "renderer-match-builtin",
-                    format!("ext {e_lower:?} 为内置格式占用，禁覆盖（ADR-0012 拍板 5）"),
+                    format!("ext {bare:?} 为内置格式占用，禁覆盖（ADR-0012 拍板 5）"),
                 ));
             }
         }
