@@ -178,19 +178,22 @@ pub fn scan(
             }
         }
         let mut pending_owner: Option<String> = None;
-        for (i, c) in candidates.iter_mut().enumerate() {
-            if c.2.plugin_id.is_empty() || c.2.plugin_id.starts_with('\0') {
+        for c in candidates.iter_mut() {
+            if c.2.plugin_id.is_empty() {
                 continue;
             }
             let has_theme = c.2.contributions.iter().any(|cc| cc.kind == "themeTokens");
             if !has_theme {
                 continue;
             }
+            // 审计失败的候选不占槽（对比度拒装等先落地，槽留给合法主题插件）
+            if !c.2.installable {
+                continue;
+            }
             if let Some(ref owner) = theme_owner.clone().or_else(|| pending_owner.clone()) {
                 if cand_id(c) != *owner {
-                    let field = "contributes.themeTokens";
                     c.2.errors.push(ManifestIssue::new(
-                        field,
+                        "contributes.themeTokens",
                         "theme-mutex",
                         format!("主题插件已由 {:?} 占用（互斥 1/1，ADR-0013 拍板 1）——本插件（{:?}）拒绝安装", owner, cand_id(c)),
                     ));
@@ -199,7 +202,6 @@ pub fn scan(
             } else {
                 pending_owner = Some(cand_id(c));
             }
-            let _ = i;
         }
     }
 

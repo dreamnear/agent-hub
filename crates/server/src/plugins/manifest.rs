@@ -92,6 +92,8 @@ pub struct HubCompat {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")] // manifest 契约键即 camelCase（themeTokens/fileDecorations）；
+// 缺失时多词字段被顶层 flatten 吞进 extra、声明静默失效（B3 批 2 修复轮 F-8 根因）
 pub struct Contributes {
     #[serde(default)]
     pub tools: Vec<ToolDecl>,
@@ -837,16 +839,21 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
                 ));
             }
         }
-        // 警告：内嵌敏感关键字值（非阻断——凭据应走 credentials，经统一定位提示）
-        if let Ok(raw) = serde_json::to_string(tt) {
-            let lower = raw.to_ascii_lowercase();
-            if ["token", "key", "password"].iter().any(|k| lower.contains(k)) {
-                warnings.push(ManifestIssue::new(
-                    "contributes.themeTokens",
-                    "no-effect",
-                    "主题覆盖不应携带 token/key/password 值——敏感值应走 permissions.credentials",
-                ));
-            }
+        // 警告：色值字段内嵌敏感关键字（只扫值——字段名 themeTokens 自带 token 字样，
+        // 扫全串恒真；B3 批 2 修复轮修正）
+        let value_blob: String = tt
+            .tokens
+            .values()
+            .map(|v| format!("{} {}", v.light, v.dark))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        if ["token", "key", "password"].iter().any(|k| value_blob.contains(k)) {
+            warnings.push(ManifestIssue::new(
+                "contributes.themeTokens",
+                "sensitive-value-hint",
+                "主题覆盖色值含敏感关键字——凭据应走 permissions.credentials（hub 代持）",
+            ));
         }
     }
 
@@ -1305,6 +1312,39 @@ mod tests {
         assert!(p.warnings.is_empty() || true);
     }
 
+    fn with_theme(theme_json: &str) -> String {
+        let b = base();
+        b.replace(
+            "\"views\": [{ \"id\": \"home\", \"title\": \"Home\", \"entry\": \"view/index.html\" }]",
+            &format!(
+                "\"views\": [{{ \"id\": \"home\", \"title\": \"Home\", \"entry\": \"view/index.html\" }}],\n            \"themeTokens\": {theme_json}"
+            ),
+        )
+    }
+
+    #[test]
+    fn theme_tokens_camel_key_parses() {
+        // F-8 回归锁：Contributes 无 rename_all 时 themeTokens 键被顶层 flatten 吞掉、
+        // 声明静默失效（批 2 修复轮根因）——camel 键必须解析进结构体
+        let raw = with_theme(r##"{"tokens":{"--c-accent":{"light":"#0a7a5c","dark":"#7ee2b8"}}}"##);
+        let p = parse(&raw).expect("themeTokens key must parse");
+        let tt = p.manifest.contributes.theme_tokens.expect("theme_tokens Some");
+        assert!(tt.tokens.contains_key("--c-accent"));
+    }
+
+    #[test]
+    fn high_tool_without_high_risk_is_audit_failed() {
+        // M9：risk:high 工具无 highRisk 声明 → 审计失败（ADR-0001 拍板 4 补全）
+        let raw = base();
+        let raw2 = raw.replace("\"risk\": \"read\"", "\"risk\": \"high\"");
+        let errs = parse(&raw2).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "high-tool-undeclared"), "{errs:?}");
+        // 声明齐全 → 通过
+        let raw3 = raw2.replace("\"highRisk\": []", "\"highRisk\": [\"exfiltrate-data\"]");
+        let p = parse(&raw3).expect("declared high tool passes");
+        assert!(p.manifest.contributes.tools[0].risk == "high");
+    }
+
     #[test]
     fn parses_valid_manifest() {
         let p = parse(&base()).expect("valid manifest");
@@ -1433,3 +1473,4 @@ mod tests {
         assert!(s.contains("\"apiVersion\":\"1\""));
     }
 }
+

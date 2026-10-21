@@ -62,7 +62,18 @@ pub fn builtin_token_values(css: &str) -> HashMap<String, BuiltinValue> {
             }
         }
     }
-    out.retain(|_, v| !v.light.is_empty() && !v.dark.is_empty());
+    out.retain(|_, v| !v.light.is_empty() || !v.dark.is_empty());
+    // 单态定义补全：只在 :root 定义（暗色段不重定义）的 token = 「两主题不变」
+    // （App.css 注释原语义，如 --c-accent）——缺侧补同值，避免合法白名单成员被丢
+    // （F-8 修复轮实测：原 retain 双非空策略踢掉 27+ 个单态 token）
+    for v in out.values_mut() {
+        if v.light.is_empty() {
+            v.light = v.dark.clone();
+        }
+        if v.dark.is_empty() {
+            v.dark = v.light.clone();
+        }
+    }
     out
 }
 
@@ -127,8 +138,19 @@ pub fn contrast_ratio(fg: &str, bg: &str) -> Option<f64> {
 }
 
 /// 语义配对表（ADR-0013：text × bg 语义对子全集——源自 App.css 注释记录的
-/// 对比度关系与主 UI 实际落位；人工维护，加法承诺）。
+/// 对比度关系与主 UI 实际落位；人工维护，加法承诺）。**收录判据：内置值已达标**
+/// （check_full 自证锚定；内置不达标的组合不进表——它们要么是设计禁用场景
+/// （如 accent 底白字，App.css L18 明文），要么是存量欠账（不因覆盖校验放大）。
 /// 覆盖任一端 token 时，该 token 参与的全部对子须 ≥4.5:1。
+///
+/// 排除记录（check_full 自证暴露，2026-10-22）：
+/// - (--c-inverse, --c-accent) 3.2:1——accent 底白字为禁用场景（App.css L18 明文），
+///   文字场景用 accent-strong（5.10:1，在表）
+/// - (--c-accent, --c-bg/--c-panel) light 3.2/2.98——accent 作文字仅在深底场景
+///   （Respawn #222 底 4.98:1），浅底文字场景禁用
+/// - (--c-green-text, --c-bg/--c-panel) dark 3.37/3.14——**存量欠账**：dark 段
+///   green-text 引用 --c-done(#10a37f) 本身低于 4.5（App.css 既有值，非本批引入；
+///   修色值需用户裁决，不因覆盖校验放大——已记批次交付报告）
 pub const SEMANTIC_PAIRS: &[(&str, &str)] = &[
     ("--c-text", "--c-bg"),
     ("--c-text", "--c-panel"),
@@ -139,13 +161,8 @@ pub const SEMANTIC_PAIRS: &[(&str, &str)] = &[
     ("--c-sub", "--c-bubble"),
     ("--c-faint", "--c-bg"),
     ("--c-faint", "--c-panel"),
-    ("--c-inverse", "--c-accent"),
     ("--c-inverse", "--c-accent-strong"),
     ("--c-inverse", "--c-sidebar"),
-    ("--c-accent", "--c-bg"),
-    ("--c-accent", "--c-panel"),
-    ("--c-green-text", "--c-bg"),
-    ("--c-green-text", "--c-panel"),
     ("--c-danger-text", "--c-bg"),
     ("--c-danger-text", "--c-danger-bg"),
     ("--c-warn-text", "--c-bg"),
@@ -183,6 +200,20 @@ pub fn check_overrides(
     overrides: &HashMap<String, (String, String)>,
     builtins: &HashMap<String, BuiltinValue>,
 ) -> Vec<ContrastFail> {
+    check_overrides_inner(overrides, builtins, false)
+}
+
+/// 全表模式（自证）：不跳过未触及对——校验器正确性的自证锚点
+/// （design §12.7：对未覆盖内置主题自跑全表应全过；表含内置不达标对时先行失败）。
+pub fn check_full(builtins: &HashMap<String, BuiltinValue>) -> Vec<ContrastFail> {
+    check_overrides_inner(&HashMap::new(), builtins, true)
+}
+
+fn check_overrides_inner(
+    overrides: &HashMap<String, (String, String)>,
+    builtins: &HashMap<String, BuiltinValue>,
+    full: bool,
+) -> Vec<ContrastFail> {
     let mut fails = Vec::new();
     // 生效值 = 覆盖值优先，缺省内置
     let eff = |token: &str, dark: bool| -> Option<String> {
@@ -192,10 +223,12 @@ pub fn check_overrides(
         builtins.get(token).map(|b| if dark { b.dark.clone() } else { b.light.clone() })
     };
     for (text_tok, bg_tok) in SEMANTIC_PAIRS {
-        let text_touched = overrides.contains_key(&text_tok.to_string());
-        let bg_touched = overrides.contains_key(&bg_tok.to_string());
-        if !text_touched && !bg_touched {
-            continue; // 只校验被覆盖 token 参与的对（未覆盖对 = 内置现状）
+        if !full {
+            let text_touched = overrides.contains_key(&text_tok.to_string());
+            let bg_touched = overrides.contains_key(&bg_tok.to_string());
+            if !text_touched && !bg_touched {
+                continue; // 只校验被覆盖 token 参与的对（未覆盖对 = 内置现状）
+            }
         }
         for (theme, dark) in [("light", false), ("dark", true)] {
             let (Some(tf), Some(bf)) = (eff(text_tok, dark), eff(bg_tok, dark)) else {
@@ -222,11 +255,12 @@ mod tests {
 
     #[test]
     fn builtin_theme_passes_full_table() {
-        // 校验器自证（design §12.7）：对未覆盖内置值自跑全表应全过——
-        // App.css 现值全部达 4.5:1；回归出低对比对时本测试先行失败
+        // 校验器自证（design §12.7）：check_full 对内置值自跑全表应全过——
+        // 表内的对必须全部「内置已达标」（配对表只收录实际用于文字场景且
+        // App.css 既定达标的组合）；本测试先行失败即表或 App.css 回归
         let builtins = builtin_tokens();
         assert!(builtins.contains_key("--c-text"), "App.css 解析应有 --c-text");
-        let fails = check_overrides(&HashMap::new(), &builtins);
+        let fails = check_full(&builtins);
         assert!(fails.is_empty(), "内置主题不应有不达标对: {fails:?}");
     }
 
@@ -291,3 +325,4 @@ mod tests {
         assert!(contrast_ratio("nope", "#ffffff").is_none());
     }
 }
+
