@@ -13,8 +13,30 @@ pub const PLUGIN_API_VERSION: u32 = 1;
 /// 与 `CHANGELOG.md` 最新已发布版本同步——发版时随 CHANGELOG 一起更新。
 pub const HUB_VERSION: &str = "0.6.0";
 
-/// 贡献物类型（v1 五类，ADR-0011 加法：commands 新增）。
-pub const CONTRIBUTION_TYPES: [&str; 5] = ["tools", "skills", "mcp", "views", "commands"];
+/// 贡献物类型（v1 六类，ADR-0011 加法：commands / renderers 新增）。
+pub const CONTRIBUTION_TYPES: [&str; 6] = ["tools", "skills", "mcp", "views", "commands", "renderers"];
+
+/// 内置渲染引擎清单（ADR-0012 拍板 1：首批 = mermaid / plantuml-server / image /
+/// html-sanitized + plugin-iframe 档；加法承诺，katex 随后续批次）。
+pub const RENDER_ENGINES: [&str; 5] =
+    ["mermaid", "plantuml-server", "image", "html-sanitized", "plugin-iframe"];
+
+/// 服务地址类渲染引擎（ADR-0012 拍板 4）：`config` 只允许引用服务配置名
+/// （`{"service":"…"}`），**禁内嵌 URL**（内容外泄面红线）。
+pub const SERVICE_RENDER_ENGINES: [&str; 1] = ["plantuml-server"];
+
+/// 内置围栏占用（ADR-0012 拍板 3/5：插件声明同 fence = 抢内置 = 审计失败）。
+/// 与 MarkdownView 内置围栏渲染（plantuml / mermaid）对应。
+pub const BUILTIN_RENDER_FENCES: [&str; 2] = ["plantuml", "mermaid"];
+
+/// 内置 ext 占用（ADR-0012 拍板 3：docs 预览内置 kind 的扩展名——与
+/// `api/docs.rs::kind_of` 的 ext 表对应；插件渲染器不得抢内置格式）。
+pub const BUILTIN_RENDER_EXTS: [&str; 47] = [
+    "md", "markdown", "html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif",
+    "pdf", "txt", "log", "json", "toml", "yaml", "yml", "ini", "cfg", "conf", "csv", "xml", "sh",
+    "bash", "zsh", "py", "rb", "rs", "go", "java", "js", "jsx", "ts", "tsx", "c", "cc", "cpp",
+    "h", "css", "scss", "sql", "proto", "lock", "gitignore", "mmd",
+];
 
 /// `permissions.data` 固定域枚举（ADR-0007 第 2 条）。
 pub const DATA_DOMAINS: [&str; 10] = [
@@ -192,7 +214,7 @@ pub fn api_version_mismatch(declared: &str) -> String {
 pub struct ApiSchema {
     pub api_version: u32,
     pub hub_version: &'static str,
-    pub contributions: [&'static str; 5],
+    pub contributions: [&'static str; 6],
     pub data_domains: [&'static str; 10],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,

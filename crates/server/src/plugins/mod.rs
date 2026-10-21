@@ -141,10 +141,30 @@ pub struct PluginView {
     pub contributions: Vec<Contribution>,
     pub permissions: PermissionView,
     pub views: Vec<ViewEntry>,
+    /// 渲染器声明（B3，ADR-0012）：宿主转译进围栏/文件渲染注册表的数据源
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<RendererEntry>,
     pub backend: BackendInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
     pub asset_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererEntry {
+    pub id: String,
+    /// 小写化的 fence 命中（空数组 = 无 fence）
+    pub match_fence: Vec<String>,
+    /// 裸扩展名（小写，无点）
+    pub match_ext: Vec<String>,
+    pub engine: String,
+    /// 服务配置名（plantuml-server 类；其余引擎为 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// plugin-iframe 档的入口路径
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -532,6 +552,34 @@ impl PluginManager {
                     id: v.id.clone(),
                     title: v.title.clone(),
                     order: v.order,
+                })
+                .collect(),
+            renderers: m
+                .contributes
+                .renderers
+                .iter()
+                .map(|r| RendererEntry {
+                    id: r.id.clone(),
+                    match_fence: r
+                        .match_rule
+                        .fence
+                        .iter()
+                        .map(|f| f.to_ascii_lowercase())
+                        .collect(),
+                    match_ext: r
+                        .match_rule
+                        .ext
+                        .iter()
+                        .map(|e| e.to_ascii_lowercase())
+                        .collect(),
+                    engine: r.engine.clone(),
+                    service: r
+                        .config
+                        .as_ref()
+                        .and_then(|c| c.get("service"))
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string),
+                    entry: r.entry.clone(),
                 })
                 .collect(),
             backend: BackendInfo {

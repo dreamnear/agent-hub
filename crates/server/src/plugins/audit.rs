@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::manifest::{self, ManifestIssue};
@@ -87,6 +87,17 @@ pub struct AuditReport {
     pub asset_files: u64,
     /// 是否需要用户确认（含贡献物或权限声明）
     pub installable: bool,
+    /// 渲染器 match 声明（B3，ADR-0012 拍板 3）：跨插件冲突判定的结构化暴露
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub render_claims: Vec<RenderClaim>,
+}
+
+/// 一条渲染器 match 占用（kind = "ext" | "fence"，value 小写规范化）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderClaim {
+    pub kind: String,
+    pub value: String,
 }
 
 /// 目录内容 hash（ADR-0001：排序后路径 + 内容；不跟随符号链接）。
@@ -163,6 +174,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                 asset_bytes: 0,
                 asset_files: 0,
                 installable: false,
+                render_claims: Vec::new(),
             };
         }
     };
@@ -182,6 +194,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                 asset_bytes: 0,
                 asset_files: 0,
                 installable: false,
+                render_claims: Vec::new(),
             };
         }
     };
@@ -240,6 +253,25 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                         why.message(),
                     )
                     .with_path(p.clone()),
+                ),
+            }
+        }
+    }
+    // 渲染器（B3，ADR-0012）：plugin-iframe 档的 entry 同样走路径校验
+    for (i, r) in m.contributes.renderers.iter().enumerate() {
+        if let Some(entry) = &r.entry {
+            let field = format!("contributes.renderers[{i}].entry");
+            match resolve_inside(root, entry) {
+                Ok(p) => {
+                    if !p.is_file() {
+                        errors.push(
+                            ManifestIssue::new(field, "path-not-file", "渲染入口不是文件")
+                                .with_path(entry.clone()),
+                        );
+                    }
+                }
+                Err(why) => errors.push(
+                    ManifestIssue::new(field, why.rule(), why.message()).with_path(entry.clone()),
                 ),
             }
         }
@@ -326,6 +358,24 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
     }
 
     let installable = errors.is_empty();
+    let render_claims = m
+        .contributes
+        .renderers
+        .iter()
+        .flat_map(|r| {
+            r.match_rule
+                .fence
+                .iter()
+                .map(|f| RenderClaim {
+                    kind: "fence".into(),
+                    value: f.to_ascii_lowercase(),
+                })
+                .chain(r.match_rule.ext.iter().map(|e| RenderClaim {
+                    kind: "ext".into(),
+                    value: e.to_ascii_lowercase(),
+                }))
+        })
+        .collect();
     AuditReport {
         plugin_id: m.id.clone(),
         plugin_dir: root.to_string_lossy().into_owned(),
@@ -337,6 +387,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
         asset_bytes,
         asset_files,
         installable,
+        render_claims,
     }
 }
 
@@ -403,6 +454,26 @@ pub fn contributions_of(m: &super::manifest::Manifest) -> Vec<Contribution> {
             description: c.description.clone().or(Some(target_desc)),
             risk: "-".into(),
             path: None,
+        });
+    }
+    for r in &m.contributes.renderers {
+        let mut match_desc = String::new();
+        if !r.match_rule.fence.is_empty() {
+            match_desc.push_str(&format!("fence:{}", r.match_rule.fence.join("|")));
+        }
+        if !r.match_rule.ext.is_empty() {
+            if !match_desc.is_empty() {
+                match_desc.push(' ');
+            }
+            match_desc.push_str(&format!("ext:{}", r.match_rule.ext.join("|")));
+        }
+        out.push(Contribution {
+            kind: "renderer".into(),
+            id: r.id.clone(),
+            name: r.engine.clone(),
+            description: Some(match_desc),
+            risk: "-".into(),
+            path: r.entry.clone(),
         });
     }
     out

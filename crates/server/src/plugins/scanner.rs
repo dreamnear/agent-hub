@@ -105,6 +105,65 @@ pub fn scan(
         }
     }
 
+    // 渲染器 match 全 hub 唯一（B3，ADR-0012 拍板 3）：候选之间 + 与已装插件之间，
+    // 冲突即拒（错因可定位：指出占用方）。已装插件经 manifest 快照先占。
+    let cand_id = |c: &(PathBuf, String, AuditReport)| -> String {
+        if c.2.plugin_id.is_empty() {
+            c.0.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        } else {
+            c.2.plugin_id.clone()
+        }
+    };
+    let mut claimed: BTreeMap<(String, String), String> = BTreeMap::new();
+    for p in registry.list() {
+        for r in &p.manifest.contributes.renderers {
+            let owner = p.entry.id.clone();
+            for f in &r.match_rule.fence {
+                claimed
+                    .entry(("fence".into(), f.to_ascii_lowercase()))
+                    .or_insert_with(|| owner.clone());
+            }
+            for e in &r.match_rule.ext {
+                claimed
+                    .entry(("ext".into(), e.to_ascii_lowercase()))
+                    .or_insert_with(|| owner.clone());
+            }
+        }
+    }
+    // 先收集各候选的冲突判定（borrow 拆分：判定阶段全只读，落错阶段可变）
+    let conflicts: Vec<(usize, String, String, String)> = candidates
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            c.2.render_claims.iter().map(move |claim| (i, claim))
+        })
+        .filter_map(|(i, claim)| {
+            let key = (claim.kind.clone(), claim.value.clone());
+            let owner = match claimed.get(&key) {
+                Some(o) => Some(o.clone()),
+                None => candidates.iter().enumerate().find_map(|(j, cj)| {
+                    (j != i
+                        && cj.2.render_claims.iter().any(|x| x.kind == claim.kind && x.value == claim.value))
+                        .then(|| cand_id(cj))
+                }),
+            };
+            owner.map(|o| (i, key.0, key.1, o))
+        })
+        .collect();
+    for (i, kind, value, owner) in conflicts {
+        claimed.remove(&(kind.clone(), value.clone()));
+        let self_id = cand_id(&candidates[i]);
+        let r = &mut candidates[i].2;
+        r.errors.push(ManifestIssue::new(
+            format!("contributes.renderers.match.{kind}"),
+            "renderer-match-conflict",
+            format!("{kind} {value:?} 已被插件 {owner:?} 占用（match 全 hub 唯一，ADR-0012 拍板 3）——本插件（{self_id:?}）拒绝安装"),
+        ));
+        r.installable = false;
+    }
+
     let mut items = Vec::new();
     for (dir, source_kind, report) in candidates {
         let dir_name = dir

@@ -571,6 +571,7 @@ export const zh: Record<string, string> = {
   'md.copy': '复制',
   'md.copied': '已复制',
   'md.plantumlNeedConfig': 'PlantUML 未配置渲染服务（设置 → 文档），暂以源码展示。',
+  'md.fenceRenderFailed': '渲染失败——已回退源码展示（不假渲染）',
   'sys.stdout': '执行结果',
   'sys.defaultLabel': '系统通知',
 

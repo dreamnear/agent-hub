@@ -95,9 +95,20 @@ export interface PluginView {
   contributions: Contribution[];
   permissions: PermissionView;
   views: ViewEntry[];
+  /** 渲染器声明（B3，ADR-0012）：宿主转译进围栏/文件渲染注册表的数据源 */
+  renderers?: RendererEntryView[];
   backend: BackendInfo;
   lastFault?: FaultRecord;
   assetBytes: number;
+}
+
+export interface RendererEntryView {
+  id: string;
+  matchFence: string[];
+  matchExt: string[];
+  engine: string;
+  service?: string;
+  entry?: string;
 }
 
 export interface AuditIssue {

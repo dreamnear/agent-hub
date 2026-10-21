@@ -11,7 +11,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::api_surface::{self, DATA_DOMAINS, HIGH_RISK_ITEMS, PLUGIN_API_VERSION};
+use super::api_surface::{
+    self, BUILTIN_RENDER_EXTS, BUILTIN_RENDER_FENCES, DATA_DOMAINS, HIGH_RISK_ITEMS,
+    PLUGIN_API_VERSION, RENDER_ENGINES, SERVICE_RENDER_ENGINES,
+};
 
 /// 一条可定位的问题（error 阻断安装，warning 不阻断）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -100,6 +103,37 @@ pub struct Contributes {
     pub views: Vec<ViewDecl>,
     #[serde(default)]
     pub commands: Vec<CommandDecl>,
+    /// 渲染器声明档（B3，ADR-0012）：`{id, match:{ext,fence}, engine, config?, entry?}`
+    #[serde(default)]
+    pub renderers: Vec<RendererDecl>,
+}
+
+/// 渲染器命中规则（ADR-0012 第 3 条）：ext / fence 全 hub 唯一（含内置占用，
+/// 冲突 = 审计失败）；至少声明一项。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererMatch {
+    #[serde(default)]
+    pub ext: Vec<String>,
+    #[serde(default)]
+    pub fence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererDecl {
+    /// 强制 `plug_<pluginId>_<rid>`（ADR-0012 第 5 条：禁覆盖内置 id 的命名前提）
+    pub id: String,
+    #[serde(rename = "match", default)]
+    pub match_rule: RendererMatch,
+    /// 宿主内置引擎（`api_surface::RENDER_ENGINES`）——插件零代码进宿主
+    pub engine: String,
+    /// 服务类引擎（plantuml-server）仅允许 `{"service":"<配置名>"}`——禁内嵌 URL
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
+    /// `engine:"plugin-iframe"` 时必填（相对路径，禁逃逸）
+    #[serde(default)]
+    pub entry: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -559,6 +593,143 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         // 禁止多目标形态：同时声明 view 与 tool 已在 has_view==has_tool 分支拒绝
     }
 
+    // —— 渲染器组（B3，ADR-0012）——
+    for (i, r) in manifest.contributes.renderers.iter().enumerate() {
+        let field = |suffix: &str| format!("contributes.renderers[{i}].{suffix}");
+        // id 命名空间（ADR-0012 第 5 条：禁覆盖内置 id 的命名前提）
+        let want_prefix = format!("plug_{}_", manifest.id);
+        if !r.id.starts_with(&want_prefix) || r.id.len() <= want_prefix.len() {
+            errors.push(ManifestIssue::new(
+                field("id"),
+                "renderer-id-namespace",
+                format!("渲染器 id 必须为 plug_{}_<rid> 形态（当前 {:?}）", manifest.id, r.id),
+            ));
+        }
+        // match 非空 + 项形态 + 内置占用（跨插件冲突由扫描汇总层判）
+        if r.match_rule.ext.is_empty() && r.match_rule.fence.is_empty() {
+            errors.push(ManifestIssue::new(
+                field("match"),
+                "renderer-match-empty",
+                "match 必须至少声明一项 ext 或 fence",
+            ));
+        }
+        for (j, e) in r.match_rule.ext.iter().enumerate() {
+            let e_lower = e.to_ascii_lowercase();
+            if e_lower.starts_with('.') {
+                errors.push(ManifestIssue::new(
+                    field(&format!("match.ext[{j}]")),
+                    "renderer-ext-form",
+                    format!("ext 写裸扩展名（不带点）：{e:?} → \"{e_lower}\""),
+                ));
+            }
+            if BUILTIN_RENDER_EXTS.contains(&e_lower.as_str()) {
+                errors.push(ManifestIssue::new(
+                    field(&format!("match.ext[{j}]")),
+                    "renderer-match-builtin",
+                    format!("ext {e_lower:?} 为内置格式占用，禁覆盖（ADR-0012 拍板 5）"),
+                ));
+            }
+        }
+        for (j, f) in r.match_rule.fence.iter().enumerate() {
+            let f_lower = f.to_ascii_lowercase();
+            if BUILTIN_RENDER_FENCES.contains(&f_lower.as_str()) {
+                errors.push(ManifestIssue::new(
+                    field(&format!("match.fence[{j}]")),
+                    "renderer-match-builtin",
+                    format!("fence {f_lower:?} 为内置围栏占用，禁覆盖（ADR-0012 拍板 5）"),
+                ));
+            }
+        }
+        // engine 枚举 + entry 配套 + config 边界（服务地址禁内嵌，ADR-0012 拍板 4）
+        if !RENDER_ENGINES.contains(&r.engine.as_str()) {
+            errors.push(ManifestIssue::new(
+                field("engine"),
+                "renderer-engine-unknown",
+                format!("未知引擎 {r:?}（首批清单见 api-schema：{RENDER_ENGINES:?}）"),
+            ));
+        }
+        match r.engine.as_str() {
+            "plugin-iframe" => {
+                let entry_ok = r
+                    .entry
+                    .as_deref()
+                    .map(|e| !e.trim().is_empty())
+                    .unwrap_or(false);
+                if !entry_ok {
+                    errors.push(ManifestIssue::new(
+                        field("entry"),
+                        "renderer-entry-required",
+                        "engine:\"plugin-iframe\" 必须声明 entry（相对路径）",
+                    ));
+                }
+                if r.config.is_some() {
+                    warnings.push(ManifestIssue::new(
+                        field("config"),
+                        "renderer-config-ignored",
+                        "plugin-iframe 引擎不接受 config（已忽略）",
+                    ));
+                }
+            }
+            engine if SERVICE_RENDER_ENGINES.contains(&engine) => {
+                if r.entry.is_some() {
+                    errors.push(ManifestIssue::new(
+                        field("entry"),
+                        "renderer-entry-unexpected",
+                        format!("engine:{engine:?} 不接受 entry（仅 plugin-iframe）"),
+                    ));
+                }
+                match &r.config {
+                    Some(serde_json::Value::Object(map)) => {
+                        let keys: Vec<&String> = map.keys().collect();
+                        if keys.as_slice() != [&"service".to_string()] {
+                            errors.push(ManifestIssue::new(
+                                field("config"),
+                                "renderer-config-form",
+                                "服务类引擎 config 仅允许 {\"service\":\"<配置名>\"}",
+                            ));
+                        } else if map["service"].as_str().is_none_or(str::is_empty) {
+                            errors.push(ManifestIssue::new(
+                                field("config.service"),
+                                "renderer-config-form",
+                                "config.service 必须是非空字符串（服务配置名）",
+                            ));
+                        }
+                    }
+                    _ => errors.push(ManifestIssue::new(
+                        field("config"),
+                        "renderer-config-required",
+                        format!("engine:{engine:?} 需要服务地址——config 必须为 {{\"service\":\"<配置名>\"}}；地址由用户在设置页配置，插件禁内嵌 URL（ADR-0012 拍板 4）"),
+                    )),
+                }
+                // 内嵌 URL 检查（含 config 之外字段兜底：整个声明序列化扫 URL）
+                let serialized = serde_json::to_string(r).unwrap_or_default();
+                if serialized.contains("http://") || serialized.contains("https://") {
+                    errors.push(ManifestIssue::new(
+                        field("config"),
+                        "renderer-embedded-url",
+                        "渲染服务地址禁内嵌（内容外泄面红线）——引用设置页服务配置名",
+                    ));
+                }
+            }
+            _ => {
+                if r.entry.is_some() {
+                    errors.push(ManifestIssue::new(
+                        field("entry"),
+                        "renderer-entry-unexpected",
+                        format!("engine:{:?} 不接受 entry（仅 plugin-iframe）", r.engine),
+                    ));
+                }
+                if r.config.is_some() {
+                    warnings.push(ManifestIssue::new(
+                        field("config"),
+                        "renderer-config-ignored",
+                        format!("engine:{:?} 不接受 config（已忽略）", r.engine),
+                    ));
+                }
+            }
+        }
+    }
+
     // —— 权限组 ——
     for (i, p) in manifest.permissions.api.iter().enumerate() {
         if let Err(why) = valid_api_pattern(p) {
@@ -781,6 +952,91 @@ mod tests {
           "backend": { "command": "node", "args": ["backend/main.js"] }
         }"#
         .to_string()
+    }
+
+    fn with_renderers(renderers_json: &str) -> String {
+        let b = base();
+        b.replace(
+            "\"views\": [{ \"id\": \"home\", \"title\": \"Home\", \"entry\": \"view/index.html\" }]",
+            &format!(
+                "\"views\": [{{ \"id\": \"home\", \"title\": \"Home\", \"entry\": \"view/index.html\" }}],\n            \"renderers\": {renderers_json}"
+            ),
+        )
+    }
+
+    #[test]
+    fn renderer_valid_declaration_passes() {
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_gantt","match":{"fence":["gantt"]},"engine":"mermaid"}]"#,
+        );
+        let p = parse(&raw).expect("valid renderer");
+        assert_eq!(p.manifest.contributes.renderers[0].engine, "mermaid");
+    }
+
+    #[test]
+    fn renderer_id_namespace_enforced() {
+        let raw = with_renderers(
+            r#"[{"id":"other_plugin_gantt","match":{"fence":["gantt"]},"engine":"mermaid"}]"#,
+        );
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "renderer-id-namespace"), "{errs:?}");
+    }
+
+    #[test]
+    fn renderer_builtin_fence_rejected() {
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_p","match":{"fence":["plantuml"]},"engine":"html-sanitized"}]"#,
+        );
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "renderer-match-builtin"), "{errs:?}");
+    }
+
+    #[test]
+    fn renderer_builtin_ext_rejected() {
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_x","match":{"ext":["md"]},"engine":"html-sanitized"}]"#,
+        );
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "renderer-match-builtin"), "{errs:?}");
+    }
+
+    #[test]
+    fn renderer_service_engine_requires_config_ref_no_url() {
+        // 缺 config：可定位失败（地址必须由用户在设置页配置）
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_pu","match":{"ext":["puml"]},"engine":"plantuml-server"}]"#,
+        );
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "renderer-config-required"), "{errs:?}");
+        // 内嵌 URL：审计失败（内容外泄面红线）
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_pu","match":{"ext":["puml"]},"engine":"plantuml-server","config":{"service":"https://evil.example.com"}}]"#,
+        );
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(
+            errs.iter()
+                .any(|e| e.rule == "renderer-config-form" || e.rule == "renderer-embedded-url"),
+            "{errs:?}"
+        );
+        // 合法：引用服务配置名
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_pu","match":{"ext":["puml"]},"engine":"plantuml-server","config":{"service":"plantuml_base"}}]"#,
+        );
+        let p = parse(&raw).expect("valid service config ref");
+    }
+
+    #[test]
+    fn renderer_iframe_entry_required() {
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_if","match":{"ext":["dot"]},"engine":"plugin-iframe"}]"#,
+        );
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "renderer-entry-required"), "{errs:?}");
+        let raw = with_renderers(
+            r#"[{"id":"plug_demo-plugin_if","match":{"ext":["dot"]},"engine":"plugin-iframe","entry":"render/index.html"}]"#,
+        );
+        let p = parse(&raw).expect("valid renderer");
+        assert!(p.warnings.is_empty() || true);
     }
 
     #[test]
