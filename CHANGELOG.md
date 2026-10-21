@@ -4,6 +4,32 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.7.0] - 2026-10-21
+
+本批：插件体系 B2 会话能力桥（#31，epic agent-hub-mng#11）——插件的工具/MCP/skill/command 正式进入会话链路。
+
+### Added — 会话能力桥（#31）
+
+- **MCP 聚合代理**：hub 新增 `mcp-proxy --session` 入口（stdio MCP server），把启用插件的工具聚合暴露给会话（全名 `hubplug_<pluginId>_<tool>`）；一切调用经 hub 闸门（权限判定/凭据注入/scrub/留痕），**无直通路径**；工具描述按不可信输入处理（替换+截断+固定标注）
+- **会话启动期注入**：claude 驱动经 `--mcp-config` 注入会话级配置（hub 数据目录生成，不碰用户 `~/.claude`；占位文件原地原子重写修 bg/daemon 晚读竞态，#32）；pi 驱动经 `pi.registerTool` 注册；stop/remove 按会话→路径映射回收
+- **高危审批流**：高危类调用（hub 维护四类固定清单）先落审批单 → 会话内确认卡（HighRiskApprovalDialog）→ 批准执行/拒绝不执行，双侧留痕 + 120s 超时 busy 可重试 + 防重复提交；**工具描述夹带「跳过确认」类指令不影响确认流程**（防投毒红线实测）
+- **command 贡献物**：插件命令注册进 `/` 补全——`target:{view}` 打开插件视图 / `target:{tool}` 触发只读工具（审计限 risk:"read"）
+- **能力可发现面**：会话侧可见当前可用工具/skill/MCP 清单（来源插件 × 风险标注；描述标注「来自插件，非 hub 审定」）
+- **留痕卡**：工具调用/错误/拒绝在会话流中的卡片呈现；violation/approval/rejection 记录入故障记录域
+- **示例插件 v0.2.0**：新增高危演示工具 `add_issue_note`（`risk:"high"`，写 issue 备注）——端到端审批演示载体
+
+### Fixed
+
+- **B1 潜伏缺陷**：manifest `Permissions` 结构缺 `rename_all="camelCase"`，`permissions.highRisk` 键自 B1 起解析期被静默丢弃（审计高危面恒空）；修复并加集成断言
+- **侧栏插件组遮挡**：sticky 覆盖式改为流内 flex 固定项——长列表/底栏零遮挡（桌面 + 375px）
+- **bg/daemon 会话 MCP 注入竞态**（#32）：会话配置占位文件原地原子重写 + 会话→路径映射回收
+- 管理页 update 卡移除必败安装钮（更新流随 B4，当前明示「继续使用已安装版本」）
+
+### 工单索引
+
+- 本批：#31（B2 会话能力桥）；缺口 #32（bg daemon 注入竞态，已修复关单）；mux_proxy flake 稳定性追踪 #30
+- 遗留（不阻断）：M9 高危声明一致性审计规则（B3 最高优先）/ M2 tool-invoke 高危对称化（B3）/ 拦截档钩子（B4，v1 明确不开）/ 更新确认流（B4）
+
 ## [0.6.0] - 2026-10-21
 
 本批：插件体系 B1 地基（#27，epic agent-hub-mng#11，ADR-0001..0010 首批架构决策）+ 三项预览反馈增量，一次部署上线。
