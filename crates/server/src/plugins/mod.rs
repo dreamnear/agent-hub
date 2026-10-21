@@ -1101,12 +1101,19 @@ impl PluginManager {
         if !p.entry.enabled {
             return Err(ViewFileError::Denied("插件已停用".into()));
         }
-        let Some(root) = view_root(&p) else {
-            return Err(ViewFileError::NotFound);
-        };
         let rel = rel.trim_start_matches('/');
         let rel = if rel.is_empty() { "index.html" } else { rel };
-        let candidate = root.join(rel);
+        // 渲染器资产（B3 尾批 F-14）：entry 语义统一为**相对插件目录**（与审计期
+        // 校验同口径）；视图资产仍相对 view_root（views[0].entry 父目录，B1 语义）。
+        // 纯渲染器插件（无 views）此前 view_root=None 恒 404——渲染器命中时不再依赖它。
+        let (root, rel) = match renderer_asset_root(&p, rel) {
+            Some((rdir, rrel)) => (rdir, rrel),
+            None => {
+                let vroot = view_root(&p).ok_or(ViewFileError::NotFound)?;
+                (vroot, rel.to_string())
+            }
+        };
+        let candidate = root.join(&rel);
         if !candidate.is_file() {
             return Err(ViewFileError::NotFound);
         }
@@ -1706,6 +1713,31 @@ fn view_root(p: &InstalledPlugin) -> Option<PathBuf> {
     let entry = p.manifest.contributes.views.first()?.entry.clone();
     let parent = Path::new(&entry).parent().unwrap_or(Path::new(""));
     Some(p.plugin_dir.join(parent))
+}
+
+/// 渲染器资产根（B3 尾批 F-14）：rel 命中渲染器 entry 或其 entry 目录内的文件
+/// 时，资产相对**插件目录**解析（与审计期 resolve_inside 同口径——三层 rel 口径
+/// 不一致的统一）；symlink/逃逸防护沿用 view_file 的 canonicalize 检查
+/// （root=插件目录，逃逸判定不放宽）。
+fn renderer_asset_root(p: &InstalledPlugin, rel: &str) -> Option<(PathBuf, String)> {
+    let clean = rel.trim_start_matches('/');
+    if clean.is_empty() {
+        return None;
+    }
+    for r in &p.manifest.contributes.renderers {
+        let Some(entry) = &r.entry else { continue };
+        let e_parent = Path::new(entry)
+            .parent()
+            .map(|x| x.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if clean == entry.as_str() {
+            return Some((p.plugin_dir.clone(), clean.to_string()));
+        }
+        if !e_parent.is_empty() && clean.starts_with(&format!("{e_parent}/")) {
+            return Some((p.plugin_dir.clone(), clean.to_string()));
+        }
+    }
+    None
 }
 
 fn mime_for(path: &Path) -> &'static str {
