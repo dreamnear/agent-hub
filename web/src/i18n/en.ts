@@ -587,6 +587,8 @@ export const en: Record<string, string> = {
   'plugin.state.auditOk': 'Audit passed · pending',
   'plugin.state.auditFailed': 'Audit failed · rejected',
   'plugin.state.update': 'Update detected · pending',
+  'plugin.update.deferred':
+    'Plugin content update detected: the update flow ships in a later batch; the installed version stays in use',
   'plugin.state.transient': 'Transient',
   'plugin.l0.title': 'Newly discovered · pending review',
   'plugin.l1.title': 'Installed',

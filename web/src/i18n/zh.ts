@@ -590,6 +590,7 @@ export const zh: Record<string, string> = {
   'plugin.state.auditOk': '审计通过 · 待确认',
   'plugin.state.auditFailed': '审计失败 · 已拒绝',
   'plugin.state.update': '检测到更新 · 待确认',
+  'plugin.update.deferred': '检测到插件内容更新：更新确认流在后续批次交付，当前继续使用已安装版本',
   'plugin.state.transient': '临时加载',
   'plugin.l0.title': '新发现 · 待确认',
   'plugin.l1.title': '已安装',
