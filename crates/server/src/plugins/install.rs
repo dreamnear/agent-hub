@@ -53,7 +53,11 @@ fn redact_url_credentials(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(pos) = rest.find("://") {
-        let scheme_start = rest[..pos].rfind(|c: char| c.is_whitespace() || c == '"').map(|p| p + 1).unwrap_or(0);
+        // scheme 前界：空白或引号（git 错误消息用单引号包 URL）
+        let scheme_start = rest[..pos]
+            .rfind(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .map(|p| p + 1)
+            .unwrap_or(0);
         let prefix = &rest[scheme_start..pos];
         if prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
             let after = &rest[pos + 3..];
