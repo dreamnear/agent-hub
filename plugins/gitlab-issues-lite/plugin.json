@@ -8,6 +8,7 @@
   "homepage": "https://github.com/dreamnear/agent-hub",
   "hub": { "apiVersion": "1" },
   "contributes": {
+    "hooks": ["onSessionCreate", "onJobsChanged"],
     "tools": [
       {
         "id": "fetch_issues",
@@ -30,7 +31,7 @@
   },
   "permissions": {
     "api": [],
-    "data": ["projects:read", "sessions:read"],
+    "data": ["projects:read", "sessions:read", "hooks:observe"],
     "credentials": ["gitlab_pat"],
     "highRisk": ["exfiltrate-data"]
   },

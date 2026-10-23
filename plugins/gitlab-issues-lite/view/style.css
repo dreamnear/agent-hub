@@ -211,3 +211,12 @@ body {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* B4 钩子观察计数（只读展示；色值走宿主 token，主题三态跟随） */
+.hook-stats {
+  margin-inline-start: 0.75rem;
+  opacity: 0.85;
+}
+.hook-stats:empty {
+  display: none;
+}

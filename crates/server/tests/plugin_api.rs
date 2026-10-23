@@ -699,9 +699,11 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
     // 安装（drop-in 发现面）
     let body = install_demo(a.clone(), "gitlab-issues-lite").await;
     assert_eq!(body["plugin"]["uiState"], "enabled");
-    // 审计卡内容：贡献物 3 条（2 工具 + 1 视图）+ 凭据按名 + 高危声明随高危工具同步
+    // 审计卡内容：贡献物 5 条（2 工具 + 1 视图 + 2 钩子，B4 观察档接入示例）
+    // + 凭据按名 + 高危声明随高危工具同步
     let plugin = &body["plugin"];
-    assert_eq!(plugin["contributions"].as_array().unwrap().len(), 3);
+    assert_eq!(plugin["contributions"].as_array().unwrap().len(), 5);
+    assert!(plugin["hookStats"].is_null() || plugin["hookStats"]["subscribed"].is_array());
     assert_eq!(
         plugin["permissions"]["credentials"][0]["name"],
         "gitlab_pat"
