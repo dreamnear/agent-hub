@@ -509,6 +509,12 @@ pub struct Config {
     /// MCP 聚合代理会话级 config 目录（B2）：`~/.claude-view/plugin_mcp`，
     /// env `AGENT_HUB_PLUGIN_MCP_DIR` 覆盖；每会话一 JSON（不写 `~/.claude`）
     pub plugin_mcp_dir: PathBuf,
+    /// 钩子通知队列上限（B4 ADR-0014 拍板结论 3）：`[plugins] hook_queue_cap`，
+    /// env `AGENT_HUB_PLUGIN_HOOK_QUEUE_CAP` 覆盖；默认 64
+    pub plugin_hook_queue_cap: usize,
+    /// 审计产物每插件保留份数（B4 治理）：`[plugins] audit_keep`，
+    /// env `AGENT_HUB_PLUGIN_AUDIT_KEEP` 覆盖；默认 10，0 = 关闭清理
+    pub plugin_audit_keep: usize,
 }
 
 impl Config {
@@ -724,7 +730,60 @@ impl Config {
                     )
                     .into()
                 }),
+            plugin_hook_queue_cap: PluginHookQueueCapConfig::load(),
+            plugin_audit_keep: PluginAuditKeepConfig::load(),
         }
+    }
+}
+
+/// `[plugins] hook_queue_cap`（B4 ADR-0014）：钩子通知队列上限，默认 64。
+struct PluginHookQueueCapConfig;
+
+impl PluginHookQueueCapConfig {
+    fn load() -> usize {
+        if let Ok(raw) = std::env::var("AGENT_HUB_PLUGIN_HOOK_QUEUE_CAP") {
+            if let Ok(v) = raw.parse::<usize>() {
+                if v > 0 {
+                    return v;
+                }
+            }
+        }
+        let Ok(raw) = std::fs::read_to_string(config_path()) else {
+            return 64;
+        };
+        let Ok(val) = toml::from_str::<toml::Value>(&raw) else {
+            return 64;
+        };
+        val.get("plugins")
+            .and_then(|p| p.get("hook_queue_cap"))
+            .and_then(toml::Value::as_integer)
+            .filter(|v| *v > 0)
+            .map(|v| v as usize)
+            .unwrap_or(64)
+    }
+}
+
+/// `[plugins] audit_keep`（B4 治理）：审计产物每插件保留份数，默认 10；0 = 关闭。
+struct PluginAuditKeepConfig;
+
+impl PluginAuditKeepConfig {
+    fn load() -> usize {
+        if let Ok(raw) = std::env::var("AGENT_HUB_PLUGIN_AUDIT_KEEP") {
+            if let Ok(v) = raw.parse::<usize>() {
+                return v;
+            }
+        }
+        let Ok(raw) = std::fs::read_to_string(config_path()) else {
+            return 10;
+        };
+        let Ok(val) = toml::from_str::<toml::Value>(&raw) else {
+            return 10;
+        };
+        val.get("plugins")
+            .and_then(|p| p.get("audit_keep"))
+            .and_then(toml::Value::as_integer)
+            .map(|v| v.max(0) as usize)
+            .unwrap_or(10)
     }
 }
 

@@ -471,7 +471,16 @@ impl AgentCatalog for ClaudeDriver {
                 mcp_config: placeholder_cfg.clone(),
             };
             let id = match cli::start_bg(&self.bin, Path::new(&spec.cwd), &req).await {
-                Ok(id) => id,
+                Ok(id) => {
+                    // B4 hooks 观察档（ADR-0014 矩阵 claude 行）：spawn 成功
+                    crate::plugins::hooks::dispatch_session_created(
+                        &id,
+                        "claude",
+                        Some(spec.cwd.as_str()),
+                        spec.name.as_deref(),
+                    );
+                    id
+                }
                 Err(e) => {
                     // F-3（tester）：启动失败同样回收占位 config（残留修复——
                     // 原实现 `?` 早退跳过下方清理，plugin_mcp 留 hub-*.json）
@@ -515,6 +524,10 @@ impl AgentCatalog for ClaudeDriver {
             .remove(&id);
         Box::pin(async move {
             let r = cli::stop(&bin, &id).await;
+            // B4 hooks 观察档：进程退出/移除族——stop 成功即会话关闭
+            if r.is_ok() {
+                crate::plugins::hooks::dispatch_session_closed(&id, "claude", Some("stopped"));
+            }
             // F-6：优先按映射回收实际注入文件（占位名 hub-<uuid>.json）；
             // remove_config_sync 兜底（`<id>.json` 命名约定，映射缺失时唯一线索）
             if let Some(p) = injected {
@@ -536,6 +549,10 @@ impl AgentCatalog for ClaudeDriver {
             .remove(&id);
         Box::pin(async move {
             let r = cli::remove(&bin, &id).await;
+            if r.is_ok() {
+                // B4 hooks 观察档：移除 = 会话关闭
+                crate::plugins::hooks::dispatch_session_closed(&id, "claude", Some("removed"));
+            }
             if let Some(p) = injected {
                 let _ = std::fs::remove_file(p);
             }

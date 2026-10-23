@@ -490,6 +490,8 @@ impl super::MessageSender for AcpSendRouter {
 
     fn release(&self, id: &str) -> Result<()> {
         if let Some(session) = self.registry.remove(id) {
+            // B4 hooks 观察档：注册表剪除 = 会话关闭（ADR-0014 矩阵 acp 行）
+            crate::plugins::hooks::dispatch_session_closed(id, "acp", Some("released"));
             // shutdown 含宽限等待，不阻塞同步签名 → 后台收尸
             tokio::spawn(async move { session.conn.shutdown().await });
         }
@@ -793,6 +795,13 @@ impl AcpDriver {
             }
         };
         let new: protocol::SessionNewResult = serde_json::from_value(new_value)?;
+        // B4 hooks 观察档（ADR-0014）：session/new 成功 = 会话创建完成
+        crate::plugins::hooks::dispatch_session_created(
+            &new.session_id,
+            "acp",
+            Some(&cwd.to_string_lossy()),
+            Some(agent_name),
+        );
         Ok((
             AcpSession {
                 feed: registry::AcpFeed::new(new.session_id.clone(), rooms),
@@ -837,18 +846,27 @@ impl AcpDriver {
             )
             .await
         {
-            Ok(_) => Ok((
-                AcpSession {
-                    feed: registry::AcpFeed::new(session_id.to_string(), rooms),
-                    id: session_id.to_string(),
-                    agent: agent_name.into(),
-                    cwd: cwd.to_string_lossy().into_owned(),
-                    model: None,
-                    status: AcpStatus::Idle,
-                    conn,
-                },
-                rx,
-            )),
+            Ok(_) => {
+                // B4 hooks 观察档：session/load 成功 = 接管完成（attach 发现族）
+                crate::plugins::hooks::dispatch_session_created(
+                    session_id,
+                    "acp",
+                    Some(&cwd.to_string_lossy()),
+                    Some(agent_name),
+                );
+                Ok((
+                    AcpSession {
+                        feed: registry::AcpFeed::new(session_id.to_string(), rooms),
+                        id: session_id.to_string(),
+                        agent: agent_name.into(),
+                        cwd: cwd.to_string_lossy().into_owned(),
+                        model: None,
+                        status: AcpStatus::Idle,
+                        conn,
+                    },
+                    rx,
+                ))
+            }
             Err(e) => {
                 conn.shutdown().await;
                 Err(e)

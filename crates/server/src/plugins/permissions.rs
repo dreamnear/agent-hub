@@ -190,13 +190,33 @@ mod tests {
 
     #[test]
     fn unregistered_v1_method_is_denied() {
+        // B4 起 hub.sessions.send 仍是唯一未注册方法（永久不开，专项 ADR 前置）
         let call = PluginCall {
-            method: "hub.sessions.list".into(),
+            method: "hub.sessions.send".into(),
             params: json!({}),
         };
         let deny = check(&call, &decl()).unwrap_err();
         assert_eq!(deny.kind, DenyKind::NotDeclared);
         assert!(deny.message.contains("尚未在本 hub 版本注册"));
+    }
+
+    #[test]
+    fn sessions_read_projection_maps_sessions_domain() {
+        // B4：hub.sessions.list 已注册（只读投影）——sessions:read 声明即放行
+        let mut d = decl();
+        d.data.push("sessions:read".into());
+        let call = PluginCall {
+            method: "hub.sessions.list".into(),
+            params: json!({}),
+        };
+        assert_eq!(check(&call, &d), Ok(()));
+        let messages = PluginCall {
+            method: "hub.sessions.messages".into(),
+            params: json!({ "sessionId": "s1" }),
+        };
+        // messages:read 未声明 → 拒（decl() 无 messages:read）
+        let deny = check(&messages, &d).unwrap_err();
+        assert_eq!(deny.kind, DenyKind::DataDenied);
     }
 
     #[test]

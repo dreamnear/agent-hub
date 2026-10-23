@@ -365,6 +365,15 @@ impl DshDriver {
         }
         let rooms = self.rooms.read().expect("chat_rooms lock");
         if let Some(s) = rooms.get(id) {
+            // B4 hooks 观察档（ADR-0014 矩阵 dsh 行·编码期校正）：dsh 的推送与
+            // 会话房间绑定（backlog 语义：无房间不标记、开门重推）——钩子发射
+            // 只在真实推送路径上，即房间存在时；房间未开的会话不发 onMessageAppend
+            crate::plugins::hooks::dispatch_message_append(
+                id,
+                1,
+                msg.kind.as_str(),
+                msg.text.as_deref(),
+            );
             let _ = s.send(ChatEvent {
                 session_id: id.to_string(),
                 seq: 1,
@@ -702,7 +711,24 @@ impl AgentCatalog for DshDriver {
             let archived = self.archived.lock().expect("dsh archived lock").clone();
             {
                 let mut known = self.known_sessions.lock().expect("dsh known lock");
-                *known = v.items.iter().map(|s| s.session_id.clone()).collect();
+                // B4 hooks 观察档（ADR-0014 矩阵 dsh 行）：mux 会话发现/消失——
+                // 已知账本更新前的 diff 即新现/消失集（账本本身语义不变）
+                let current: std::collections::HashSet<String> =
+                    v.items.iter().map(|s| s.session_id.clone()).collect();
+                for s in &v.items {
+                    if known.insert(s.session_id.clone()) {
+                        crate::plugins::hooks::dispatch_session_created(
+                            &s.session_id,
+                            "dsh",
+                            None,
+                            None,
+                        );
+                    }
+                }
+                for gone in known.difference(&current).cloned().collect::<Vec<_>>() {
+                    known.remove(&gone);
+                    crate::plugins::hooks::dispatch_session_closed(&gone, "dsh", Some("vanished"));
+                }
             }
             let items: Vec<api::DshSession> = v
                 .items
@@ -776,7 +802,24 @@ impl AgentCatalog for DshDriver {
             let archived = self.archived.lock().expect("dsh archived lock").clone();
             {
                 let mut known = self.known_sessions.lock().expect("dsh known lock");
-                *known = v.items.iter().map(|s| s.session_id.clone()).collect();
+                // B4 hooks 观察档（ADR-0014 矩阵 dsh 行）：mux 会话发现/消失——
+                // 已知账本更新前的 diff 即新现/消失集（账本本身语义不变）
+                let current: std::collections::HashSet<String> =
+                    v.items.iter().map(|s| s.session_id.clone()).collect();
+                for s in &v.items {
+                    if known.insert(s.session_id.clone()) {
+                        crate::plugins::hooks::dispatch_session_created(
+                            &s.session_id,
+                            "dsh",
+                            None,
+                            None,
+                        );
+                    }
+                }
+                for gone in known.difference(&current).cloned().collect::<Vec<_>>() {
+                    known.remove(&gone);
+                    crate::plugins::hooks::dispatch_session_closed(&gone, "dsh", Some("vanished"));
+                }
             }
             let items: Vec<api::DshSession> = v
                 .items
@@ -1016,7 +1059,24 @@ impl SessionHistory for DshDriver {
             let archived = self.archived.lock().expect("dsh archived lock").clone();
             {
                 let mut known = self.known_sessions.lock().expect("dsh known lock");
-                *known = v.items.iter().map(|s| s.session_id.clone()).collect();
+                // B4 hooks 观察档（ADR-0014 矩阵 dsh 行）：mux 会话发现/消失——
+                // 已知账本更新前的 diff 即新现/消失集（账本本身语义不变）
+                let current: std::collections::HashSet<String> =
+                    v.items.iter().map(|s| s.session_id.clone()).collect();
+                for s in &v.items {
+                    if known.insert(s.session_id.clone()) {
+                        crate::plugins::hooks::dispatch_session_created(
+                            &s.session_id,
+                            "dsh",
+                            None,
+                            None,
+                        );
+                    }
+                }
+                for gone in known.difference(&current).cloned().collect::<Vec<_>>() {
+                    known.remove(&gone);
+                    crate::plugins::hooks::dispatch_session_closed(&gone, "dsh", Some("vanished"));
+                }
             }
             let items: Vec<api::DshSession> = v
                 .items

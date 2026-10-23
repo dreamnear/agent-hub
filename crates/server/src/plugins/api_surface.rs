@@ -11,7 +11,22 @@ pub const PLUGIN_API_VERSION: u32 = 1;
 
 /// hub 产品版本（semver）：`hub.minHubVersion` 下限校验用。
 /// 与 `CHANGELOG.md` 最新已发布版本同步——发版时随 CHANGELOG 一起更新。
-pub const HUB_VERSION: &str = "0.6.0";
+pub const HUB_VERSION: &str = "0.8.1";
+
+/// 生命周期钩子·观察档固定名集（ADR-0014 拍板结论 1，B4 开放）。
+/// 事后通知、只读、at-most-once；manifest `contributes.hooks[]` 只接受本清单。
+pub const OBSERVER_HOOKS: [&str; 5] = [
+    "onSessionCreate",
+    "onSessionClose",
+    "onMessageAppend",
+    "onIdle",
+    "onJobsChanged",
+];
+
+/// 拦截档钩子名（ADR-0014 第 1 条：v1 明确不开——不实现、不进方法表，
+/// manifest 任何字段出现即审计失败；三前置条件全部成立前不得开放）。
+pub const INTERCEPT_HOOK_NAMES: [&str; 3] =
+    ["beforeMessageSend", "onToolCall", "afterToolResult"];
 
 /// 贡献物类型（v1 六类，ADR-0011 加法：commands / renderers 新增）。
 pub const CONTRIBUTION_TYPES: [&str; 6] = ["tools", "skills", "mcp", "views", "commands", "renderers"];
@@ -39,7 +54,7 @@ pub const BUILTIN_RENDER_EXTS: [&str; 47] = [
 ];
 
 /// `permissions.data` 固定域枚举（ADR-0007 第 2 条）。
-pub const DATA_DOMAINS: [&str; 13] = [
+pub const DATA_DOMAINS: [&str; 14] = [
     "sessions:read",
     "sessions:write",
     "messages:read",
@@ -54,6 +69,8 @@ pub const DATA_DOMAINS: [&str; 13] = [
     "theme:override",
     "files:decorate",
     "settings:read",
+    // B4（ADR-0011 拍板结论 3）：hooks 观察档随批生效
+    "hooks:observe",
 ];
 
 /// hub 维护的高危清单（ADR-0007 第 3 条，v1 固定四项，插件不得摘除自己）。
@@ -154,16 +171,16 @@ pub const RPC_METHODS: &[RpcMethodDef] = &[
         data_domains: &["sessions:read"],
         credentials: &[],
         high_risk: &[],
-        available: false,
-        description: "会话清单（B3）",
+        available: true,
+        description: "会话清单（B4 已注册，只读投影）",
     },
     RpcMethodDef {
         method: "hub.sessions.messages",
         data_domains: &["messages:read"],
         credentials: &[],
         high_risk: &[],
-        available: false,
-        description: "单会话最近消息（B3）",
+        available: true,
+        description: "单会话最近消息（B4 已注册，只读投影）",
     },
     RpcMethodDef {
         method: "hub.notes.read",
@@ -219,7 +236,7 @@ pub struct ApiSchema {
     pub api_version: u32,
     pub hub_version: &'static str,
     pub contributions: [&'static str; 6],
-    pub data_domains: [&'static str; 13],
+    pub data_domains: [&'static str; 14],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,
     pub host_to_view_messages: [&'static str; 5],

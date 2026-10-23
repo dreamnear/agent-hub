@@ -117,6 +117,10 @@ pub struct Contributes {
     /// 服务地址声明（B3，ADR-0013 §12.1：设置项占位 label/placeholder/default）
     #[serde(default)]
     pub services: Vec<ServiceDecl>,
+    /// 生命周期钩子·观察档（B4，ADR-0014）：名集固定五项，逐钩子声明；
+    /// 拦截档名（beforeMessageSend 等）出现在任何字段 = 审计失败
+    #[serde(default)]
+    pub hooks: Vec<String>,
 }
 
 /// 渲染器命中规则（ADR-0012 第 3 条）：ext / fence 全 hub 唯一（含内置占用，
@@ -990,6 +994,57 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
             ));
         }
     }
+
+    // —— 生命周期钩子（B4，ADR-0014：观察档固定名集 + 拦截档全字段拒绝）——
+    for (i, h) in manifest.contributes.hooks.iter().enumerate() {
+        if !api_surface::OBSERVER_HOOKS.contains(&h.as_str()) {
+            let intercept = api_surface::INTERCEPT_HOOK_NAMES.contains(&h.as_str());
+            errors.push(ManifestIssue::new(
+                format!("contributes.hooks[{i}]"),
+                "hook-unknown",
+                if intercept {
+                    format!(
+                        "钩子 {h:?} 属拦截档（v1 明确不开，ADR-0014 第 1 条）：不实现、不进方法表、声明即审计失败"
+                    )
+                } else {
+                    format!("未知钩子 {h:?}（观察档固定名集：{:?}）", api_surface::OBSERVER_HOOKS)
+                },
+            ));
+        }
+    }
+    let mut seen_hooks: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for h in &manifest.contributes.hooks {
+        if !seen_hooks.insert(h.as_str()) {
+            errors.push(ManifestIssue::new(
+                "contributes.hooks",
+                "hook-duplicate",
+                format!("钩子重复声明：{h:?}"),
+            ));
+        }
+    }
+    // 拦截档名字出现在任何字段 = 审计失败（design §12.1；对整个 manifest 的
+    // 键与字符串值做精确匹配——防止拦截语义借未知字段/描述混入）
+    if let Ok(v) = serde_json::from_str::<Value>(raw) {
+        if json_contains_intercept_name(&v) {
+            errors.push(ManifestIssue::new(
+                "contributes.hooks",
+                "hook-intercept-declared",
+                format!(
+                    "拦截档钩子名（{:?}）出现在 manifest 字段中——v1 不开拦截档（ADR-0014 第 1 条），审计失败",
+                    api_surface::INTERCEPT_HOOK_NAMES
+                ),
+            ));
+        }
+    }
+    if !manifest.contributes.hooks.is_empty()
+        && !manifest.permissions.data.iter().any(|d| d == "hooks:observe")
+    {
+        warnings.push(ManifestIssue::new(
+            "permissions.data",
+            "hooks-observe-domain-missing",
+            "声明了 hooks 但 permissions.data 未含 hooks:observe（观察档审计可见域；投递按 contributes.hooks 判定，载荷已最小化）",
+        ));
+    }
     for (i, p) in manifest.permissions.api.iter().enumerate() {
         if let Err(why) = valid_api_pattern(p) {
             errors.push(ManifestIssue::new(
@@ -1114,12 +1169,20 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         }
     }
 
-    // 空贡献物 + 空权限：合法但无实际作用（ADR-0001 第 3 条末段 warning）
-    let no_contrib = manifest.contributes.tools.is_empty()
-        && manifest.contributes.skills.is_empty()
-        && manifest.contributes.mcp.is_empty()
-        && manifest.contributes.views.is_empty()
-        && manifest.contributes.commands.is_empty();
+    // 空贡献物 + 空权限：合法但无实际作用（ADR-0001 第 3 条末段 warning）。
+    // B3 观察项承接：判据覆盖全部 10 类贡献物——renderers-only / hooks-only
+    // 等单类插件不再误报「无实际作用」。
+    let c = &manifest.contributes;
+    let no_contrib = c.tools.is_empty()
+        && c.skills.is_empty()
+        && c.mcp.is_empty()
+        && c.views.is_empty()
+        && c.commands.is_empty()
+        && c.renderers.is_empty()
+        && c.theme_tokens.is_none()
+        && c.file_decorations.is_empty()
+        && c.services.is_empty()
+        && c.hooks.is_empty();
     let no_perm = manifest.permissions.api.is_empty()
         && manifest.permissions.data.is_empty()
         && manifest.permissions.credentials.is_empty()
@@ -1145,6 +1208,22 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         Ok(ParsedManifest { manifest, warnings })
     } else {
         Err(errors)
+    }
+}
+
+/// 拦截档钩子名全字段扫描（B4，ADR-0014 第 1 条）：遍历 manifest JSON 的
+/// 对象键与字符串值，精确匹配拦截档名即命中（子串不误伤正常描述文本）。
+fn json_contains_intercept_name(v: &Value) -> bool {
+    match v {
+        Value::String(s) => api_surface::INTERCEPT_HOOK_NAMES.contains(&s.as_str()),
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, val)| {
+                api_surface::INTERCEPT_HOOK_NAMES.contains(&k.as_str())
+                    || json_contains_intercept_name(val)
+            }),
+        Value::Array(items) => items.iter().any(json_contains_intercept_name),
+        _ => false,
     }
 }
 
@@ -1471,6 +1550,80 @@ mod tests {
         let p = parse(&base()).unwrap();
         let s = serde_json::to_string(&p.manifest).unwrap();
         assert!(s.contains("\"apiVersion\":\"1\""));
+    }
+
+    fn with_hooks(hooks_json: &str) -> String {
+        let b = base();
+        b.replace(
+            "\"views\": [{ \"id\": \"home\", \"title\": \"Home\", \"entry\": \"view/index.html\" }]",
+            &format!(
+                "\"views\": [{{ \"id\": \"home\", \"title\": \"Home\", \"entry\": \"view/index.html\" }}],\n            \"hooks\": {hooks_json}"
+            ),
+        )
+    }
+
+    #[test]
+    fn observer_hooks_parse_and_pass() {
+        // B3 观察项承接：hooks-only（无其他贡献物）不再误报「无实际作用」
+        let raw = r#"{
+          "schemaVersion": 1, "id": "hook-only", "name": "H", "version": "0.1.0",
+          "hub": {"apiVersion": "1"},
+          "contributes": {"hooks": ["onSessionCreate", "onJobsChanged"]},
+          "permissions": {"data": ["hooks:observe"]},
+          "backend": {"command": "node", "args": ["backend/main.js"]}
+        }"#;
+        let p = parse(raw).expect("observer hooks valid");
+        assert_eq!(p.manifest.contributes.hooks.len(), 2);
+        assert!(
+            !p.warnings.iter().any(|w| w.rule == "no-effect"),
+            "hooks-only 插件不应误报无实际作用：{:?}",
+            p.warnings
+        );
+        assert!(
+            !p.warnings.iter().any(|w| w.rule == "hooks-observe-domain-missing"),
+            "已声明 hooks:observe 不应告警"
+        );
+    }
+
+    #[test]
+    fn intercept_hook_name_is_audit_failed() {
+        // 第一红线：拦截档名声明即审计失败（contributes.hooks 内）
+        let raw = with_hooks(r#"["onSessionCreate", "beforeMessageSend"]"#);
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "hook-unknown"), "{errs:?}");
+        // 拦截档名出现在其他字段（未知字段）同样审计失败（design §12.1 全字段）
+        let raw2 = base().replace(
+            "\"name\": \"Demo\",",
+            "\"name\": \"Demo\", \"futureHooks\": [\"onToolCall\"],",
+        );
+        let errs2 = parse(&raw2).expect_err("intercept name in any field must fail");
+        assert!(
+            errs2.iter().any(|e| e.rule == "hook-intercept-declared"),
+            "{errs2:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_hook_and_duplicate_are_located() {
+        let raw = with_hooks(r#"["onNope"]"#);
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "hook-unknown"), "{errs:?}");
+        let raw = with_hooks(r#"["onIdle", "onIdle"]"#);
+        let errs = parse(&raw).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.rule == "hook-duplicate"), "{errs:?}");
+    }
+
+    #[test]
+    fn hooks_without_observe_domain_warns() {
+        let raw = with_hooks(r#"["onIdle"]"#);
+        let p = parse(&raw).expect("valid without domain");
+        assert!(
+            p.warnings
+                .iter()
+                .any(|w| w.rule == "hooks-observe-domain-missing"),
+            "{:?}",
+            p.warnings
+        );
     }
 }
 

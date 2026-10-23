@@ -54,6 +54,9 @@ pub struct OpencodeDriver {
     /// 已推送去重键（sessionID → key 集）。page()/full_history() 播种全量，
     /// SSE/send 增量推送据此跳过已在页内的消息（防重复渲染）。
     delivered: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    /// 已见会话账本（B4 hooks：serve 会话发现/消失 → onSessionCreate/Close 的
+    /// 去重依据；每次 list 对账一次，新现 → create，消失 → close）
+    seen_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
 impl OpencodeDriver {
@@ -68,6 +71,7 @@ impl OpencodeDriver {
             events_tx,
             busy: Arc::new(Mutex::new(HashMap::new())),
             delivered: Arc::new(Mutex::new(HashMap::new())),
+            seen_sessions: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -84,6 +88,29 @@ impl OpencodeDriver {
             .lock()
             .expect("opencode busy lock")
             .insert(id.to_string(), busy);
+    }
+
+    /// 会话窗口对账（B4 hooks）：与已见账本 diff，新现/消失各发一次。
+    /// fail-soft：账本锁异常直接跳过（hooks 是尽力告知，不影响清单主链路）。
+    fn reconcile_session_hooks(&self, sessions: &[api::OpencodeSession]) {
+        let Ok(mut seen) = self.seen_sessions.lock() else {
+            return;
+        };
+        let current: HashSet<String> = sessions.iter().map(|s| s.id.clone()).collect();
+        for s in sessions {
+            if seen.insert(s.id.clone()) {
+                crate::plugins::hooks::dispatch_session_created(
+                    &s.id,
+                    "opencode",
+                    Some(s.directory.as_str()),
+                    Some(s.title.as_str()),
+                );
+            }
+        }
+        for gone in seen.difference(&current).cloned().collect::<Vec<_>>() {
+            seen.remove(&gone);
+            crate::plugins::hooks::dispatch_session_closed(&gone, "opencode", Some("vanished"));
+        }
     }
 
     fn is_busy(&self, id: &str) -> bool {
@@ -114,6 +141,14 @@ impl OpencodeDriver {
             if !seen.insert(c.key) {
                 continue;
             }
+            // B4 hooks 观察档（ADR-0014 矩阵 opencode 行）：去重后的新条目即发射
+            //（与房间订阅无关——opencode 泵无房间也计数）
+            crate::plugins::hooks::dispatch_message_append(
+                id,
+                pushed as u64 + 1,
+                c.msg.kind.as_str(),
+                c.msg.text.as_deref(),
+            );
             if let Some(s) = sender {
                 let _ = s.send(ChatEvent {
                     session_id: id.to_string(),
@@ -303,6 +338,9 @@ impl AgentCatalog for OpencodeDriver {
             let url = format!("http://127.0.0.1:{port}/experimental/session");
             let sessions: Vec<api::OpencodeSession> =
                 tokio::time::timeout(REQ_TIMEOUT, http::get_json(&url)).await??;
+            // B4 hooks 观察档（ADR-0014 矩阵 opencode 行）：serve 会话发现/消失。
+            // list 是 hub 侧唯一的会话窗口（对账点）；新现 → create，消失 → close。
+            self.reconcile_session_hooks(&sessions);
             // 默认只列有活跃 turn 的会话（busy）：opencode 非 busy 会话是 SQLite
             // 历史（无进程），全部进侧栏几年后不可读（用户定案，参照 claude bg 只
             // 列活进程）。复活路径：对历史会话 send → busy 置位 → 下次 list 即出现。

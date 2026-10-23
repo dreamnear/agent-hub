@@ -734,6 +734,14 @@ async fn tail_file(
             for line in raw.lines().skip(last_lines as usize) {
                 for message in parse_line(line) {
                     seq += 1;
+                    // B4 hooks 观察档（ADR-0014）：消息落库点发射，fire-and-forget，
+                    // 载荷最小化（messages:read 门）在 plugins::hooks 内逐插件裁决
+                    crate::plugins::hooks::dispatch_message_append(
+                        &session_label,
+                        seq,
+                        message.kind.as_str(),
+                        message.text.as_deref(),
+                    );
                     let _ = tx.send(ChatEvent {
                         session_id: session_label.clone(),
                         message,

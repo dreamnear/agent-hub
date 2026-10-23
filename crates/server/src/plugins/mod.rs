@@ -9,6 +9,7 @@ pub mod api_surface;
 pub mod approvals;
 pub mod audit;
 pub mod credentials;
+pub mod hooks;
 pub mod manifest;
 pub mod mcp_config;
 pub mod mcp_proxy;
@@ -59,6 +60,10 @@ pub struct PluginPaths {
     pub projects_file: PathBuf,
     pub scan_secs: u64,
     pub transient: Vec<PathBuf>,
+    /// 钩子通知队列上限（B4 ADR-0014；`[plugins] hook_queue_cap`，默认 64）
+    pub hook_queue_cap: usize,
+    /// 审计产物每插件保留份数（B4 治理；`[plugins] audit_keep`，默认 10）
+    pub audit_keep: usize,
 }
 
 impl PluginPaths {
@@ -72,6 +77,8 @@ impl PluginPaths {
             projects_file: cfg.projects_file.clone(),
             scan_secs: cfg.plugin_scan_secs,
             transient: cfg.plugin_transient_dirs.clone(),
+            hook_queue_cap: cfg.plugin_hook_queue_cap,
+            audit_keep: cfg.plugin_audit_keep,
         }
     }
 }
@@ -149,6 +156,9 @@ pub struct PluginView {
     pub theme_tokens: Option<ThemeTokensView>,
     pub file_decorations: Vec<FileDecorationView>,
     pub services: Vec<ServiceView>,
+    /// 生命周期钩子订阅与投递统计（B4，ADR-0014：丢弃计数管理页可见）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_stats: Option<hooks::HookStats>,
     pub backend: BackendInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
@@ -246,6 +256,35 @@ pub type AgentCwdProvider = Arc<
         + Sync,
 >;
 
+/// 空闲探针提供方（B4 onIdle 埋点）：返回当前运行中（Working/NeedsInput）会话数。
+pub type IdleProbeProvider = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = usize> + Send>> + Send + Sync,
+>;
+
+/// 会话清单提供方（B4 `hub.sessions.list` 只读投影）：drivers 全量聚合。
+pub type SessionsProvider = Arc<
+    dyn Fn()
+        -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Vec<crate::models::AgentSummary>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+/// 单会话最近消息提供方（B4 `hub.sessions.messages` 只读投影）：sessionId 解析 +
+/// 既有分页读取复用（不碰消息数据层）。
+pub type MessagesProvider = Arc<
+    dyn Fn(
+            &str,
+            usize,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<crate::models::ChatMessage>, String>>
+                    + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
 pub struct PluginManager {
     pub paths: PluginPaths,
     pub registry: Arc<Registry>,
@@ -255,10 +294,17 @@ pub struct PluginManager {
     /// 高危审批单表（B2 批3）：mcp-proxy 经 loopback 落单 + UI 决策，
     /// Approval/Rejection 决定入插件故障记录域
     pub approvals: Arc<approvals::ApprovalStore>,
+    /// 生命周期钩子·观察档总线（B4，ADR-0014）：dispatch 经门面/本句柄均可
+    pub hooks: Arc<hooks::HooksBus>,
     pub events_tx: broadcast::Sender<HubEvent>,
     /// 装配后回填的 agent cwd 提供方（`hub.projects.effective` 聚合用；
     /// 构造期为 None——drivers 在 AppState 装配序列里晚于插件门面建成）
     agent_cwds: StdMutex<Option<AgentCwdProvider>>,
+    /// 空闲探针提供方（B4 onIdle：返回当前运行中会话数；装配序列回填）
+    idle_probe: StdMutex<Option<IdleProbeProvider>>,
+    /// 会话只读投影提供方（B4 hub.sessions.*；装配序列回填，未装配拒答）
+    sessions: StdMutex<Option<SessionsProvider>>,
+    messages: StdMutex<Option<MessagesProvider>>,
     /// 工程便签存储路径（B3 `hub.notes.read/write`；与 /api/notes 同一文件）
     notes_file: StdMutex<Option<PathBuf>>,
     /// 定时任务管理器回填（B3 `hub.tasks.list/toggle`；与 /api/tasks 同一实例）
@@ -282,22 +328,58 @@ impl PluginManager {
         let paths = PluginPaths::from_config(cfg);
         let registry = Arc::new(Registry::open(paths.state_file.clone()));
         let credentials = Arc::new(CredentialsStore::load(paths.credentials_file.clone()));
-        Arc::new(Self {
+        let bus = hooks::HooksBus::new(paths.hook_queue_cap);
+        let me = Arc::new(Self {
             registry,
             supervisor: Arc::new(Supervisor::new()),
             credentials,
             tickets: Arc::new(view_ticket::TicketStore::default()),
             approvals: Arc::new(approvals::ApprovalStore::new()),
+            hooks: bus.clone(),
             events_tx,
             paths,
             agent_cwds: StdMutex::new(None),
+            idle_probe: StdMutex::new(None),
+            sessions: StdMutex::new(None),
+            messages: StdMutex::new(None),
             notes_file: StdMutex::new(None),
             tasks: StdMutex::new(None),
             scan_cache: RwLock::new(scanner::ScanOutcome::default()),
             locks: StdMutex::new(HashMap::new()),
             retries: StdMutex::new(HashMap::new()),
             asset_cache: RwLock::new(HashMap::new()),
-        })
+        });
+        bus.bind(&me);
+        me
+    }
+
+    /// 空闲探针回填（B4 onIdle 埋点；AppState 装配序列调用）。
+    pub fn set_idle_probe(&self, probe: IdleProbeProvider) {
+        self.idle_probe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(probe);
+    }
+
+    /// 会话清单只读投影回填（B4 hub.sessions.list；AppState 装配序列调用）。
+    pub fn set_sessions_provider(&self, provider: SessionsProvider) {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(provider);
+    }
+
+    /// 单会话消息只读投影回填（B4 hub.sessions.messages）。
+    pub fn set_messages_provider(&self, provider: MessagesProvider) {
+        self.messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(provider);
+    }
+
+    /// 钩子发射（观察档；本句柄与全局门面等价，进程内优先走门面）。
+    pub fn dispatch_hook(&self, hook: &str, params: Value) {
+        self.hooks.dispatch(hook, params);
     }
 
     /// 装配接线（AppState::from_config 末段调用）：drivers 全部注册完成后回填
@@ -353,6 +435,16 @@ impl PluginManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let messages = self
+            .messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Arc::new(HubRpcHandler {
             registry: self.registry.clone(),
             credentials: self.credentials.clone(),
@@ -361,6 +453,8 @@ impl PluginManager {
             agent_cwds,
             notes_file,
             tasks,
+            sessions,
+            messages,
             approvals: self.approvals.clone(),
             events_tx: self.events_tx.clone(),
         })
@@ -445,6 +539,47 @@ impl PluginManager {
                 me.monitor_once().await;
             }
         });
+
+        // B4 onJobsChanged（ADR-0014 §12.5 矩阵：HubEvent 单点转发）——
+        // 订阅既有广播通道，JobsChanged → onJobsChanged，drivers 零改动
+        let bus = self.hooks.clone();
+        let mut rx = self.events_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(HubEvent::JobsChanged { id }) => {
+                        bus.dispatch("onJobsChanged", json!({ "id": id }));
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(missed = n, "钩子 JobsChanged 订阅落后（事件已丢）");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        // B4 onIdle（忙→闲翻转单点）：轮询空闲探针（默认 5s），运行数 >0 → 0 时发射
+        if let Some(probe) = self
+            .idle_probe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            let bus = self.hooks.clone();
+            tokio::spawn(async move {
+                let mut prev: usize = 0;
+                loop {
+                    let now = probe().await;
+                    if prev > 0 && now == 0 {
+                        // 忙→闲翻转点（统一归一逻辑处，单点——轮询计数的翻转即归一）
+                        bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));
+                    }
+                    prev = now;
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            });
+        }
     }
 
     /// 后台监视一周期（纯逻辑可测）：死进程 → 崩溃记录 + 退避重试；空闲 → 回收。
@@ -693,6 +828,11 @@ impl PluginManager {
                     default: s.default.clone(),
                 })
                 .collect(),
+            hook_stats: if m.contributes.hooks.is_empty() {
+                None
+            } else {
+                self.hooks.stats_for(&p.entry.id, m.contributes.hooks.clone())
+            },
             backend: BackendInfo {
                 running: running.is_some(),
                 pid: running.as_ref().and_then(|r| r.pid),
@@ -801,6 +941,14 @@ impl PluginManager {
             if let Err(e) = audit::persist(&item.report, &self.paths.audit_dir) {
                 tracing::warn!(plugin = %item.id, error = %e, "审计产物落盘失败");
             }
+        }
+        // B4 治理（需求功能点 6）：按保留策略清理审计产物（每插件保留 N 份）
+        match audit::prune_artifacts(&self.paths.audit_dir, self.paths.audit_keep) {
+            Ok(removed) if removed > 0 => {
+                tracing::info!(removed, keep = self.paths.audit_keep, "审计产物按保留策略清理");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "审计产物清理失败"),
         }
         let discovered = outcome.items.len();
         let last = outcome.last_scan_at.clone();
@@ -982,6 +1130,7 @@ impl PluginManager {
         // 停用：先停进程组与票据，再从查询面消失（无缓存窗口）
         self.supervisor.stop(id).await;
         self.tickets.revoke_plugin(id);
+        self.hooks.forget(id);
         self.retries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1058,6 +1207,7 @@ impl PluginManager {
         };
         self.supervisor.stop(id).await;
         self.tickets.revoke_plugin(id);
+        self.hooks.forget(id);
         self.retries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1072,6 +1222,12 @@ impl PluginManager {
                 if let Err(e) = std::fs::remove_dir_all(&data) {
                     tracing::warn!(plugin = %id, error = %e, "插件自持数据清除失败");
                 }
+            }
+            // B4 治理：purge_data 同包 purge_audit（卸载可选随卸载清理，需求功能点 6）
+            let _ = audit::purge_plugin_artifacts(&self.paths.audit_dir, id);
+            let versions = versions_root(&self.paths).join(id);
+            if versions.is_dir() {
+                let _ = std::fs::remove_dir_all(&versions);
             }
         }
         let _ = p;
@@ -1226,21 +1382,8 @@ impl PluginManager {
                     return Err(RpcError::Busy("高危确认等待超时（120s），可重试".into()));
                 }
             };
-            let (kind, verb) = match decision {
-                approvals::Decision::Approve => (FaultKind::Approval, "批准"),
-                approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
-            };
-            let _ = self.registry.push_record(
-                id,
-                FaultRecord {
-                    at: now_rfc3339(),
-                    kind,
-                    message: self.credentials.scrub(&format!(
-                        "高危工具 {tool_full} · 用户{verb} · {} · 参数 {}",
-                        issued.id, digest
-                    )),
-                },
-            );
+            // O-1 双留痕收敛（B3 review-1 M13）：决策留痕唯一落点 = decide_approval；
+            // 本执行点不再重复落 Approval/Rejection（同一次决策此前落两条）
             if decision == approvals::Decision::Reject {
                 return Err(RpcError::Violation(format!(
                     "高危工具 {tool_full} 被用户拒绝，未执行"
@@ -1363,6 +1506,10 @@ struct HubRpcHandler {
     notes_file: Option<PathBuf>,
     /// 定时任务管理器（B3 hub.tasks.*；None = 未装配，方法拒答）
     tasks: Option<Arc<crate::tasks::TaskManager>>,
+    /// 会话只读投影（B4 hub.sessions.list；None = 未装配，方法拒答）
+    sessions: Option<SessionsProvider>,
+    /// 单会话消息只读投影（B4 hub.sessions.messages；None = 未装配，方法拒答）
+    messages: Option<MessagesProvider>,
     agent_cwds: AgentCwdProvider,
     /// 高危审批单表（B2 批3）：`hub.sessions.send` 等高危方法命中
     /// HighRiskNeedsApproval 时落单阻塞等待（设计 §7）
@@ -1383,6 +1530,8 @@ impl HubCallHandler for HubRpcHandler {
         let events_tx = self.events_tx.clone();
         let notes_file = self.notes_file.clone();
         let tasks = self.tasks.clone();
+        let sessions = self.sessions.clone();
+        let messages = self.messages.clone();
         Box::pin(async move {
             let Some(p) = registry.get(&plugin_id) else {
                 return Err(RpcError::Unauthorized(format!("插件 {plugin_id} 未安装")));
@@ -1425,21 +1574,9 @@ impl HubCallHandler for HubRpcHandler {
                                     ));
                                 }
                             };
-                        let (kind, verb) = match decision {
-                            approvals::Decision::Approve => (FaultKind::Approval, "批准"),
-                            approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
-                        };
-                        let _ = registry.push_record(
-                            &plugin_id,
-                            FaultRecord {
-                                at: now_rfc3339(),
-                                kind,
-                                message: credentials.scrub(&format!(
-                                    "高危方法 {method} · 用户{verb} · {}",
-                                    issued.id
-                                )),
-                            },
-                        );
+                        // O-1 双留痕收敛（B3 review-1 M13）：决策留痕唯一落点 =
+                        // decide_approval（UI 决策端点）；此处不再重复落 Approval/
+                        // Rejection——工具执行点与方法层只在执行结果上有差异时另行留痕
                         if decision == approvals::Decision::Reject {
                             return Err(RpcError::Violation(format!(
                                 "高危方法 {method} 被用户拒绝，未执行"
@@ -1600,6 +1737,58 @@ impl HubCallHandler for HubRpcHandler {
                         .unwrap_or_default();
                     Ok(json!({ "projects": projects }))
                 }
+                // —— B4 会话只读投影（需求功能点 2；hub.sessions.send 永久不做）——
+                "hub.sessions.list" => {
+                    let provider = sessions.clone().ok_or_else(|| {
+                        RpcError::PluginError("sessions 投影未装配（hub 内部状态）".into())
+                    })?;
+                    let agents = provider().await;
+                    let items: Vec<Value> = agents
+                        .iter()
+                        .map(|a| {
+                            json!({
+                                "driver": a.driver,
+                                "id": a.id,
+                                "sessionId": a.session_id,
+                                "name": a.name,
+                                "cwd": a.cwd,
+                                "state": a.group.as_str(),
+                                "detail": a.detail,
+                                "startedAt": a.started_at,
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "sessions": items }))
+                }
+                "hub.sessions.messages" => {
+                    let session_id = params
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| RpcError::PluginError("缺少 sessionId 参数".into()))?;
+                    let limit = params
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(20)
+                        .clamp(1, 200) as usize;
+                    let provider = messages.clone().ok_or_else(|| {
+                        RpcError::PluginError("messages 投影未装配（hub 内部状态）".into())
+                    })?;
+                    let msgs = provider(session_id, limit).await.map_err(|e| {
+                        RpcError::PluginError(credentials.scrub(&e))
+                    })?;
+                    let items: Vec<Value> = msgs
+                        .iter()
+                        .map(|m| {
+                            json!({
+                                "kind": m.kind.as_str(),
+                                "text": m.text.as_deref().map(|t| credentials.scrub(t)),
+                                "ts": m.ts,
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "sessionId": session_id, "messages": items }))
+                }
                 "hub.projects.effective" => {
                     // 可验证工程清单（预览反馈第 3 轮）：工程注册表 ∪ 全部 agent cwd 去重，
                     // 每项含 path 与 source（registry | agent-cwd）——视图下拉据此让用户
@@ -1680,6 +1869,12 @@ fn plugin_dir_of(p: &InstalledPlugin, paths: &PluginPaths) -> PathBuf {
     } else {
         paths.plugins_dir.join(&p.entry.id)
     }
+}
+
+/// 旧版副本根（B4 更新流，ADR-0008 拍板结论 4 的加法目录约定：
+/// `plugins/.versions/<id>/<hash>/`；scanner 一层深扫描遇无 plugin.json 目录静默跳过）。
+fn versions_root(paths: &PluginPaths) -> PathBuf {
+    paths.plugins_dir.join(".versions")
 }
 
 /// 目录体积（视图资产展示用；不跟随符号链接）。
