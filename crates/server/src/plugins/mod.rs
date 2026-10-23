@@ -97,6 +97,62 @@ struct MarketCache {
 
 const MARKET_CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// 空闲翻转到滑确认状态机（B4 方案 1 收口，主会话 2026-10-24 裁决）。
+///
+/// 设计动因（收敛分析，tester-report-4）：探针读「空」有两义——真实空闲，或
+/// **单次读降级**（claude CLI 高并发读时 `list` 内部静默降级 Ok(空集)，无 Err、
+/// 与 /api/agents 的并发调用呈输家分歧；dsh 401 同族降级 Ok(空)）。把一次空
+/// 观测当空闲会误发 onIdle；忙信号则只有真实工作会话才会产生（降级只造假空、
+/// 不造假忙）。
+///
+/// 因此：忙 → 立即武装；连续 `CONFIRM_ZEROS` 次空观测（5s × 3 ≈ 15s 确认窗，
+/// 约两倍于单次降级窗口的估计宽度）才判定忙→闲翻转并发射；任何忙观测重置
+/// 去抖计数（忙可信）。未武装（启动即全空）不发射——无忙基线无翻转。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdleFlipDetector {
+    /// 曾观测到忙（now > 0）
+    armed: bool,
+    /// 连续空观测计数
+    zero_streak: u32,
+}
+
+impl IdleFlipDetector {
+    /// 判闲需连续空观测次数（约 15s，5s 间隔）
+    pub const CONFIRM_ZEROS: u32 = 3;
+
+    pub fn new() -> Self {
+        Self {
+            armed: false,
+            zero_streak: 0,
+        }
+    }
+
+    /// 喂一次采样。返回 true = 判定忙→闲翻转（调用方应发射 onIdle）。
+    pub fn feed(&mut self, now: usize) -> bool {
+        if now > 0 {
+            self.armed = true;
+            self.zero_streak = 0;
+            return false;
+        }
+        if !self.armed {
+            return false; // 从未观测到忙：启动即全空 = 无翻转基线
+        }
+        self.zero_streak += 1;
+        if self.zero_streak >= Self::CONFIRM_ZEROS {
+            self.armed = false;
+            self.zero_streak = 0;
+            return true;
+        }
+        false
+    }
+}
+
+impl Default for IdleFlipDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 侧栏导航数据（ADR-0004 第 2 条）：仅「启用（就绪）」与「运行故障」且有视图贡献。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -397,6 +453,9 @@ impl PluginManager {
         }
         let bus = self.hooks.clone();
         tokio::spawn(async move {
+            // 忙→闲翻转点（统一归一逻辑处，单点）：去抖状态机——单次空观测
+            // （读降级形态）不翻转（tester-report-4 收敛分析 + 主会话方案 1 裁决）
+            let mut detector = IdleFlipDetector::new();
             let mut prev: usize = 0;
             loop {
                 let now = probe().await;
@@ -404,8 +463,8 @@ impl PluginManager {
                     // 采样变化留痕（tester-report-3 建议的现场自证；翻转可观测）
                     tracing::debug!(from = prev, to = now, "onIdle 探针计数变化");
                 }
-                if prev > 0 && now == 0 {
-                    // 忙→闲翻转点（统一归一逻辑处，单点——轮询计数的翻转即归一）
+                if detector.feed(now) {
+                    tracing::info!("onIdle：忙→闲确认（连续 {} 次空观测）", IdleFlipDetector::CONFIRM_ZEROS);
                     bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));
                 }
                 prev = now;
@@ -2449,6 +2508,39 @@ mod tests {
             "{:?}",
             report.contributions
         );
+    }
+
+    #[test]
+    fn idle_flip_detector_debounces_read_degradation() {
+        // B4 方案 1 语义锁（主会话 2026-10-24 裁决）：
+        // 单次空观测（读降级形态）不翻转；连续 CONFIRM_ZEROS 次空才判闲；
+        // 忙观测重置去抖；未武装（启动即全空）不发射。
+        let mut d = IdleFlipDetector::new();
+        // 1) 启动即全空：无忙基线 → 永不翻转
+        for _ in 0..(IdleFlipDetector::CONFIRM_ZEROS + 2) {
+            assert!(!d.feed(0), "未武装不得翻转");
+        }
+        // 2) 忙 → 偶发单零（读降级）→ 忙：不翻转
+        assert!(!d.feed(1));
+        assert!(!d.feed(0)); // 单次降级
+        assert!(!d.feed(1)); // 忙重置去抖
+        // 3) 忙 → 连续 CONFIRM_ZEROS 次空：第 3 次翻转，之后重置
+        assert!(!d.feed(1));
+        assert!(!d.feed(0));
+        assert!(!d.feed(0), "2/3 次空仍不翻");
+        assert!(d.feed(0), "3/3 次空 → 判闲翻转");
+        assert!(!d.feed(0), "翻转后重置：需重新武装");
+        // 4) 可再武装再翻：忙 → 连续零 → 再翻
+        assert!(!d.feed(2));
+        assert!(!d.feed(0));
+        assert!(!d.feed(0));
+        assert!(d.feed(0));
+    }
+
+    #[test]
+    fn idle_flip_detector_confirms_window_is_reasonable() {
+        // 确认窗 = 5s × 3 ≈ 15s（约两倍于单次降级窗口估计宽度）；常量即语义
+        assert_eq!(IdleFlipDetector::CONFIRM_ZEROS, 3);
     }
 
     #[test]

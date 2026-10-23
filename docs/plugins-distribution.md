@@ -83,6 +83,11 @@
 - 插件声明 `contributes.hooks: [...]`（名集固定五项：`onSessionCreate` /
   `onSessionClose` / `onMessageAppend` / `onIdle` / `onJobsChanged`），backend
   经 stdio JSON-RPC notification（`hook/<钩子名>`，无 id 不等待）接收通知。
+- **onIdle 为 best-effort 观察语义**：探针轮询（5s）+ 去抖确认（连续 3 次空
+  观测 ≈15s 才判定忙→闲翻转）——单次空观测（读降级形态，如 claude CLI 高并
+  发读在 list 内部静默降级空清单）不触发翻转。已知边界：并发读竞争下探针侧
+  可能持续读空而 API 侧正常，此时 onIdle 缺席；需要确定性的请经声明面 RPC
+  （如 `hub.sessions.list`）自建轮询。
 - **at-most-once**：每插件 FIFO 队列（上限默认 64，`[plugins] hook_queue_cap`
   可调），溢出丢弃 + 丢弃计数（`/api/plugins` 的 `hookStats.dropped`，管理页
   可见）；不重试、不回压会话链路。插件离线期间的事件即丢——需要完整流请经

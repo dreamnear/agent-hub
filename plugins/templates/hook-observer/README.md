@@ -15,7 +15,9 @@ backend 经 stdio JSON-RPC notification（`hook/<钩子名>`，无 id 不等待�
 - 发射时机（per-driver 覆盖矩阵见技术设计 §12.5，编码期校正）：
   claude=spawn 成功/stop/remove；acp=session/new|load 成功/release；
   opencode=serve 会话发现/消失（list 对账）；dsh=mux 会话发现/消失 + 房间推送点；
-  pi=ensure_started/stop；onJobsChanged=HubEvent 单点转发；onIdle=忙→闲轮询翻转点。
+  pi=ensure_started/stop；onJobsChanged=HubEvent 单点转发；onIdle=忙→闲轮询翻转点
+  （**best-effort + 去抖确认**：连续 3 次空观测 ≈15s 才判闲；claude CLI 高并发
+  读降级为已知边界——详见仓库 `docs/plugins-distribution.md`）。
   dsh 的 onMessageAppend 仅在会话房间存在（前端打开）时发射——dsh 推送与房间
   绑定是既有 backlog 语义，B4 未改推送链路。
 
