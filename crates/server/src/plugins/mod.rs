@@ -2394,6 +2394,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hook_observer_template_passes_audit() {
+        // 模板即样例即测试（ADR-0015）：hook-observer 模板占位替换后必须过
+        // 静态审计（零 errors）且贡献物清单含 hook 类
+        let template = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/templates/hook-observer");
+        assert!(template.join("plugin.json").is_file());
+        let tmp = tempfile::tempdir().unwrap();
+        copy_dir_recursive(&template, tmp.path()).unwrap();
+        let manifest_path = tmp.path().join("plugin.json");
+        let raw = std::fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("{{PLUGIN_ID}}", "hook-observer-demo")
+            .replace("{{PLUGIN_NAME}}", "Hook Observer Demo")
+            .replace("{{AUTHOR}}", "agent-hub");
+        std::fs::write(&manifest_path, raw).unwrap();
+        let creds = credentials::CredentialsStore::load(
+            std::env::temp_dir().join("hub-test-no-such-credentials.json"),
+        );
+        let report = audit::audit_dir(tmp.path(), &creds);
+        assert!(report.installable, "{:?}", report.errors);
+        assert!(
+            report
+                .contributions
+                .iter()
+                .any(|c| c.kind == "hook" && c.id == "onSessionCreate"),
+            "{:?}",
+            report.contributions
+        );
+    }
+
+    #[test]
     fn view_root_uses_view_subtree() {
         let raw = r#"{"schemaVersion":1,"id":"vp","name":"V","version":"0.1.0","hub":{"apiVersion":"1"},
           "contributes":{"views":[{"id":"a","title":"A","entry":"view/index.html"}]}}"#;

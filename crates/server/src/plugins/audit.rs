@@ -530,6 +530,16 @@ pub fn contributions_of(m: &super::manifest::Manifest) -> Vec<Contribution> {
             path: None,
         });
     }
+    for h in &m.contributes.hooks {
+        out.push(Contribution {
+            kind: "hook".into(),
+            id: h.clone(),
+            name: h.clone(),
+            description: Some("观察档 · 事后通知只读".into()),
+            risk: "-".into(),
+            path: None,
+        });
+    }
     out
 }
 
