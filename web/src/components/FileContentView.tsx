@@ -20,8 +20,9 @@ export default function FileContentView({ path }: Props): ReactElement {
     queryKey: ['docsFile', path],
     queryFn: () => api.docsFile(path),
     // #36 评估项纳入（同根因、成本小）：页签挂载期（文件打开中）按周期重取，
-    // 外部追加/修改在 DOC_REFRESH_MS 窗口内反映到内容
-    refetchInterval: DOC_REFRESH_MS,
+    // 外部追加/修改在 DOC_REFRESH_MS 窗口内反映到内容；查询出错（如文件被删
+    // 404）即停周期重取，防页签期内空转（review-1 MINOR）
+    refetchInterval: (query) => (query.state.error != null ? false : DOC_REFRESH_MS),
   });
 
   if (file.isLoading) {
