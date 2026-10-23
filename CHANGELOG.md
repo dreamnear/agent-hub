@@ -4,6 +4,31 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.8.0] - 2026-10-23
+
+本批：插件体系 B3 前端家族（#35，epic agent-hub-mng#11）——渲染器 / 主题 / 装饰 / 视图 API 一次上线；B1/B2 遗留承接单清零。
+
+### Added — 前端家族扩展点（#35）
+
+- **内容渲染器（声明档）**：插件在 manifest 声明「格式→宿主内置引擎」，宿主转译进 docRender 注册表（**插件零代码进宿主**）；首批引擎 mermaid（动态 chunk、strict 安全级、离屏容器 + 产物清扫）/ plantuml-server / image / html-sanitized；match 全 hub 唯一（跨插件冲突审计拒装）、内置 id 禁覆盖；渲染服务地址一律用户设置（manifest 内嵌 URL = 审计失败）；失败/超时/未配置三径回退源码展示（不假渲染）
+- **内容渲染器（iframe 档，ADR-0012 双轨）**：复杂渲染由插件自带沙箱页承载——`DeclarativeIframeRenderer`（票据 + 无 `allow-same-origin`、零宿主上下文执行）+ 三条消息契约 + IntersectionObserver 懒挂载 + 15s 超时；纯渲染器插件（无 views）资产正常服务
+- **主题 token 覆盖**：插件提交覆盖表（139 个 `--c-*` 白名单、亮暗成对）；语义配对表 4.5:1 硬校验不过**拒装**（报具体对与比例）；同刻仅一个主题插件（单槽互斥含启动残留确定性规则）；停用即恢复原主题、三态自动跟随
+- **文件装饰**：扩展名映射装饰（SVG 经 `<img>` 票据路由，零 inline 注入面；装饰色 3:1 非文字标准）
+- **视图 API 完整化**：`view.data` 持久化（示例插件绑定迁移验收）+ `hub.notes.read/write` + `hub.tasks.list/toggle`（toggle 走高危审批门）；CSS 硬编码色值扫描正式化（`:root` 兜底行豁免）+ 视图体积展示
+
+### Fixed — B1/B2 遗留承接单清零
+
+- M9：`risk:high` 工具缺 `highRisk` 声明现在审计拒装（补齐 ADR-0001 拍板 4）
+- M2：tool-invoke 高危调用跨驱动对称走审批（F-12 回归锁在位）
+- M7：permissions 高危死逻辑清理对账
+- M1：mcp_proxy 会话级实例复用（OnceCell，无 per-call 泄漏）
+- 途中修复：manifest `Contributes` 缺 camelCase 解析（与 B2 `Permissions` 同款缺陷，三连前科已入记忆）；iframe 档资产路径口径三层统一（F-14）；commit 阴影清除（F-15）；mermaid 错误横幅泄漏（F-7）
+
+### 工单索引
+
+- 本批：#35（B3 前端家族）
+- B4 承接：O-1 双留痕收敛 / #32 残留竞态语义 / sessions 族只读投影（send v1 永久不做，主会话裁决留痕）/ green-text 暗色 3.37:1 基线色值修正（随下个 patch）/ 观察项三条
+
 ## [0.7.0] - 2026-10-21
 
 本批：插件体系 B2 会话能力桥（#31，epic agent-hub-mng#11）——插件的工具/MCP/skill/command 正式进入会话链路。
