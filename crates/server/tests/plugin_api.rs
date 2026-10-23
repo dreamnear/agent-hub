@@ -1582,3 +1582,82 @@ async fn update_apply_body_without_redundant_id_is_accepted() {
     .await;
     assert_eq!(status, StatusCode::OK, "{text}");
 }
+
+/// FAIL（tester-report-2）回归锁：onIdle 忙→闲翻转可达。
+/// 探针任务随 set_idle_probe 回填启动（回填即启动，无装配序死角）——用短间隔
+/// 探针模拟 1→1→0 序列，订阅 onIdle 的插件（backend 不可启）应收到投递尝试
+///（队列丢弃计数 ≥1 = dispatch 发生且进入投递路径）。
+#[tokio::test]
+async fn on_idle_flip_dispatches_via_probe_backfill() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = cfg_with(&dir);
+    cfg.plugin_scan_secs = 0;
+    // 直构 PluginManager（不经 AppState）：from_config 会先回填 5s 探针并占用
+    // 「回填即启动」的单轮名额，测试要用可控短间隔探针
+    let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+    let manager = server::plugins::PluginManager::new(&cfg, events_tx);
+
+    // 注册一个订阅 onIdle 的插件（backend 命令不存在 → 投递失败 → dropped 计数）
+    let p = dir.path().join("plugins/idle-observer");
+    std::fs::create_dir_all(&p).unwrap();
+    std::fs::write(
+        p.join("plugin.json"),
+        r#"{"schemaVersion":1,"id":"idle-observer","name":"IdleObs","version":"0.1.0","hub":{"apiVersion":"1"},
+            "contributes":{"hooks":["onIdle"]},
+            "permissions":{"data":["hooks:observe"]},
+            "backend":{"command":"no-such-backend-bin-xyz","args":[]}}"#,
+    )
+    .unwrap();
+    let manifest = server::plugins::manifest::parse(
+        &std::fs::read_to_string(p.join("plugin.json")).unwrap(),
+    )
+    .unwrap()
+    .manifest;
+    manager
+        .registry
+        .insert_installed(
+            server::plugins::registry::PluginEntry {
+                id: "idle-observer".into(),
+                version: "0.1.0".into(),
+                content_hash: "sha256:idle".into(),
+                permissions_hash: "sha256:i".into(),
+                source: server::plugins::registry::PluginSource::drop_in(),
+                installed_at: server::plugins::registry::now_rfc3339(),
+                enabled: true,
+                state: server::plugins::registry::PluginState::Ready,
+                last_fault: None,
+                pending_update: None,
+            },
+            manifest,
+            p.clone(),
+        )
+        .unwrap();
+
+    // 探针序列：1 → 1 → 0（忙 → 忙 → 闲）；50ms 轮询间隔
+    let running = Arc::new(AtomicUsize::new(1));
+    let r = running.clone();
+    manager.set_idle_probe_with_interval(
+        Arc::new(move || {
+            let v = r.clone();
+            Box::pin(async move { v.load(Ordering::SeqCst) })
+        }),
+        std::time::Duration::from_millis(50),
+    );
+
+    // 等两拍后翻闲，再等投递路径走完（懒启动失败 → dropped++）
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    running.store(0, Ordering::SeqCst);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let stats = manager.hooks.stats_for("idle-observer", vec!["onIdle".into()]);
+        if stats.is_some_and(|s| s.dropped >= 1) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "onIdle 翻转未达投递路径（探针未启动或 dispatch 未发生）"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}

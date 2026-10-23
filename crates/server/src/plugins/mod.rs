@@ -316,6 +316,8 @@ pub struct PluginManager {
     agent_cwds: StdMutex<Option<AgentCwdProvider>>,
     /// 空闲探针提供方（B4 onIdle：返回当前运行中会话数；装配序列回填）
     idle_probe: StdMutex<Option<IdleProbeProvider>>,
+    /// 空闲轮询任务已启动（回填即启动，防重入双轮）
+    idle_poll_started: std::sync::atomic::AtomicBool,
     /// 会话只读投影提供方（B4 hub.sessions.*；装配序列回填，未装配拒答）
     sessions: StdMutex<Option<SessionsProvider>>,
     messages: StdMutex<Option<MessagesProvider>>,
@@ -355,6 +357,7 @@ impl PluginManager {
             paths,
             agent_cwds: StdMutex::new(None),
             idle_probe: StdMutex::new(None),
+            idle_poll_started: std::sync::atomic::AtomicBool::new(false),
             sessions: StdMutex::new(None),
             messages: StdMutex::new(None),
             notes_file: StdMutex::new(None),
@@ -374,11 +377,37 @@ impl PluginManager {
     }
 
     /// 空闲探针回填（B4 onIdle 埋点；AppState 装配序列调用）。
+    /// **回填即启动轮询任务**（tester-report-2 修复：原 spawn 放在 startup()
+    /// 读后回填字段，装配序一旦颠倒探针任务静默不启动——启动权归属回填侧，
+    /// 与探测器到位零窗口）。单管理器只启一轮（防重入）。
     pub fn set_idle_probe(&self, probe: IdleProbeProvider) {
+        self.set_idle_probe_with_interval(probe, Duration::from_secs(5));
+    }
+
+    pub fn set_idle_probe_with_interval(&self, probe: IdleProbeProvider, interval: Duration) {
         self.idle_probe
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .replace(probe);
+            .replace(probe.clone());
+        if self
+            .idle_poll_started
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let bus = self.hooks.clone();
+        tokio::spawn(async move {
+            let mut prev: usize = 0;
+            loop {
+                let now = probe().await;
+                if prev > 0 && now == 0 {
+                    // 忙→闲翻转点（统一归一逻辑处，单点——轮询计数的翻转即归一）
+                    bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));
+                }
+                prev = now;
+                tokio::time::sleep(interval).await;
+            }
+        });
     }
 
     /// 会话清单只读投影回填（B4 hub.sessions.list；AppState 装配序列调用）。
@@ -579,27 +608,6 @@ impl PluginManager {
             }
         });
 
-        // B4 onIdle（忙→闲翻转单点）：轮询空闲探针（默认 5s），运行数 >0 → 0 时发射
-        if let Some(probe) = self
-            .idle_probe
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-        {
-            let bus = self.hooks.clone();
-            tokio::spawn(async move {
-                let mut prev: usize = 0;
-                loop {
-                    let now = probe().await;
-                    if prev > 0 && now == 0 {
-                        // 忙→闲翻转点（统一归一逻辑处，单点——轮询计数的翻转即归一）
-                        bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));
-                    }
-                    prev = now;
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            });
-        }
     }
 
     /// 后台监视一周期（纯逻辑可测）：死进程 → 崩溃记录 + 退避重试；空闲 → 回收。
