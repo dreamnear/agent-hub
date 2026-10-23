@@ -91,21 +91,20 @@ pub fn check(call: &PluginCall, decl: &Permissions) -> Verdict {
         }
     }
 
-    // 3) 高危项：命中即需逐次确认（B1 方法表中无常驻高危方法，留矩阵完整性）
-    for item in def.high_risk {
-        if !decl.high_risk.iter().any(|h| h == item) {
-            return Err(Deny {
-                kind: DenyKind::HighRiskNeedsApproval,
-                message: format!(
-                    "方法 {} 属高危项 {}（v1 需逐次确认）",
-                    call.method,
-                    super::api_surface::high_risk_label(item)
-                ),
-            });
-        }
+    // 3) 高危项：表标高危的方法一律逐次确认（高危四项归 hub 维护，判定与插件
+    //    声明无关——声明一致性由审计期 M9 保障，运行期判定只看方法表）。
+    //    B3 批 3 修复轮（F-12）：M7 清死逻辑时把本段一并删除，致 hub.tasks.toggle
+    //    直通翻转无审批门——恢复判定，handle_call 的 approvals 分支重新可达。
+    if !def.high_risk.is_empty() {
+        let label = def
+            .high_risk
+            .iter()
+            .map(|i| super::api_surface::high_risk_label(i))
+            .collect::<Vec<_>>()
+            .join("、");
         return Err(Deny {
             kind: DenyKind::HighRiskNeedsApproval,
-            message: format!("方法 {} 需逐次确认", call.method),
+            message: format!("方法 {} 属高危项（{label}），需逐次确认", call.method),
         });
     }
 
@@ -198,6 +197,21 @@ mod tests {
         let deny = check(&call, &decl()).unwrap_err();
         assert_eq!(deny.kind, DenyKind::NotDeclared);
         assert!(deny.message.contains("尚未在本 hub 版本注册"));
+    }
+
+    #[test]
+    fn high_risk_method_needs_approval_regardless_of_declaration() {
+        // F-12 回归锁：表标高危即需确认（判定与 decl.high_risk 无关——一致性由 M9 审计保障）
+        let mut d = decl();
+        d.data.push("tasks:write".into());
+        d.high_risk.clear(); // 插件声明缺失也不影响判定
+        let call = PluginCall {
+            method: "hub.tasks.toggle".into(),
+            params: json!({ "id": "t1" }),
+        };
+        let deny = check(&call, &d).unwrap_err();
+        assert_eq!(deny.kind, DenyKind::HighRiskNeedsApproval);
+        assert!(deny.message.contains("写既有会话内容"));
     }
 
     #[test]

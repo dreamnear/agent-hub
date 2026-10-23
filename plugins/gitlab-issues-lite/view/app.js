@@ -191,6 +191,7 @@
     var proj = (currentProject || pickerEl.querySelector('.project-input').value || '').trim();
     if (!proj) { setState('请先选择或输入一个项目，再按「查询」。', false); return; }
     currentProject = proj;
+    persistBinding(proj);
     setState('取数中…', false);
     callHub('hub.backend.fetch_issues', { args: { project: proj } }).then(function (res) {
       var block = res && res.content && res.content[0];
@@ -200,18 +201,42 @@
     }).catch(function (e) { setState(failText(e), true); });
   }
 
-  function loadProjects() {
+  function loadBindingAndProjects() {
+    callHub('hub.storage.get', { params: { key: '_binding' } }).then(function (res) {
+      if (res && res.value) {
+        try {
+          var b = JSON.parse(res.value);
+          if (b && typeof b === 'string') currentProject = b;
+          else if (b && b.project) currentProject = b.project;
+        } catch (_e) { /* fallthrough */ }
+      }
+    }).catch(function () { /* unbound */ }).then(function () {
+      loadProjectsWithBinding();
+    });
+  }
+  function loadProjectsWithBinding() {
     setState('正在拉取工程清单…', false);
     callHub('hub.projects.effective', {}).then(function (res) {
       // 条目 = {path, source: "registry"|"agent-cwd"}：注册表 ∪ agent cwd 去重
       var list = res && Array.isArray(res.projects) ? res.projects : [];
       renderPicker(list);
-      currentProject = '';
-      setState('请从下拉选择工程（选中即取数）。', false);
+      setState(currentProject ? '请按「查询」取数（已记住上次绑定）。' : '请从下拉选择工程（选中即取数）。', false);
+      if (currentProject) {
+        var inp = pickerEl.querySelector('.project-input');
+        if (inp) inp.value = currentProject;
+      }
     }).catch(function () {
       renderPicker([]);
       setState('工程清单获取失败，可手输名兜底。', true);
+      var inp = pickerEl.querySelector('.project-input');
+      if (inp && currentProject) inp.value = currentProject;
     });
+  }
+  function persistBinding(proj) {
+    return callHub('hub.storage.set', { params: { key: '_binding', value: JSON.stringify(proj) } }).catch(function () { /* fire-and-forget */ });
+  }
+  function loadProjects() {
+    return loadProjectsWithBinding();
   }
 
   window.addEventListener('message', function (ev) {
@@ -221,7 +246,7 @@
       var p = data.payload || {};
       pluginId = p.pluginId;
       applyTokens(p.tokens, p.theme);
-      loadProjects();
+      loadBindingAndProjects();
       return;
     }
     if (data.type === 'hub:theme') { applyTokens(data.payload && data.payload.tokens, data.payload && data.payload.theme); return; }

@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+import { FileDecoProvider } from './lib/fileDeco';
 import { initI18n } from './i18n';
 import './index.css';
 import './bui/bui.css';
@@ -14,7 +15,9 @@ const client = new QueryClient();
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={client}>
-      <App />
+      <FileDecoProvider>
+        <App />
+      </FileDecoProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

@@ -208,6 +208,12 @@ impl AppState {
                     .unwrap_or_default()
             })
         }));
+        // B3 视图 API（hub.notes.* / hub.tasks.*）：与 /api/notes、/api/tasks 同一
+        // 存储/管理器实例（加法接线，不动既有字段）
+        plugins.set_notes_file(cfg.notes_file.clone());
+        // B3：与调度器同一个 TaskManager 实例（分裂实例 = toggle 对调度不可见）
+        let tasks_manager = StdArc::new(crate::tasks::TaskManager::new(cfg.tasks_dir.clone()));
+        plugins.set_tasks_handle(tasks_manager.clone());
         Self {
             cfg,
             events_tx,
@@ -222,7 +228,7 @@ impl AppState {
             dsh: dsh_driver,
             omp: omp_driver,
             pi: pi_driver,
-            tasks: StdArc::new(crate::tasks::TaskManager::new(tasks_dir)),
+            tasks: tasks_manager,
             nodes: StdArc::new(crate::nodelink::registry::NodeRegistry::new(nodes_file)),
             node_conns: crate::nodelink::gateway::NodeConnections::new(),
             commands_cache: commands::new_command_cache(),

@@ -28,6 +28,8 @@ import PluginNavGroup from './components/PluginNavGroup';
 import PluginViewHost from './components/PluginViewHost';
 import HighRiskApprovalDialog from './components/HighRiskApprovalDialog';
 import { plugins, navItemsOf, type PluginNavItem, type PluginView } from './plugins';
+import { usePluginRenderers } from './lib/usePluginRenderers';
+import { usePluginTheme } from './lib/usePluginTheme';
 import TokenGate from './components/TokenGate';
 import ProjectNotesDialog, { isNotePinned } from './components/ProjectNotesDialog';
 import SessionHistoryDialog from './components/SessionHistoryDialog';
@@ -78,6 +80,8 @@ function selectKey(a: AgentSummary): string {
 export default function App(): ReactElement {
   const queryClient = useQueryClient();
   const t = useI18n();
+  usePluginRenderers();
+  usePluginTheme();
   const { data: polled, registry, tree } = useAgents();
   // 插件视图（agent-hub-plugin-system B1）：与设置页同级的整页视图（ADR-0004 第 2 条
   // 「主内容区整页」），由 /api/plugins 数据动态驱动；null = 未打开（零插件时不存在

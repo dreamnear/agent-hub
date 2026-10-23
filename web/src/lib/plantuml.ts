@@ -35,3 +35,10 @@ export function plantumlSvgUrl(text: string): string | null {
   if (!base) return null;
   return `${base}/svg/~h${plantumlHex(text)}`;
 }
+
+/** 指定服务基址形态（B3 渲染器声明档：config.service → 用户在设置页配置的地址） */
+export function plantumlSvgUrlWith(text: string, base: string): string | null {
+  const b = base.trim().replace(/\/+$/, '');
+  if (!b) return null;
+  return `${b}/svg/~h${plantumlHex(text)}`;
+}

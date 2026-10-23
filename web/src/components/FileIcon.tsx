@@ -1,4 +1,7 @@
 import type { ReactElement } from 'react';
+import { useEffect, useState } from 'react';
+import { plugins } from '../plugins';
+import { decoExt, useDeco } from '../lib/fileDeco';
 
 /// Material Icon Theme 风格的精选子集文件图标（Git 变更列表用，工单限定范围仅 GitPanel）。
 /// 色彩例外依据（同驱动徽标 C/O/P/D 先例）：文件类型配色是图标本体艺术——
@@ -87,8 +90,68 @@ export function extFor(name: string): string {
   return ext in COLOR ? ext : 'file';
 }
 
-/// 类型色方块 + 白色缩写（file 兜底 = 白描页形，无文字）
+function PluginDecoIcon({ pluginId, icon }: { pluginId: string; icon: string }): ReactElement {
+  const [ticket, setTicket] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void plugins
+      .viewTicket(pluginId)
+      .then((t) => {
+        if (alive) setTicket((t as { ticket: string }).ticket ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [pluginId]);
+  if (ticket == null) return <FallbackIcon ext="file" />;
+  return (
+    <img
+      className="file-icon"
+      width="14"
+      height="14"
+      src={`/plugin-view/${encodeURIComponent(pluginId)}/~${ticket}/${icon}`}
+      alt="file"
+      decoding="async"
+    />
+  );
+}
+
+function FallbackIcon({ ext }: { ext: string }): ReactElement {
+  const key = ext in COLOR ? ext : 'file';
+  const color = COLOR[key] ?? COLOR.file;
+  return (
+    <svg className="file-icon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" data-icon={key}>
+      <rect x="1" y="1" width="14" height="14" rx="3" fill={color} />
+      {key === 'file' ? (
+        <path
+          d="M5.5 3h3.2L11.5 5.8V12a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
+          fill="#fff"
+          opacity="0.92"
+        />
+      ) : (
+        <text
+          x="8"
+          y="10.7"
+          textAnchor="middle"
+          fontSize="5.5"
+          fontFamily="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          fontWeight="700"
+          fill="#fff"
+        >
+          {LABEL[key] ?? ''}
+        </text>
+      )}
+    </svg>
+  );
+}
+
+/// 类型色方块 + 白色缩写（file 兜底 = 白描页形，无文字）。
+/// B3 装饰命中时走插件素材（<img> 票据路由，禁用 inline——ADR-0013 拍板 4）。
 export default function FileIcon({ name }: { name: string }): ReactElement {
+  const ext = decoExt(name);
+  const d = useDeco(ext);
+  if (d != null) return <PluginDecoIcon pluginId={d.pluginId} icon={d.icon} />;
   const key = extFor(name);
   const color = COLOR[key] ?? COLOR.file;
   return (

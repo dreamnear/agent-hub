@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::manifest::{self, ManifestIssue};
@@ -87,6 +87,17 @@ pub struct AuditReport {
     pub asset_files: u64,
     /// 是否需要用户确认（含贡献物或权限声明）
     pub installable: bool,
+    /// 渲染器 match 声明（B3，ADR-0012 拍板 3）：跨插件冲突判定的结构化暴露
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub render_claims: Vec<RenderClaim>,
+}
+
+/// 一条渲染器 match 占用（kind = "ext" | "fence"，value 小写规范化）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderClaim {
+    pub kind: String,
+    pub value: String,
 }
 
 /// 目录内容 hash（ADR-0001：排序后路径 + 内容；不跟随符号链接）。
@@ -163,6 +174,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                 asset_bytes: 0,
                 asset_files: 0,
                 installable: false,
+                render_claims: Vec::new(),
             };
         }
     };
@@ -182,6 +194,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                 asset_bytes: 0,
                 asset_files: 0,
                 installable: false,
+                render_claims: Vec::new(),
             };
         }
     };
@@ -240,6 +253,42 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
                         why.message(),
                     )
                     .with_path(p.clone()),
+                ),
+            }
+        }
+    }
+    // 文件装饰图标（B3，ADR-0013）：图标文件必须存在（禁逃逸已在 manifest 段阻断）
+    for (i, d) in m.contributes.file_decorations.iter().enumerate() {
+        let field = format!("contributes.fileDecorations[{i}].icon");
+        match resolve_inside(root, &d.icon) {
+            Ok(p) => {
+                if !p.is_file() {
+                    errors.push(
+                        ManifestIssue::new(field, "path-not-file", "装饰图标不是文件")
+                            .with_path(d.icon.clone()),
+                    );
+                }
+            }
+            Err(why) => errors.push(
+                ManifestIssue::new(field, why.rule(), why.message()).with_path(d.icon.clone()),
+            ),
+        }
+    }
+    // 渲染器（B3，ADR-0012）：plugin-iframe 档的 entry 同样走路径校验
+    for (i, r) in m.contributes.renderers.iter().enumerate() {
+        if let Some(entry) = &r.entry {
+            let field = format!("contributes.renderers[{i}].entry");
+            match resolve_inside(root, entry) {
+                Ok(p) => {
+                    if !p.is_file() {
+                        errors.push(
+                            ManifestIssue::new(field, "path-not-file", "渲染入口不是文件")
+                                .with_path(entry.clone()),
+                        );
+                    }
+                }
+                Err(why) => errors.push(
+                    ManifestIssue::new(field, why.rule(), why.message()).with_path(entry.clone()),
                 ),
             }
         }
@@ -326,6 +375,24 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
     }
 
     let installable = errors.is_empty();
+    let render_claims = m
+        .contributes
+        .renderers
+        .iter()
+        .flat_map(|r| {
+            r.match_rule
+                .fence
+                .iter()
+                .map(|f| RenderClaim {
+                    kind: "fence".into(),
+                    value: f.to_ascii_lowercase(),
+                })
+                .chain(r.match_rule.ext.iter().map(|e| RenderClaim {
+                    kind: "ext".into(),
+                    value: e.to_ascii_lowercase().trim_start_matches('.').to_string(),
+                }))
+        })
+        .collect();
     AuditReport {
         plugin_id: m.id.clone(),
         plugin_dir: root.to_string_lossy().into_owned(),
@@ -337,6 +404,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
         asset_bytes,
         asset_files,
         installable,
+        render_claims,
     }
 }
 
@@ -401,6 +469,58 @@ pub fn contributions_of(m: &super::manifest::Manifest) -> Vec<Contribution> {
             id: c.id.clone(),
             name: c.name.clone(),
             description: c.description.clone().or(Some(target_desc)),
+            risk: "-".into(),
+            path: None,
+        });
+    }
+    for r in &m.contributes.renderers {
+        let mut match_desc = String::new();
+        if !r.match_rule.fence.is_empty() {
+            match_desc.push_str(&format!("fence:{}", r.match_rule.fence.join("|")));
+        }
+        if !r.match_rule.ext.is_empty() {
+            if !match_desc.is_empty() {
+                match_desc.push(' ');
+            }
+            match_desc.push_str(&format!("ext:{}", r.match_rule.ext.join("|")));
+        }
+        out.push(Contribution {
+            kind: "renderer".into(),
+            id: r.id.clone(),
+            name: r.engine.clone(),
+            description: Some(match_desc),
+            risk: "-".into(),
+            path: r.entry.clone(),
+        });
+    }
+    if let Some(tt) = &m.contributes.theme_tokens {
+        for token in tt.tokens.keys() {
+            out.push(Contribution {
+                kind: "themeTokens".into(),
+                id: token.clone(),
+                name: token.clone(),
+                description: None,
+                risk: "-".into(),
+                path: None,
+            });
+        }
+    }
+    for d in &m.contributes.file_decorations {
+        out.push(Contribution {
+            kind: "fileDecoration".into(),
+            id: d.id.clone(),
+            name: format!("ext:{}", d.match_rule.ext.join("|")),
+            description: None,
+            risk: "-".into(),
+            path: Some(d.icon.clone()),
+        });
+    }
+    for svc in &m.contributes.services {
+        out.push(Contribution {
+            kind: "service".into(),
+            id: svc.id.clone(),
+            name: svc.label.clone(),
+            description: svc.placeholder.clone(),
             risk: "-".into(),
             path: None,
         });
@@ -564,12 +684,23 @@ fn scan_view_assets(
 }
 
 /// 常见硬编码色值形态计数（轻量扫描器；只做 warning，不阻断，ADR-0004 拍板结论 4）。
+/// B3 正式化：`--*: <兜底值>` 变量定义行豁免——视图 CSS 的 :root 兜底默认值是
+/// 声明式首帧形态（hub:init token 到达即被宿主值覆盖，见示例插件注释），与
+/// 「属性直写散值」不同类；扫描只计后者。
 fn count_color_literals(text: &str) -> usize {
     let bytes = text.as_bytes();
     let mut hits = 0;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'#' {
+            // 变量定义行豁免：`#` 所在行的行首（去空白）以 `--` 开头且 `#` 前有 `:`——
+            // `--bg: #ffffff` 形态（首帧兜底变量），不算散值
+            let line_start = text[..i].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let before_hash = &text[line_start..i];
+            if before_hash.trim_start().starts_with("--") && before_hash.contains(':') {
+                i += 1;
+                continue;
+            }
             // #rgb / #rrggbb / #rrggbbaa
             let mut n = 0;
             while i + 1 + n < bytes.len() && n < 8 && bytes[i + 1 + n].is_ascii_hexdigit() {

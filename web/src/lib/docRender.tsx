@@ -3,6 +3,7 @@ import { useI18n } from '../i18n';
 import type { Api } from '../api';
 import type { DocFile } from '../types';
 import MarkdownView from '../components/MarkdownView';
+import { MermaidBlock } from './fenceRenderers';
 
 /// docs 预览 type→renderer 工厂（2026-10-06 用户需求）：预览分发从 if-else 链
 /// 改为注册表——内置渲染器（markdown/html/image/pdf/text/binary）在模块尾部
@@ -107,3 +108,18 @@ registerDocRenderer({ id: 'builtin-pdf', match: (k) => k === 'pdf', component: P
 registerDocRenderer({ id: 'builtin-image', match: (k) => k === 'image', component: ImageDoc });
 registerDocRenderer({ id: 'builtin-html', match: (k) => k === 'html', component: HtmlDoc });
 registerDocRenderer({ id: 'builtin-markdown', match: (k) => k === 'markdown', component: MarkdownDoc });
+
+// mermaid 文件（.mmd，B3 ADR-0012 首批）：binary 兜底之后注册 → 比 binary 先命中；
+// .mmd 不在 docs kind_of 文本表 → kind=binary，经此渲染为图（失败回退源码）
+function MermaidDoc({ file }: DocRenderProps): ReactElement {
+  return (
+    <div className="doc-md">
+      <MermaidBlock code={file.content ?? ''} lang="mermaid" />
+    </div>
+  );
+}
+registerDocRenderer({
+  id: 'builtin-mermaid',
+  match: (k, name) => k === 'binary' && name.toLowerCase().endsWith('.mmd'),
+  component: MermaidDoc,
+});

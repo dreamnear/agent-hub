@@ -183,6 +183,8 @@ pub struct McpProxy {
     mcp_handles: tokio::sync::Mutex<HashMap<String, Arc<McpServerHandle>>>,
     // MCP 发现工具缓存：key = plugin_id -> Vec<DiscoveredMcpTool>
     mcp_discovered: tokio::sync::Mutex<HashMap<String, Vec<DiscoveredMcpTool>>>,
+    // backend supervisor：会话生命周期持有（per-call spawn → 实例级复用，M1/R2，B3 清账）
+    backend_supervisor: tokio::sync::OnceCell<Arc<crate::plugins::supervisor::Supervisor>>,
 }
 
 impl McpProxy {
@@ -195,6 +197,7 @@ impl McpProxy {
             static_tools,
             mcp_handles: tokio::sync::Mutex::new(HashMap::new()),
             mcp_discovered: tokio::sync::Mutex::new(HashMap::new()),
+            backend_supervisor: tokio::sync::OnceCell::const_new(),
         }
     }
 
@@ -208,6 +211,7 @@ impl McpProxy {
             static_tools,
             mcp_handles: tokio::sync::Mutex::new(HashMap::new()),
             mcp_discovered: tokio::sync::Mutex::new(HashMap::new()),
+            backend_supervisor: tokio::sync::OnceCell::const_new(),
         }
     }
 
@@ -320,12 +324,14 @@ impl McpProxy {
                 json!({"content":[{"type":"text","text": format!("tool {tool_id} invoked with args {args}") }]}),
             );
         }
-        // 简化：走 supervisor 的单次调用路径（复用逻辑但不 cache）
         let cfg = Config::load();
         let creds_file = cfg.plugin_credentials_file.clone();
         let creds = crate::plugins::credentials::CredentialsStore::load(creds_file.clone());
-        // 使用临时 supervisor 实例（单次）
-        let supervisor = crate::plugins::supervisor::Supervisor::new();
+        let supervisor = self
+            .backend_supervisor
+            .get_or_init(|| async { Arc::new(crate::plugins::supervisor::Supervisor::new()) })
+            .await
+            .clone();
         let handler = Arc::new(LoopbackHandler {
             hub: hub_loopback(),
         });

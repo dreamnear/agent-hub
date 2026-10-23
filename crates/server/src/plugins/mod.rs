@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod mcp_config;
 pub mod mcp_proxy;
 pub mod permissions;
+pub mod theme_tokens;
 pub mod registry;
 pub mod rpc;
 pub mod scanner;
@@ -141,10 +142,69 @@ pub struct PluginView {
     pub contributions: Vec<Contribution>,
     pub permissions: PermissionView,
     pub views: Vec<ViewEntry>,
+    /// 渲染器声明（B3，ADR-0012）：宿主转译进围栏/文件渲染注册表的数据源
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renderers: Vec<RendererEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_tokens: Option<ThemeTokensView>,
+    pub file_decorations: Vec<FileDecorationView>,
+    pub services: Vec<ServiceView>,
     pub backend: BackendInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
     pub asset_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererEntry {
+    pub id: String,
+    /// 小写化的 fence 命中（空数组 = 无 fence）
+    pub match_fence: Vec<String>,
+    /// 裸扩展名（小写，无点）
+    pub match_ext: Vec<String>,
+    pub engine: String,
+    /// 服务配置名（plantuml-server 类；其余引擎为 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    /// plugin-iframe 档的入口路径
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeTokensView {
+    pub tokens: std::collections::BTreeMap<String, ThemeTokenEntryView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeTokenEntryView {
+    pub light: String,
+    pub dark: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDecorationView {
+    pub id: String,
+    pub matchExt: Vec<String>,
+    pub icon: String,
+    /// 成对值 {light,dark} 或 引用 "$token:..."（字符串形态，非对象）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceView {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -199,6 +259,10 @@ pub struct PluginManager {
     /// 装配后回填的 agent cwd 提供方（`hub.projects.effective` 聚合用；
     /// 构造期为 None——drivers 在 AppState 装配序列里晚于插件门面建成）
     agent_cwds: StdMutex<Option<AgentCwdProvider>>,
+    /// 工程便签存储路径（B3 `hub.notes.read/write`；与 /api/notes 同一文件）
+    notes_file: StdMutex<Option<PathBuf>>,
+    /// 定时任务管理器回填（B3 `hub.tasks.list/toggle`；与 /api/tasks 同一实例）
+    tasks: StdMutex<Option<Arc<crate::tasks::TaskManager>>>,
     scan_cache: RwLock<scanner::ScanOutcome>,
     locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     retries: StdMutex<HashMap<String, RetryState>>,
@@ -227,6 +291,8 @@ impl PluginManager {
             events_tx,
             paths,
             agent_cwds: StdMutex::new(None),
+            notes_file: StdMutex::new(None),
+            tasks: StdMutex::new(None),
             scan_cache: RwLock::new(scanner::ScanOutcome::default()),
             locks: StdMutex::new(HashMap::new()),
             retries: StdMutex::new(HashMap::new()),
@@ -239,6 +305,22 @@ impl PluginManager {
     pub fn set_agent_cwd_provider(&self, provider: AgentCwdProvider) {
         let mut guard = self.agent_cwds.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(provider);
+    }
+
+    /// 回填便签文件路径（B3；AppState 装配序列调用）
+    pub fn set_notes_file(&self, path: PathBuf) {
+        self.notes_file
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(path);
+    }
+
+    /// 回填定时任务管理器（B3；AppState 装配序列调用）
+    pub fn set_tasks_handle(&self, tm: Arc<crate::tasks::TaskManager>) {
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(tm);
     }
 
     fn broadcast(&self, id: &str) {
@@ -261,12 +343,24 @@ impl PluginManager {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| Arc::new(|| Box::pin(async { Vec::new() })));
+        let notes_file = self
+            .notes_file
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Arc::new(HubRpcHandler {
             registry: self.registry.clone(),
             credentials: self.credentials.clone(),
             data_dir: self.paths.data_dir.clone(),
             projects_file: self.paths.projects_file.clone(),
             agent_cwds,
+            notes_file,
+            tasks,
             approvals: self.approvals.clone(),
             events_tx: self.events_tx.clone(),
         })
@@ -532,6 +626,71 @@ impl PluginManager {
                     id: v.id.clone(),
                     title: v.title.clone(),
                     order: v.order,
+                })
+                .collect(),
+            renderers: m
+                .contributes
+                .renderers
+                .iter()
+                .map(|r| RendererEntry {
+                    id: r.id.clone(),
+                    match_fence: r
+                        .match_rule
+                        .fence
+                        .iter()
+                        .map(|f| f.to_ascii_lowercase())
+                        .collect(),
+                    match_ext: r
+                        .match_rule
+                        .ext
+                        .iter()
+                        .map(|e| e.to_ascii_lowercase())
+                        .collect(),
+                    engine: r.engine.clone(),
+                    service: r
+                        .config
+                        .as_ref()
+                        .and_then(|c| c.get("service"))
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string),
+                    entry: r.entry.clone(),
+                })
+                .collect(),
+            theme_tokens: m.contributes.theme_tokens.as_ref().map(|tt| ThemeTokensView {
+                tokens: tt
+                    .tokens
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            ThemeTokenEntryView {
+                                light: v.light.clone(),
+                                dark: v.dark.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            }),
+            file_decorations: m
+                .contributes
+                .file_decorations
+                .iter()
+                .map(|d| FileDecorationView {
+                    id: d.id.clone(),
+                    matchExt: d.match_rule.ext.iter().map(|e| e.to_ascii_lowercase().trim_start_matches('.').to_string()).collect(),
+                    icon: d.icon.clone(),
+                    color: d.color.clone(),
+                })
+                .collect(),
+            services: m
+                .contributes
+                .services
+                .iter()
+                .map(|s| ServiceView {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    placeholder: s.placeholder.clone(),
+                    default: s.default.clone(),
                 })
                 .collect(),
             backend: BackendInfo {
@@ -942,12 +1101,19 @@ impl PluginManager {
         if !p.entry.enabled {
             return Err(ViewFileError::Denied("插件已停用".into()));
         }
-        let Some(root) = view_root(&p) else {
-            return Err(ViewFileError::NotFound);
-        };
         let rel = rel.trim_start_matches('/');
         let rel = if rel.is_empty() { "index.html" } else { rel };
-        let candidate = root.join(rel);
+        // 渲染器资产（B3 尾批 F-14）：entry 语义统一为**相对插件目录**（与审计期
+        // 校验同口径）；视图资产仍相对 view_root（views[0].entry 父目录，B1 语义）。
+        // 纯渲染器插件（无 views）此前 view_root=None 恒 404——渲染器命中时不再依赖它。
+        let (root, rel) = match renderer_asset_root(&p, rel) {
+            Some((rdir, rrel)) => (rdir, rrel),
+            None => {
+                let vroot = view_root(&p).ok_or(ViewFileError::NotFound)?;
+                (vroot, rel.to_string())
+            }
+        };
+        let candidate = root.join(&rel);
         if !candidate.is_file() {
             return Err(ViewFileError::NotFound);
         }
@@ -1033,10 +1199,53 @@ impl PluginManager {
             return Err(RpcError::Violation(msg));
         };
         if tool.risk == "high" {
-            // B1 无审批流（B2 交付）：高危工具拒绝执行而不是静默放行
-            return Err(RpcError::Unauthorized(format!(
-                "高危工具 {tool_id} 需逐次确认（审批流在 B2 交付），当前版本拒绝执行"
-            )));
+            // B2 审批流已交付（会话注入 / mcp-proxy 双路对称化，M2 清账）——
+            // 此处落单阻塞等待与 HubRpcHandler 同路径（批准继续执行，拒绝不执行）
+            let digest = {
+                let scrubbed = self.credentials.scrub(&params.to_string());
+                let mut s: String = scrubbed.chars().take(200).collect();
+                if s.is_empty() {
+                    s = "{}".into();
+                }
+                s
+            };
+            let sess = params.get("sessionId").and_then(serde_json::Value::as_str);
+            let tool_full = format!("hubplug_{id}_{tool_id}");
+            let issued = self
+                .approvals
+                .issue(id, &tool_full, &digest, sess, &now_rfc3339());
+            let _ = self.events_tx.send(HubEvent::PluginApprovalRequested {
+                id: issued.id.clone(),
+                plugin_id: id.to_string(),
+                tool: tool_full.clone(),
+                args_digest: digest.clone(),
+            });
+            let decision = match tokio::time::timeout(approvals::APPROVAL_WAIT, issued.rx).await {
+                Ok(Ok(d)) => d,
+                Ok(Err(_)) | Err(_) => {
+                    return Err(RpcError::Busy("高危确认等待超时（120s），可重试".into()));
+                }
+            };
+            let (kind, verb) = match decision {
+                approvals::Decision::Approve => (FaultKind::Approval, "批准"),
+                approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
+            };
+            let _ = self.registry.push_record(
+                id,
+                FaultRecord {
+                    at: now_rfc3339(),
+                    kind,
+                    message: self.credentials.scrub(&format!(
+                        "高危工具 {tool_full} · 用户{verb} · {} · 参数 {}",
+                        issued.id, digest
+                    )),
+                },
+            );
+            if decision == approvals::Decision::Reject {
+                return Err(RpcError::Violation(format!(
+                    "高危工具 {tool_full} 被用户拒绝，未执行"
+                )));
+            }
         }
         if tool.implementation.kind != "backend" {
             return Err(RpcError::PluginError(format!(
@@ -1150,6 +1359,10 @@ struct HubRpcHandler {
     credentials: Arc<CredentialsStore>,
     data_dir: PathBuf,
     projects_file: PathBuf,
+    /// 工程便签文件（B3 hub.notes.*；None = 未装配，方法拒答）
+    notes_file: Option<PathBuf>,
+    /// 定时任务管理器（B3 hub.tasks.*；None = 未装配，方法拒答）
+    tasks: Option<Arc<crate::tasks::TaskManager>>,
     agent_cwds: AgentCwdProvider,
     /// 高危审批单表（B2 批3）：`hub.sessions.send` 等高危方法命中
     /// HighRiskNeedsApproval 时落单阻塞等待（设计 §7）
@@ -1168,6 +1381,8 @@ impl HubCallHandler for HubRpcHandler {
         let agent_cwds = self.agent_cwds.clone();
         let approvals = self.approvals.clone();
         let events_tx = self.events_tx.clone();
+        let notes_file = self.notes_file.clone();
+        let tasks = self.tasks.clone();
         Box::pin(async move {
             let Some(p) = registry.get(&plugin_id) else {
                 return Err(RpcError::Unauthorized(format!("插件 {plugin_id} 未安装")));
@@ -1301,6 +1516,83 @@ impl HubCallHandler for HubRpcHandler {
                     tracing::info!(plugin = %plugin_id, "plugin log: {}", credentials.scrub(msg));
                     Ok(json!({ "ok": true }))
                 }
+                // —— B3 视图 API 完整化（notes/tasks 数据域；sessions 族单列缺口）——
+                "hub.notes.read" => {
+                    let path = params
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 path 参数".into()))?;
+                    if path.contains("..") {
+                        return Err(RpcError::PluginError("路径不允许包含 ..".into()));
+                    }
+                    let notes_file = notes_file.clone().ok_or_else(|| {
+                        RpcError::PluginError("notes 存储未装配（hub 内部状态）".into())
+                    })?;
+                    // 与 /api/notes 同一存储（NotesStore；键 = 规范化 cwd，async 同源）
+                    let store = crate::notes::NotesStore { file: notes_file };
+                    let content = store.get(path).await;
+                    Ok(json!({ "content": content }))
+                }
+                "hub.notes.write" => {
+                    let path = params
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 path 参数".into()))?;
+                    let content = params
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 content 参数".into()))?;
+                    if path.contains("..") {
+                        return Err(RpcError::PluginError("路径不允许包含 ..".into()));
+                    }
+                    if content.len() > 256 * 1024 {
+                        return Err(RpcError::PluginError("便签写入上限 256KB".into()));
+                    }
+                    let notes_file = notes_file.clone().ok_or_else(|| {
+                        RpcError::PluginError("notes 存储未装配（hub 内部状态）".into())
+                    })?;
+                    let store = crate::notes::NotesStore { file: notes_file };
+                    store
+                        .set(path, content)
+                        .await
+                        .map_err(|e| RpcError::PluginError(format!("写入失败：{e}")))?;
+                    Ok(json!({ "ok": true }))
+                }
+                "hub.tasks.list" => {
+                    let tm = tasks.clone().ok_or_else(|| {
+                        RpcError::PluginError("tasks 未装配（hub 内部状态）".into())
+                    })?;
+                    let tasks: Vec<Value> = tm
+                        .list()
+                        .iter()
+                        .map(|t| {
+                            json!({
+                                "id": t.id,
+                                "name": t.name,
+                                "cron": t.cron,
+                                "enabled": t.enabled,
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "tasks": tasks }))
+                }
+                "hub.tasks.toggle" => {
+                    let id = params
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::PluginError("缺少 id 参数".into()))?;
+                    let tm = tasks.clone().ok_or_else(|| {
+                        RpcError::PluginError("tasks 未装配（hub 内部状态）".into())
+                    })?;
+                    let mut spec = tm.get(id).ok_or_else(|| {
+                        RpcError::PluginError(format!("任务 {id} 不存在"))
+                    })?;
+                    spec.enabled = !spec.enabled;
+                    let enabled = spec.enabled;
+                    tm.upsert(spec)
+                        .map_err(|e| RpcError::PluginError(format!("启停失败：{e}")))?;
+                    Ok(json!({ "id": id, "enabled": enabled }))
+                }
                 "hub.projects.list" => {
                     let projects: Vec<String> = std::fs::read_to_string(&projects_file)
                         .ok()
@@ -1421,6 +1713,34 @@ fn view_root(p: &InstalledPlugin) -> Option<PathBuf> {
     let entry = p.manifest.contributes.views.first()?.entry.clone();
     let parent = Path::new(&entry).parent().unwrap_or(Path::new(""));
     Some(p.plugin_dir.join(parent))
+}
+
+/// 渲染器资产根（B3 尾批 F-14）：rel 命中渲染器 entry 或其 entry 目录内的文件
+/// 时，资产相对**插件目录**解析（与审计期 resolve_inside 同口径——三层 rel 口径
+/// 不一致的统一）；symlink/逃逸防护沿用 view_file 的 canonicalize 检查
+/// （root=插件目录，逃逸判定不放宽）。
+fn renderer_asset_root(p: &InstalledPlugin, rel: &str) -> Option<(PathBuf, String)> {
+    let clean = rel.trim_start_matches('/');
+    if clean.is_empty() || clean.contains("..") {
+        // M20：含 .. 段不做前缀命中（归一化前缀会放宽逃逸面——render/../backend
+        // 形态可达渲染器目录之外的插件根内文件，与「entry 目录内」语义不符；
+        // 该形态落入 view_root/插件根 canonicalize 检查的原判定路径）
+        return None;
+    }
+    for r in &p.manifest.contributes.renderers {
+        let Some(entry) = &r.entry else { continue };
+        let e_parent = Path::new(entry)
+            .parent()
+            .map(|x| x.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if clean == entry.as_str() {
+            return Some((p.plugin_dir.clone(), clean.to_string()));
+        }
+        if !e_parent.is_empty() && clean.starts_with(&format!("{e_parent}/")) {
+            return Some((p.plugin_dir.clone(), clean.to_string()));
+        }
+    }
+    None
 }
 
 fn mime_for(path: &Path) -> &'static str {

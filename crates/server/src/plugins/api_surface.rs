@@ -13,11 +13,33 @@ pub const PLUGIN_API_VERSION: u32 = 1;
 /// 与 `CHANGELOG.md` 最新已发布版本同步——发版时随 CHANGELOG 一起更新。
 pub const HUB_VERSION: &str = "0.6.0";
 
-/// 贡献物类型（v1 五类，ADR-0011 加法：commands 新增）。
-pub const CONTRIBUTION_TYPES: [&str; 5] = ["tools", "skills", "mcp", "views", "commands"];
+/// 贡献物类型（v1 六类，ADR-0011 加法：commands / renderers 新增）。
+pub const CONTRIBUTION_TYPES: [&str; 6] = ["tools", "skills", "mcp", "views", "commands", "renderers"];
+
+/// 内置渲染引擎清单（ADR-0012 拍板 1：首批 = mermaid / plantuml-server / image /
+/// html-sanitized + plugin-iframe 档；加法承诺，katex 随后续批次）。
+pub const RENDER_ENGINES: [&str; 5] =
+    ["mermaid", "plantuml-server", "image", "html-sanitized", "plugin-iframe"];
+
+/// 服务地址类渲染引擎（ADR-0012 拍板 4）：`config` 只允许引用服务配置名
+/// （`{"service":"…"}`），**禁内嵌 URL**（内容外泄面红线）。
+pub const SERVICE_RENDER_ENGINES: [&str; 1] = ["plantuml-server"];
+
+/// 内置围栏占用（ADR-0012 拍板 3/5：插件声明同 fence = 抢内置 = 审计失败）。
+/// 与 MarkdownView 内置围栏渲染（plantuml / mermaid）对应。
+pub const BUILTIN_RENDER_FENCES: [&str; 2] = ["plantuml", "mermaid"];
+
+/// 内置 ext 占用（ADR-0012 拍板 3：docs 预览内置 kind 的扩展名——与
+/// `api/docs.rs::kind_of` 的 ext 表对应；插件渲染器不得抢内置格式）。
+pub const BUILTIN_RENDER_EXTS: [&str; 47] = [
+    "md", "markdown", "html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif",
+    "pdf", "txt", "log", "json", "toml", "yaml", "yml", "ini", "cfg", "conf", "csv", "xml", "sh",
+    "bash", "zsh", "py", "rb", "rs", "go", "java", "js", "jsx", "ts", "tsx", "c", "cc", "cpp",
+    "h", "css", "scss", "sql", "proto", "lock", "gitignore", "mmd",
+];
 
 /// `permissions.data` 固定域枚举（ADR-0007 第 2 条）。
-pub const DATA_DOMAINS: [&str; 10] = [
+pub const DATA_DOMAINS: [&str; 13] = [
     "sessions:read",
     "sessions:write",
     "messages:read",
@@ -28,6 +50,10 @@ pub const DATA_DOMAINS: [&str; 10] = [
     "tasks:read",
     "tasks:write",
     "instances:read",
+    // B3（ADR-0011 §12.1）
+    "theme:override",
+    "files:decorate",
+    "settings:read",
 ];
 
 /// hub 维护的高危清单（ADR-0007 第 3 条，v1 固定四项，插件不得摘除自己）。
@@ -49,10 +75,10 @@ pub fn high_risk_label(item: &str) -> &'static str {
     }
 }
 
-/// postMessage 消息类型（ADR-0004 第 5 条，v1 固定集合）。
-pub const HOST_TO_VIEW_MESSAGES: [&str; 4] =
-    ["hub:init", "hub:theme", "hub:rpc-result", "hub:rpc-error"];
-pub const VIEW_TO_HOST_MESSAGES: [&str; 3] = ["hub:ready", "hub:rpc", "hub:notify"];
+/// postMessage 消息类型（ADR-0004 第 5 条 + ADR-0012 §12.2 渲染器契约，固定集合）。
+pub const HOST_TO_VIEW_MESSAGES: [&str; 5] =
+    ["hub:init", "hub:theme", "hub:rpc-result", "hub:rpc-error", "render"];
+pub const VIEW_TO_HOST_MESSAGES: [&str; 4] = ["hub:ready", "hub:rpc", "hub:notify", "rendered"];
 
 /// 一个 RPC 方法的定义：签名、绑定权限、B1 是否已注册。
 #[derive(Debug, Clone, Serialize)]
@@ -144,32 +170,32 @@ pub const RPC_METHODS: &[RpcMethodDef] = &[
         data_domains: &["notes:read"],
         credentials: &[],
         high_risk: &[],
-        available: false,
-        description: "工程便签读取（B3）",
+        available: true,
+        description: "工程便签读取（B3 已注册）",
     },
     RpcMethodDef {
         method: "hub.notes.write",
         data_domains: &["notes:write"],
         credentials: &[],
         high_risk: &[],
-        available: false,
-        description: "工程便签写入（B3）",
+        available: true,
+        description: "工程便签写入（B3 已注册）",
     },
     RpcMethodDef {
         method: "hub.tasks.list",
         data_domains: &["tasks:read"],
         credentials: &[],
         high_risk: &[],
-        available: false,
-        description: "定时任务清单（B3）",
+        available: true,
+        description: "定时任务清单（B3 已注册）",
     },
     RpcMethodDef {
         method: "hub.tasks.toggle",
         data_domains: &["tasks:write"],
         credentials: &[],
         high_risk: &["write-session-content"],
-        available: false,
-        description: "定时任务启停（B3）",
+        available: true,
+        description: "定时任务启停（B3 已注册）",
     },
     RpcMethodDef {
         method: "hub.sessions.send",
@@ -177,7 +203,7 @@ pub const RPC_METHODS: &[RpcMethodDef] = &[
         credentials: &[],
         high_risk: &["send-messages-as-user"],
         available: false,
-        description: "代发消息（B2/B3，逐次确认）",
+        description: "代发消息（B4 承接，v1 不注册；未来若开须高危审批 + 专项 ADR）",
     },
 ];
 
@@ -192,12 +218,12 @@ pub fn api_version_mismatch(declared: &str) -> String {
 pub struct ApiSchema {
     pub api_version: u32,
     pub hub_version: &'static str,
-    pub contributions: [&'static str; 5],
-    pub data_domains: [&'static str; 10],
+    pub contributions: [&'static str; 6],
+    pub data_domains: [&'static str; 13],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,
-    pub host_to_view_messages: [&'static str; 4],
-    pub view_to_host_messages: [&'static str; 3],
+    pub host_to_view_messages: [&'static str; 5],
+    pub view_to_host_messages: [&'static str; 4],
     /// 弃用项（ADR-0003 第 2 条）：v1 无弃用项
     pub deprecated: Vec<String>,
     /// v1 权限面说明（ADR-0003 拍板结论 4/5）：`api` 类声明接受但无消费者
