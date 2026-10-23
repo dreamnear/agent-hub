@@ -293,7 +293,14 @@ impl DriverRegistry {
         for d in &self.drivers {
             match d.list(false).await {
                 Ok(v) => {
-                    n += v
+                    // 逐 driver 明细留痕（tester-report-4 建议的诊断锚；与同期
+                    // /api/agents 响应对比一轮即可锁定分歧层——含 Ok(空集) 降级
+                    // 形态：claude CLI 失败在 list 内部降级空清单，不会走 Err 分支）
+                    let detail: Vec<String> = v
+                        .iter()
+                        .map(|a| format!("{}={}", a.id, a.group.as_str()))
+                        .collect();
+                    let c = v
                         .iter()
                         .filter(|a| {
                             matches!(
@@ -302,6 +309,14 @@ impl DriverRegistry {
                             )
                         })
                         .count();
+                    n += c;
+                    tracing::debug!(
+                        driver = %d.name(),
+                        entries = v.len(),
+                        running = c,
+                        sessions = %detail.join(","),
+                        "running_count sample"
+                    );
                 }
                 Err(e) => {
                     tracing::debug!(driver = %d.name(), error = %e, "running_count：driver list 失败，跳过该 driver");
