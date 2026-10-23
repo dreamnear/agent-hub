@@ -4,8 +4,9 @@
 // 工厂本身的分派规则由 lib/docRender.test.tsx 单测，此处只锁「组件接线」。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import FileContentView from './FileContentView';
+import { DOC_REFRESH_MS } from '../lib/docRefresh';
 import type { DocFile } from '../types';
 
 const docsFileMock = vi.fn();
@@ -74,5 +75,61 @@ describe('FileContentView（工厂分派接线，文档 Tab 退役迁移账）',
     await waitFor(() => expect(c2.querySelector('.doc-hint--err')).not.toBeNull());
     expect(c2.textContent).toContain('boom-403');
     unmount();
+  });
+});
+
+describe('FileContentView 打开中文件周期重取（agent-hub-docs-tree-refresh #36 评估项纳入）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('外部修改在 DOC_REFRESH_MS 窗口内反映到内容（refetchInterval）', async () => {
+    vi.useFakeTimers();
+    docsFileMock
+      .mockResolvedValueOnce(fileOf({ content: 'v1' }))
+      .mockResolvedValueOnce(fileOf({ content: 'v2' }));
+    const { container } = renderView();
+    // 首帧：flush 微任务让首次查询落定（fake timers 下 waitFor 会卡，改手动推进）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container.textContent).toContain('v1');
+    // 推进一个刷新周期 → 重取 → v2 渲染（外部追加/修改随周期出现）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOC_REFRESH_MS + 1);
+    });
+    expect(container.textContent).toContain('v2');
+    expect(docsFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('查询出错（文件被删 404）即停周期重取，不再空转（review-1 MINOR 收口）', async () => {
+    vi.useFakeTimers();
+    // 首查成功 → 第二次（首个周期重取）出错
+    docsFileMock
+      .mockResolvedValueOnce(fileOf({ content: 'v1' }))
+      .mockRejectedValueOnce(new Error('gone-404'));
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <FileContentView path="/repo/gone.md" />
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container.textContent).toContain('v1');
+    // 推进一个周期：重取命中 404 → isError 态
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOC_REFRESH_MS + 1);
+    });
+    expect(container.querySelector('.doc-hint--err')).not.toBeNull();
+    expect(docsFileMock).toHaveBeenCalledTimes(2);
+    // 再推进两个周期：error 后 refetchInterval=false，不再发请求（无空转）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOC_REFRESH_MS * 2 + 10);
+    });
+    expect(docsFileMock).toHaveBeenCalledTimes(2);
   });
 });

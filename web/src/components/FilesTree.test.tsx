@@ -3,9 +3,10 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import FilesTree from './FilesTree';
+import { DOC_REFRESH_MS } from '../lib/docRefresh';
 import type { DocEntry } from '../types';
 
 const docsListMock = vi.fn();
@@ -91,5 +92,66 @@ describe('FilesTree（右面板文件树，agent-hub-files-panel）', () => {
     // kind 标签固定右侧列：margin-left: auto，不参与行居中
     const kindBlock = css.match(/\.doc-kind \{[^}]*\}/)?.[0] ?? '';
     expect(kindBlock).toContain('margin-left: auto');
+  });
+});
+
+describe('FilesTree 自动刷新（agent-hub-docs-tree-refresh #36 主修）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('折叠→再展开总是重取（手动刷新入口）：新写入文件在二次清单中入树', async () => {
+    docsListMock.mockImplementation((path: string) =>
+      path === '/repo'
+        ? Promise.resolve(ROOT_ENTRIES)
+        : Promise.resolve([{ name: 'c.txt', isDir: false, kind: 'text' }]),
+    );
+    const { container } = renderTree('/repo');
+    await waitFor(() => expect(container.textContent).toContain('README.md'));
+    // 首次展开 docs：拉子层
+    const docsBtn = (): HTMLElement => screen.getByRole('button', { name: /docs/ });
+    fireEvent.click(docsBtn());
+    await waitFor(() => expect(container.textContent).toContain('c.txt'));
+    const callsBefore = docsListMock.mock.calls.length;
+    // agent 写入新文件 → 折叠再展开：docsList 再次拉取、新文件出现（无需刷新页面）
+    docsListMock.mockImplementation((path: string) =>
+      path === '/repo'
+        ? Promise.resolve(ROOT_ENTRIES)
+        : Promise.resolve([
+            { name: 'c.txt', isDir: false, kind: 'text' },
+            { name: 'new.md', isDir: false, kind: 'markdown' },
+          ]),
+    );
+    fireEvent.click(docsBtn()); // 折叠
+    fireEvent.click(docsBtn()); // 再展开 = 手动刷新
+    await waitFor(() => expect(container.textContent).toContain('new.md'));
+    expect(docsListMock.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('面板挂载期对已展开目录周期重取（DOC_REFRESH_MS）；未展开子层不预拉（懒加载不回退）', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const calls: string[] = [];
+    docsListMock.mockImplementation((path: string) => {
+      calls.push(path);
+      return path === '/repo'
+        ? Promise.resolve(ROOT_ENTRIES)
+        : Promise.resolve([{ name: 'c.txt', isDir: false, kind: 'text' }]);
+    });
+    const { container } = renderTree('/repo');
+    await waitFor(() => expect(container.textContent).toContain('README.md'));
+    const baselineRoot = calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /docs/ }));
+    await waitFor(() => expect(container.textContent).toContain('c.txt'));
+    expect(calls.filter((p) => p.startsWith('/repo/docs/'))).toEqual([]); // 子层懒加载
+    const baseline = calls.length;
+    // 推进一个刷新周期：已展开的 /repo（根）与 /repo/docs 各重取一次
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOC_REFRESH_MS + 1);
+    });
+    expect(calls.length).toBe(baseline + 2);
+    expect(calls.slice(baseline)).toContain('/repo');
+    expect(calls.slice(baseline)).toContain('/repo/docs');
+    expect(calls.filter((p) => p.startsWith('/repo/docs/'))).toEqual([]); // 仍未预拉子层
+    expect(calls.length).toBeGreaterThan(baselineRoot);
   });
 });
