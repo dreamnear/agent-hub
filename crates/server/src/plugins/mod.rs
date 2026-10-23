@@ -366,6 +366,10 @@ impl PluginManager {
             asset_cache: RwLock::new(HashMap::new()),
         });
         bus.bind(&me);
+        // 进程级门面接线（tester-report-1 FAIL-1 回修）：drivers 埋点经
+        // hooks::global_dispatch 发射，漏挂 = 全部埋点静默短路——装配点收敛在
+        // PluginManager::new 单点（hub/node 两形态与测试共用），不散落启动序列
+        hooks::set_global(bus);
         me
     }
 
@@ -1150,9 +1154,10 @@ impl PluginManager {
             FaultRecord {
                 at: now_rfc3339(),
                 kind: FaultKind::Update,
+                // MINOR① 回修：from = 更新前已装版本（pending.version 是新版）
                 message: format!(
                     "更新已应用：{} → {}（hash {}）",
-                    pending.version,
+                    installed.entry.version,
                     report.plugin_version,
                     short_hash(content_hash)
                 ),
@@ -1313,6 +1318,8 @@ impl PluginManager {
             .registry
             .insert_installed(entry, manifest, dir)
             .map_err(|e| format!("注册表写入失败：{e}"))?;
+        // 安装即解除清理登记（FAIL-2 回修配套：同 id 新装恢复常规发现面）
+        self.registry.undismiss_discovery(id);
         if created {
             // 装载 = 贡献物登记（backend 懒启动）：解析无误即就绪
             if let Err(e) = self.registry.apply(id, Transition::EnableOk) {
@@ -1487,6 +1494,14 @@ impl PluginManager {
             let versions = versions_root(&self.paths).join(id);
             if versions.is_dir() {
                 let _ = std::fs::remove_dir_all(&versions);
+            }
+            // FAIL-2 回修：drop-in 目录按 ADR-0002 保留（dirKept），但登记清理记录
+            // 抑制周期扫描对同内容目录的重发现/重审计（产物不再重生）；用户放新版
+            // （hash 变化）即恢复正常发现面
+            let live = self.paths.plugins_dir.join(id);
+            if live.join("plugin.json").is_file() {
+                let hash = audit::content_hash(&live);
+                self.registry.dismiss_discovery(id, &hash);
             }
         }
         let _ = p;

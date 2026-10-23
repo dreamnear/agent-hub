@@ -122,6 +122,20 @@ struct PersistedRegistry {
     schema_version: u32,
     #[serde(default)]
     plugins: Vec<PluginEntry>,
+    /// 已清理发现记录（B4 tester-report-1 FAIL-2）：卸载 + purge 后抑制同 id+hash
+    /// 的重发现/重审计（drop-in 目录按 ADR-0002 第 7 条保留，但其审计产物不应
+    /// 被周期扫描无限重生）；目录内容变化（hash 不同）即自动失效——用户放新版
+    /// 立即恢复正常发现面。
+    #[serde(default)]
+    dismissed: Vec<DismissedEntry>,
+}
+
+/// 一条已清理的发现记录（id + 目录内容 hash 精确对）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DismissedEntry {
+    pub id: String,
+    pub content_hash: String,
 }
 
 /// 合法迁移（BR-01 迁移表；非法边一律拒绝，防状态漂移）。
@@ -399,6 +413,75 @@ impl Registry {
         Ok(entry)
     }
 
+    /// 发现记录清理登记（B4 FAIL-2 回修）：卸载 + purge 后记录 (id, hash)，
+    /// scanner 据此跳过同目录的重发现/重审计。同 id 只保留最新一条。
+    pub fn dismiss_discovery(&self, id: &str, content_hash: &str) {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let persisted = self.load_persisted_locked(&guard);
+        let mut dismissed: Vec<DismissedEntry> = persisted
+            .dismissed
+            .into_iter()
+            .filter(|d| d.id != id)
+            .collect();
+        dismissed.push(DismissedEntry {
+            id: id.to_string(),
+            content_hash: content_hash.to_string(),
+        });
+        self.save_dismissed_locked(&guard, dismissed);
+    }
+
+    /// 安装后解除清理登记（同 id 全部条目）。
+    pub fn undismiss_discovery(&self, id: &str) {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let persisted = self.load_persisted_locked(&guard);
+        if persisted.dismissed.iter().any(|d| d.id == id) {
+            let dismissed = persisted
+                .dismissed
+                .into_iter()
+                .filter(|d| d.id != id)
+                .collect();
+            self.save_dismissed_locked(&guard, dismissed);
+        }
+    }
+
+    /// (id, hash) 是否在清理登记内（scanner 跳过判据）。
+    pub fn is_discovery_dismissed(&self, id: &str, content_hash: &str) -> bool {
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let persisted = self.load_persisted_locked(&guard);
+        persisted.dismissed.iter().any(|d| d.id == id && d.content_hash == content_hash)
+    }
+
+    /// 读持久文件里的 dismissed 段（inner 锁内调用；文件是唯一持久位，
+    /// 内存表不缓存——扫描频率低，逐次读文件足够）。
+    fn load_persisted_locked(&self, _guard: &BTreeMap<String, InstalledPlugin>) -> PersistedRegistry {
+        std::fs::read_to_string(&self.file)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_dismissed_locked(
+        &self,
+        guard: &BTreeMap<String, InstalledPlugin>,
+        dismissed: Vec<DismissedEntry>,
+    ) {
+        let persisted = PersistedRegistry {
+            schema_version: 1,
+            plugins: guard
+                .values()
+                .filter(|p| !p.entry.source.is_transient())
+                .map(|p| p.entry.clone())
+                .collect(),
+            dismissed,
+        };
+        if let Ok(raw) = serde_json::to_string_pretty(&persisted) {
+            let tmp = self.file.with_extension("json.tmp");
+            if std::fs::write(&tmp, raw).is_ok() && std::fs::rename(&tmp, &self.file).is_ok() {
+                crate::platform::harden_0600(&self.file);
+            }
+        }
+    }
+
     fn save_locked(&self, map: &BTreeMap<String, InstalledPlugin>) -> std::io::Result<()> {
         if let Some(dir) = self.file.parent() {
             std::fs::create_dir_all(dir)?;
@@ -411,6 +494,7 @@ impl Registry {
                 .filter(|p| !p.entry.source.is_transient())
                 .map(|p| p.entry.clone())
                 .collect(),
+            dismissed: self.load_persisted_locked(&map).dismissed,
         };
         let raw = serde_json::to_string_pretty(&persisted)?;
         let tmp = self.file.with_extension("json.tmp");

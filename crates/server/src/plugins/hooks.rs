@@ -312,6 +312,14 @@ pub fn set_global(bus: Arc<HooksBus>) {
     }
 }
 
+/// 进程级门面读取（装配自检/测试锚点用；Some = 发射点可达）。
+pub fn global_bus() -> Option<Arc<HooksBus>> {
+    GLOBAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
 /// 发射点统一入口（ADR-0014 §3 埋点纪律：不散落直调 supervisor/rpc）。
 /// 总线未装配或无订阅者时短路，事件源零感知。
 pub fn global_dispatch(hook: &str, params: Value) {

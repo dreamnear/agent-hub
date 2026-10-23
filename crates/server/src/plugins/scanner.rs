@@ -383,6 +383,11 @@ pub fn scan(
             // 已安装且 hash 一致：不需要用户处理，不进新发现区
             continue;
         };
+        // B4 FAIL-2 回修：卸载 + purge 清理登记内的 (id, hash) 不再重发现/重审计
+        //（目录按 ADR-0002 保留，但审计产物不随周期扫描无限重生；hash 变化即失效）
+        if status == "new" && registry.is_discovery_dismissed(&id, &report.content_hash) {
+            continue;
+        }
         // B4 BR-13：更新候选的差异面（新版审计投影 vs 已装 manifest 快照）
         let update_diff = if status == "update" {
             installed

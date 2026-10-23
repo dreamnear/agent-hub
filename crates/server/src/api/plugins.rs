@@ -209,11 +209,19 @@ async fn retry_plugin(
 
 // ===== 更新确认流（B4，BR-13）=====
 
+/// 更新确认流请求体：只带 contentHash（id 由路径段承载，MINOR② 回修——
+/// 复用 InstallBody 会要求冗余 id 字段，缺 id 报 422）
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateBody {
+    content_hash: String,
+}
+
 /// 应用更新：请求体 hash 必须与登记的待确认一致（防误应用过期候选）。
 async fn apply_update(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-    Json(body): Json<InstallBody>,
+    Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>, AppError> {
     let v = state
         .plugins
@@ -229,7 +237,7 @@ async fn apply_update(
 async fn keep_old_version(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-    Json(body): Json<InstallBody>,
+    Json(body): Json<UpdateBody>,
 ) -> Result<Json<Value>, AppError> {
     let v = state
         .plugins

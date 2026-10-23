@@ -1226,9 +1226,13 @@ async fn update_flow_stages_diff_apply_and_keep_old() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["kind"] == "update" && r["message"].as_str().unwrap_or("").contains("已应用")),
-        "{records}"
-    );
+            .any(|r| {
+                r["kind"] == "update"
+                    && r["message"].as_str().unwrap_or("").contains("已应用")
+                    && r["message"].as_str().unwrap_or("").contains("0.1.0 → 0.2.0")
+            }),
+            "MINOR①：from-version 应为旧版 0.1.0：{records}"
+        );
 
     // 4) 再来一轮更新 → 保持旧版：pending 清除、新版副本删除、留痕
     let v3_hash = upgrade_plugin_dir(&dir, "demo-plugin", "v3");
@@ -1470,4 +1474,111 @@ async fn git_install_and_market_end_to_end() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+
+// ===== B4 修复轮（tester-report-1）=====
+
+/// FAIL-1 回归锁：PluginManager::new 装配钩子全局门面——漏挂 = 全部 drivers
+/// 埋点静默短路（第 1 轮假绿盲区：单测只锁了「未装配时短路」这一侧）。
+#[tokio::test]
+async fn hooks_global_facade_is_set_by_plugin_manager_assembly() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_with(&dir);
+    let (_state, _a) = app(cfg);
+    assert!(
+        server::plugins::hooks::global_bus().is_some(),
+        "PluginManager::new 必须挂全局门面（drivers 埋点可达性前提）"
+    );
+}
+
+/// FAIL-2 回归锁：卸载 + purge 后审计留档不随周期扫描重生（清理登记抑制同
+/// hash 重发现）；目录放新版（hash 变化）即恢复发现面；重装解除登记。
+#[tokio::test]
+async fn uninstall_purge_suppresses_rediscovery_until_content_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+
+    // 卸载 + purge：审计产物被清 + 清理登记落
+    let (status, body, _) = req(
+        a.clone(),
+        "DELETE",
+        "/api/plugins/demo-plugin?purgeData=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let audit_files: Vec<_> = std::fs::read_dir(dir.path().join("plugin_audit"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert!(audit_files.is_empty(), "卸载随清理生效：{audit_files:?}");
+
+    // 周期扫描不再重生产物/发现记录（目录仍在，hash 未变）
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, discovered, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    assert!(
+        !discovered["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == "demo-plugin"),
+        "清理登记内目录不得重发现：{discovered}"
+    );
+    let audit_files: Vec<_> = std::fs::read_dir(dir.path().join("plugin_audit"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert!(audit_files.is_empty(), "扫描不得重生已清理插件的审计产物");
+
+    // 目录内容变化（新版）→ 清理登记失效，恢复「新发现」
+    let p = dir.path().join("plugins/demo-plugin");
+    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap().replace(
+        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.9.0\"",
+    );
+    std::fs::write(p.join("plugin.json"), manifest).unwrap();
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, discovered, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    assert!(
+        discovered["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == "demo-plugin" && i["status"] == "new"),
+        "hash 变化后恢复发现面：{discovered}"
+    );
+}
+
+/// MINOR② 回归锁：update apply/keep 请求体只带 contentHash（无冗余 id）仍 200。
+#[tokio::test]
+async fn update_apply_body_without_redundant_id_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    let p = dir.path().join("plugins/demo-plugin");
+    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap().replace(
+        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.2.0\"",
+    );
+    std::fs::write(p.join("plugin.json"), manifest).unwrap();
+    let new_hash = server::plugins::audit::content_hash(&p);
+    req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    let (status, text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "contentHash": new_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
 }
