@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { type ReactElement } from 'react';
 import { api } from '../api';
 import { useI18n } from '../i18n';
+import { DOC_REFRESH_MS } from '../lib/docRefresh';
 import { resolveDocRenderer } from '../lib/docRender';
 import '../lib/docRenderPlugins';
 
@@ -18,6 +19,9 @@ export default function FileContentView({ path }: Props): ReactElement {
   const file = useQuery({
     queryKey: ['docsFile', path],
     queryFn: () => api.docsFile(path),
+    // #36 评估项纳入（同根因、成本小）：页签挂载期（文件打开中）按周期重取，
+    // 外部追加/修改在 DOC_REFRESH_MS 窗口内反映到内容
+    refetchInterval: DOC_REFRESH_MS,
   });
 
   if (file.isLoading) {

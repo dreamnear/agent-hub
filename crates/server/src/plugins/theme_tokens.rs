@@ -148,9 +148,10 @@ pub fn contrast_ratio(fg: &str, bg: &str) -> Option<f64> {
 ///   文字场景用 accent-strong（5.10:1，在表）
 /// - (--c-accent, --c-bg/--c-panel) light 3.2/2.98——accent 作文字仅在深底场景
 ///   （Respawn #222 底 4.98:1），浅底文字场景禁用
-/// - (--c-green-text, --c-bg/--c-panel) dark 3.37/3.14——**存量欠账**：dark 段
-///   green-text 引用 --c-done(#10a37f) 本身低于 4.5（App.css 既有值，非本批引入；
-///   修色值需用户裁决，不因覆盖校验放大——已记批次交付报告）
+/// - green-text 欠账已于 agent-hub-docs-tree-refresh（#36）闭环：dark 段
+///   `var(--c-done)` 字面化为 #10a37f（运行时本就 5.61:1 达标；3.37:1 系校验器
+///   对 var() 引用链不解析、拿亮色值补全的误报口径），配对 (green-text, bg/panel)
+///   现双态达标并入表
 pub const SEMANTIC_PAIRS: &[(&str, &str)] = &[
     ("--c-text", "--c-bg"),
     ("--c-text", "--c-panel"),
@@ -167,6 +168,8 @@ pub const SEMANTIC_PAIRS: &[(&str, &str)] = &[
     ("--c-danger-text", "--c-danger-bg"),
     ("--c-warn-text", "--c-bg"),
     ("--c-warn-text", "--c-warn-bg"),
+    ("--c-green-text", "--c-bg"),
+    ("--c-green-text", "--c-panel"),
     ("--c-diff-add-text", "--c-bg"),
     ("--c-diff-add-text", "--c-diff-add-bg"),
     ("--c-danger-bright", "--c-sidebar"),

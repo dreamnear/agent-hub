@@ -96,7 +96,7 @@ html[data-font='serif'] {
   --c-danger-border: #5c2528;
   --c-danger-text: #ff8183;
   --c-danger-bright: #f85149; /* dark 保持现有亮红（#222 底 4.75:1） */
-  --c-green-text: var(--c-done);
+  --c-green-text: #10a37f; /* 状态绿文字态（暗色独立值；原 var(--c-done) 引用链使校验器误报 3.37:1，字面化后=运行时语义 #171717 底 5.61:1，#36） */
   --c-warn-bg: #2a2200;
   --c-warn-border: #6b5600;
   --c-warn-text: #e3b341;

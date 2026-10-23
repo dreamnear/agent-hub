@@ -4,8 +4,9 @@
 // 工厂本身的分派规则由 lib/docRender.test.tsx 单测，此处只锁「组件接线」。
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import FileContentView from './FileContentView';
+import { DOC_REFRESH_MS } from '../lib/docRefresh';
 import type { DocFile } from '../types';
 
 const docsFileMock = vi.fn();
@@ -74,5 +75,30 @@ describe('FileContentView（工厂分派接线，文档 Tab 退役迁移账）',
     await waitFor(() => expect(c2.querySelector('.doc-hint--err')).not.toBeNull());
     expect(c2.textContent).toContain('boom-403');
     unmount();
+  });
+});
+
+describe('FileContentView 打开中文件周期重取（agent-hub-docs-tree-refresh #36 评估项纳入）', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('外部修改在 DOC_REFRESH_MS 窗口内反映到内容（refetchInterval）', async () => {
+    vi.useFakeTimers();
+    docsFileMock
+      .mockResolvedValueOnce(fileOf({ content: 'v1' }))
+      .mockResolvedValueOnce(fileOf({ content: 'v2' }));
+    const { container } = renderView();
+    // 首帧：flush 微任务让首次查询落定（fake timers 下 waitFor 会卡，改手动推进）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container.textContent).toContain('v1');
+    // 推进一个刷新周期 → 重取 → v2 渲染（外部追加/修改随周期出现）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOC_REFRESH_MS + 1);
+    });
+    expect(container.textContent).toContain('v2');
+    expect(docsFileMock).toHaveBeenCalledTimes(2);
   });
 });

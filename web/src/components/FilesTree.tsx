@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactElement } from 'react';
 import { api } from '../api';
 import { useI18n } from '../i18n';
+import { DOC_REFRESH_MS } from '../lib/docRefresh';
 import type { DocEntry } from '../types';
 import './FilesTree.css';
 
@@ -29,7 +30,9 @@ export default function FilesTree({ root, activePath, onOpenFile }: Props): Reac
       .fetchQuery({
         queryKey: ['docsList', path],
         queryFn: () => api.docsList(path),
-        staleTime: 30_000,
+        // #36 主修：staleTime 0——任何 loadDir 调用都实际拉取（原 30s staleTime
+        // 让「展开后重取」被缓存吞掉，折叠→再展开永不刷新，正是根因 1）
+        staleTime: 0,
       })
       .then((entries) => setDirs((d) => ({ ...d, [path]: entries })))
       .catch(() => setDirs((d) => ({ ...d, [path]: [] })));
@@ -43,8 +46,21 @@ export default function FilesTree({ root, activePath, onOpenFile }: Props): Reac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root]);
 
+  // #36 主修：面板挂载期（= 文件面板打开）对已展开目录周期重取——
+  // 新文件写入后在 DOC_REFRESH_MS 窗口内出现，无需刷新页面。未展开目录
+  // 不在 expanded 集合 → 不拉取，大仓懒加载语义不回退。卸载即清理。
+  useEffect(() => {
+    if (root == null) return;
+    const id = window.setInterval(() => {
+      expanded.forEach((p) => loadDir(p));
+    }, DOC_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [root, expanded, qc]);
+
   const toggleDir = (path: string): void => {
-    if (dirs[path] === undefined) {
+    // #36 主修：展开总是重取新清单（不再以 dirs[path] === undefined 为首载守卫）——
+    // 折叠→再展开即手动刷新；重复展开同目录也每次刷新
+    if (!expanded.has(path)) {
       loadDir(path);
     }
     setExpanded((s) => {
