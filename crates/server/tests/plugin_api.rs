@@ -38,6 +38,7 @@ fn cfg_with(dir: &tempfile::TempDir) -> Config {
     cfg.plugin_data_dir = dir.path().join("plugin_data");
     cfg.plugin_scan_secs = 0;
     cfg.plugin_transient_dirs = Vec::new();
+    cfg.plugin_market_file = dir.path().join("plugin_marketplaces.json");
     std::fs::create_dir_all(&cfg.plugins_dir).unwrap();
     cfg
 }
@@ -1345,4 +1346,126 @@ async fn sessions_read_only_projection_rpc_reachable() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+// ===== B4：git 直装 + 索引市场 =====
+
+/// 建本地 git 仓库 fixture：一个最小插件 + marketplace.json 索引。
+fn make_plugin_repo(dir: &tempfile::TempDir) -> String {
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("plugins/git-market-demo/backend")).unwrap();
+    std::fs::write(
+        repo.join("plugins/git-market-demo/plugin.json"),
+        r#"{"schemaVersion":1,"id":"git-market-demo","name":"GitDemo","version":"0.1.0","hub":{"apiVersion":"1"},
+            "contributes":{"tools":[{"id":"ping","name":"Ping","risk":"read","impl":{"kind":"backend","ref":"ping"}}]},
+            "permissions":{"data":["projects:read"]},
+            "backend":{"command":"node","args":["backend/main.js"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(repo.join("plugins/git-market-demo/backend/main.js"), "// demo\n").unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["add", "."]);
+    run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init"]);
+    let repo_url = repo.to_string_lossy().into_owned();
+    let index = format!(
+        r#"{{"name":"demo-index","plugins":[{{"id":"git-market-demo","name":"GitDemo","description":"fixture","repoUrl":"{}#main","subPath":"plugins/git-market-demo","tags":["demo"]}}]}}"#,
+        repo_url
+    );
+    std::fs::write(repo.join("marketplace.json"), index).unwrap();
+    run(&["add", "."]);
+    run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "index"]);
+    repo_url
+}
+
+#[tokio::test]
+async fn git_install_and_market_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_with(&dir);
+    let (state, a) = app(cfg);
+    let repo_url = make_plugin_repo(&dir);
+
+    // 1) 索引源添加（git 仓库形态）→ 浏览可见
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/market/sources",
+        Some(json!({ "source": repo_url })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body, _) = req(a.clone(), "GET", "/api/plugins/market", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entries = body["entries"].as_array().unwrap();
+    assert!(entries.iter().any(|e| e["id"] == "git-market-demo"), "{body}");
+
+    // 2) 从索引触发安装 → 落盘 + 扫描面出现 new 候选 → 走既有确认流安装
+    let (status, install_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/market/install",
+        Some(json!({ "source": repo_url, "id": "git-market-demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{install_text}");
+    let body: Value = serde_json::from_str(&install_text).unwrap();
+    assert_eq!(body["status"], "new", "{body}");
+    let hash = body["report"]["contentHash"].as_str().unwrap().to_string();
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/install",
+        Some(json!({ "id": "git-market-demo", "contentHash": hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(state.plugins.list()[0].id, "git-market-demo");
+
+    // 3) git 直装 URL 形态（#ref）→ 已装同 hash → already_installed 幂等
+    let (status, git_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/install-git",
+        Some(json!({ "repoUrl": format!("{repo_url}#main"), "subPath": "plugins/git-market-demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{git_text}");
+    let body: Value = serde_json::from_str(&git_text).unwrap();
+    assert_eq!(body["status"], "already_installed", "{body}");
+
+    // 4) 审计产物治理：prune 可见且生效
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/audit/prune", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["filesAfter"].is_number(), "{body}");
+
+    // 5) 索引源移除
+    let (status, body, _) = req(
+        a.clone(),
+        "DELETE",
+        &format!("/api/plugins/market/sources?source={}", repo_url),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // 6) 不合法源形态被拒（ssh 不进 v1）
+    let (status, _, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/market/sources",
+        Some(json!({ "source": "git@github.com:a/b.git" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

@@ -576,6 +576,23 @@ pub fn prune_artifacts(audit_dir: &Path, keep_per_plugin: usize) -> std::io::Res
     Ok(removed)
 }
 
+/// 审计产物清点（B4 治理可见性）：文件数与总体积。
+pub fn artifact_stats(audit_dir: &Path) -> (usize, u64) {
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let Ok(read) = std::fs::read_dir(audit_dir) else {
+        return (0, 0);
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            count += 1;
+            bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    (count, bytes)
+}
+
 /// 卸载随清理（B4）：删除某插件的全部审计产物。
 pub fn purge_plugin_artifacts(audit_dir: &Path, plugin_id: &str) -> std::io::Result<usize> {
     let groups = group_artifacts(audit_dir)?;

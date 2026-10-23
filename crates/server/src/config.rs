@@ -515,6 +515,9 @@ pub struct Config {
     /// 审计产物每插件保留份数（B4 治理）：`[plugins] audit_keep`，
     /// env `AGENT_HUB_PLUGIN_AUDIT_KEEP` 覆盖；默认 10，0 = 关闭清理
     pub plugin_audit_keep: usize,
+    /// 索引市场源清单（B4 ADR-0008 §3）：`~/.claude-view/plugin_marketplaces.json`，
+    /// env `AGENT_HUB_PLUGIN_MARKET_FILE` 覆盖；0600（用户显式添加的索引源 URL）
+    pub plugin_market_file: PathBuf,
 }
 
 impl Config {
@@ -732,6 +735,15 @@ impl Config {
                 }),
             plugin_hook_queue_cap: PluginHookQueueCapConfig::load(),
             plugin_audit_keep: PluginAuditKeepConfig::load(),
+            plugin_market_file: std::env::var("AGENT_HUB_PLUGIN_MARKET_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.claude-view/plugin_marketplaces.json",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
         }
     }
 }

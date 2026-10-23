@@ -10,6 +10,7 @@ pub mod approvals;
 pub mod audit;
 pub mod credentials;
 pub mod hooks;
+pub mod install;
 pub mod manifest;
 pub mod mcp_config;
 pub mod mcp_proxy;
@@ -64,6 +65,8 @@ pub struct PluginPaths {
     pub hook_queue_cap: usize,
     /// 审计产物每插件保留份数（B4 治理；`[plugins] audit_keep`，默认 10）
     pub audit_keep: usize,
+    /// 索引市场源清单文件（B4 ADR-0008 §3）
+    pub market_file: PathBuf,
 }
 
 impl PluginPaths {
@@ -79,9 +82,20 @@ impl PluginPaths {
             transient: cfg.plugin_transient_dirs.clone(),
             hook_queue_cap: cfg.plugin_hook_queue_cap,
             audit_keep: cfg.plugin_audit_keep,
+            market_file: cfg.plugin_market_file.clone(),
         }
     }
 }
+
+/// 索引市场缓存（B4：300s TTL，避免每次 GET 重克隆索引仓库）
+#[derive(Clone)]
+struct MarketCache {
+    at: Instant,
+    sources: Vec<install::MarketSourceView>,
+    entries: Vec<install::MarketEntry>,
+}
+
+const MARKET_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// 侧栏导航数据（ADR-0004 第 2 条）：仅「启用（就绪）」与「运行故障」且有视图贡献。
 #[derive(Debug, Clone, Serialize)]
@@ -310,6 +324,7 @@ pub struct PluginManager {
     /// 定时任务管理器回填（B3 `hub.tasks.list/toggle`；与 /api/tasks 同一实例）
     tasks: StdMutex<Option<Arc<crate::tasks::TaskManager>>>,
     scan_cache: RwLock<scanner::ScanOutcome>,
+    market_cache: RwLock<Option<MarketCache>>,
     locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     retries: StdMutex<HashMap<String, RetryState>>,
     asset_cache: RwLock<HashMap<String, u64>>,
@@ -345,6 +360,7 @@ impl PluginManager {
             notes_file: StdMutex::new(None),
             tasks: StdMutex::new(None),
             scan_cache: RwLock::new(scanner::ScanOutcome::default()),
+            market_cache: RwLock::new(None),
             locks: StdMutex::new(HashMap::new()),
             retries: StdMutex::new(HashMap::new()),
             asset_cache: RwLock::new(HashMap::new()),
@@ -1697,6 +1713,108 @@ impl PluginManager {
         issued
     }
 
+    // ===== 分发面（B4，ADR-0008 §2/§3）=====
+
+    /// git 直装（clone → 校验 → 落盘 → 扫描进确认面）。
+    pub async fn install_git(
+        self: &Arc<Self>,
+        req: &install::GitInstallRequest,
+    ) -> Result<install::GitInstallOutcome, String> {
+        install::git_install(self, req).await
+    }
+
+    /// 索引源添加（用户显式；形态校验前置——错误源不进清单）。
+    pub fn market_add_source(&self, source: &str) -> Result<(), String> {
+        install::valid_git_source(source)?;
+        let mut store = install::MarketSources::load(&self.paths.market_file);
+        if store.sources.iter().any(|s| s == source) {
+            return Ok(()); // 幂等
+        }
+        store.sources.push(source.to_string());
+        store.save(&self.paths.market_file)
+    }
+
+    /// 索引源移除。
+    pub fn market_remove_source(&self, source: &str) -> Result<usize, String> {
+        let mut store = install::MarketSources::load(&self.paths.market_file);
+        let before = store.sources.len();
+        store.sources.retain(|s| s != source);
+        let removed = before - store.sources.len();
+        store.save(&self.paths.market_file)?;
+        Ok(removed)
+    }
+
+    /// 索引源清单 + 条目聚合（TTL 缓存 300s；force = 绕缓存重拉）。
+    pub async fn market_list(
+        self: &Arc<Self>,
+        force: bool,
+    ) -> (Vec<install::MarketSourceView>, Vec<install::MarketEntry>) {
+        if !force {
+            if let Ok(c) = self.market_cache.read() {
+                if let Some(c) = c.as_ref() {
+                    if c.at.elapsed() < MARKET_CACHE_TTL {
+                        return (c.sources.clone(), c.entries.clone());
+                    }
+                }
+            }
+        }
+        let store = install::MarketSources::load(&self.paths.market_file);
+        let mut views = Vec::new();
+        let mut entries = Vec::new();
+        for source in &store.sources {
+            match install::fetch_market_source(self, source).await {
+                Ok((name, list)) => {
+                    entries.extend(list.iter().cloned());
+                    views.push(install::MarketSourceView {
+                        source: source.clone(),
+                        name,
+                        plugin_count: list.len(),
+                        error: None,
+                    });
+                }
+                Err(e) => views.push(install::MarketSourceView {
+                    source: source.clone(),
+                    name: None,
+                    plugin_count: 0,
+                    error: Some(self.credentials.scrub(&e)),
+                }),
+            }
+        }
+        if let Ok(mut c) = self.market_cache.write() {
+            *c = Some(MarketCache {
+                at: Instant::now(),
+                sources: views.clone(),
+                entries: entries.clone(),
+            });
+        }
+        (views, entries)
+    }
+
+    /// 从索引触发安装：定位条目 → git 直装（进既有确认面）。
+    pub async fn market_install(
+        self: &Arc<Self>,
+        source: &str,
+        id: &str,
+    ) -> Result<install::GitInstallOutcome, String> {
+        let (_, entries) = self.market_list(false).await;
+        let entry = entries
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| format!("索引中无插件 {id:?}（源 {source:?} 未收录或未刷新）"))?;
+        self.install_git(&entry.into()).await
+    }
+
+    /// 审计产物清点（管理页可见性）：文件数与体积。
+    pub fn audit_artifact_stats(&self) -> (usize, u64) {
+        audit::artifact_stats(&self.paths.audit_dir)
+    }
+
+    /// 手动审计产物清理（保留策略同扫描期；返回清理数）。
+    pub fn audit_prune(&self) -> Result<usize, String> {
+        audit::prune_artifacts(&self.paths.audit_dir, self.paths.audit_keep)
+            .map_err(|e| e.to_string())
+    }
+
     /// 审批决策（UI 端点调用）：留痕 Approval/Rejection 入插件故障记录域 +
     /// 通知等待方。插件已卸载时决定照常生效（留痕目标已消失则跳过落痕）。
     pub fn decide_approval(
@@ -2138,7 +2256,7 @@ fn short_hash(content_hash: &str) -> String {
 }
 
 /// 目录递归复制（不跟随符号链接——副本内 symlink 跳过，与审计口径一致）。
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
