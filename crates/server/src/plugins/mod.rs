@@ -400,6 +400,10 @@ impl PluginManager {
             let mut prev: usize = 0;
             loop {
                 let now = probe().await;
+                if now != prev {
+                    // 采样变化留痕（tester-report-3 建议的现场自证；翻转可观测）
+                    tracing::debug!(from = prev, to = now, "onIdle 探针计数变化");
+                }
                 if prev > 0 && now == 0 {
                     // 忙→闲翻转点（统一归一逻辑处，单点——轮询计数的翻转即归一）
                     bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));

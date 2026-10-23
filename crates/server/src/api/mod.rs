@@ -247,19 +247,13 @@ impl AppState {
                 })
             },
         ));
-        // B4 onIdle 探针：运行中（Working/NeedsInput）会话计数
+        // B4 onIdle 探针：运行中（Working/NeedsInput）会话计数——fail-soft 逐
+        // driver 聚合（running_count），单 driver Err 不抹零整份计数
+        //（tester-report-3 根因修复）
         let drivers_for_idle = drivers.clone();
         plugins.set_idle_probe(Arc::new(move || {
             let drivers = drivers_for_idle.clone();
-            Box::pin(async move {
-                drivers
-                    .list_all(false)
-                    .await
-                    .unwrap_or_default()
-                    .iter()
-                    .filter(|a| matches!(a.group, crate::models::Group::Working | crate::models::Group::NeedsInput))
-                    .count()
-            })
+            Box::pin(async move { drivers.running_count().await })
         }));
         // B3 视图 API（hub.notes.* / hub.tasks.*）：与 /api/notes、/api/tasks 同一
         // 存储/管理器实例（加法接线，不动既有字段）

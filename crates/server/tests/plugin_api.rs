@@ -1661,3 +1661,137 @@ async fn on_idle_flip_dispatches_via_probe_backfill() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
+
+/// r3 回归锁：探针计数 fail-soft——单 driver list Err 不抹零整份计数。
+/// 同构 FakeDriver 两个实例（fail 模式 Err / ok 模式返回 working 条目），
+/// running_count() 应仍计出 1（tester-report-3 的 list_all 短路 + unwrap 抹零
+/// 根因的直接反例）。
+#[tokio::test]
+async fn running_count_survives_single_driver_error() {
+    use anyhow::Result;
+    use server::drivers::{AgentCatalog, AgentDriver, DriverRegistry, SessionControl, SessionHistory, StartSpec};
+    use server::models::{AgentSummary, ChatMessage, Group};
+    use std::sync::Arc;
+
+    struct FakeDriver {
+        name: &'static str,
+        fail: bool,
+    }
+
+    fn summary(driver: &str, group: Group) -> AgentSummary {
+        AgentSummary {
+            driver: driver.to_string(),
+            id: format!("{driver}-1"),
+            name: None,
+            cwd: None,
+            kind: None,
+            raw_state: None,
+            group,
+            detail: None,
+            tokens: None,
+            context_tokens: None,
+            started_at: None,
+            session_id: None,
+        }
+    }
+
+    impl AgentCatalog for FakeDriver {
+        fn list<'a>(&'a self, _all: bool) -> futures::future::BoxFuture<'a, Result<Vec<AgentSummary>>> {
+            if self.fail {
+                Box::pin(async { Err(anyhow::anyhow!("fake dsh auth failure")) })
+            } else {
+                let s = summary("claude", Group::Working);
+                Box::pin(async { Ok(vec![s]) })
+            }
+        }
+        fn get<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Option<AgentSummary>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn start<'a>(&'a self, _spec: &'a StartSpec) -> futures::future::BoxFuture<'a, Result<String>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "start")) })
+        }
+        fn stop<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "stop")) })
+        }
+        fn remove<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "remove")) })
+        }
+        fn respawn<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "respawn")) })
+        }
+        fn logs<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<String>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "logs")) })
+        }
+    }
+
+    impl SessionControl for FakeDriver {
+        fn send<'a>(&'a self, _id: &'a str, _text: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "send")) })
+        }
+        fn cancel<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "cancel")) })
+        }
+        fn is_finished(&self, _id: &str) -> bool { false }
+        fn release(&self, _id: &str) -> Result<()> { Ok(()) }
+        fn answer_permission(&self, _id: &str, _perm: &str, _opt: Option<&str>) -> Result<bool> {
+            Err(server::drivers::unsupported("fake", "answer_permission"))
+        }
+    }
+
+    impl SessionHistory for FakeDriver {
+        fn page<'a>(
+            &'a self,
+            _id: &'a str,
+            _limit: usize,
+            _before: Option<usize>,
+        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn full_history<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Vec<ChatMessage>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn is_active<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<bool>> {
+            Box::pin(async { Ok(false) })
+        }
+        fn subagents<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Vec<server::drivers::SubagentEntry>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn subagent_page<'a>(
+            &'a self,
+            _id: &'a str,
+            _sub: &'a str,
+            _limit: usize,
+            _before: Option<usize>,
+        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn tasks<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Option<Vec<server::drivers::TaskEntry>>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn ensure_chat_room(&self, _session_id: &str) -> tokio::sync::broadcast::Sender<server::drivers::events::ChatEvent> {
+            let (tx, _) = tokio::sync::broadcast::channel(1);
+            tx
+        }
+        fn ensure_subagent_room(
+            &self,
+            _session_id: &str,
+            _subagent_id: &str,
+        ) -> tokio::sync::broadcast::Sender<server::drivers::events::ChatEvent> {
+            let (tx, _) = tokio::sync::broadcast::channel(1);
+            tx
+        }
+    }
+
+    impl server::drivers::ModelSettings for FakeDriver {}
+    impl AgentDriver for FakeDriver {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    let mut reg = DriverRegistry::new();
+    reg.register(Arc::new(FakeDriver { name: "dsh", fail: true }));
+    reg.register(Arc::new(FakeDriver { name: "claude", fail: false }));
+    let count = reg.running_count().await;
+    assert_eq!(count, 1, "dsh Err 不得抹零 claude 的 working 计数");
+}
