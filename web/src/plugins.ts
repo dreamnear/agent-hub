@@ -424,11 +424,11 @@ export const plugins = {
       method: 'DELETE',
     }),
 
-  /// 从索引触发安装（落 git 直装流 → 确认面）
-  marketInstall: (source: string, id: string): Promise<GitInstallOutcome> =>
+  /// 从索引触发安装（落 git 直装流 → 确认面；source 可选，仅供服务端错因定位）
+  marketInstall: (id: string, source?: string): Promise<GitInstallOutcome> =>
     request('/api/plugins/market/install', {
       method: 'POST',
-      body: JSON.stringify({ source, id }),
+      body: JSON.stringify({ id, source }),
     }),
 
   /// 审计产物治理：手动清理（保留策略与扫描期一致）+ 清点
