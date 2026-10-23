@@ -942,6 +942,13 @@ impl PluginManager {
                 tracing::warn!(plugin = %item.id, error = %e, "审计产物落盘失败");
             }
         }
+        // B4 BR-13：更新候选进待确认流——新版副本入库（.versions）、旧版内容
+        // 恢复进插件目录（保持旧版可用），注册表登记 pending_update
+        for item in outcome.items.iter().filter(|i| i.status == "update") {
+            if let Err(e) = self.stage_pending_update(item) {
+                tracing::warn!(plugin = %item.id, error = %e, "更新候选入库失败（保持未确认态）");
+            }
+        }
         // B4 治理（需求功能点 6）：按保留策略清理审计产物（每插件保留 N 份）
         match audit::prune_artifacts(&self.paths.audit_dir, self.paths.audit_keep) {
             Ok(removed) if removed > 0 => {
@@ -950,10 +957,53 @@ impl PluginManager {
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "审计产物清理失败"),
         }
-        let discovered = outcome.items.len();
+        // 已入库待确认项（目录已恢复旧版，不再出现在扫描候选里）从持久态
+        // 重新投影进 discovered 面（审计源 = .versions 副本）
+        let mut items = outcome.items;
+        for p in self.registry.list() {
+            let Some(pending) = p.entry.pending_update.clone() else {
+                continue;
+            };
+            if items
+                .iter()
+                .any(|i| i.id == p.entry.id && i.status == "update")
+            {
+                continue;
+            }
+            let copy = version_dir(&self.paths, &p.entry.id, &pending.content_hash);
+            if !copy.join("plugin.json").is_file() {
+                continue;
+            }
+            let report = audit::audit_dir(&copy, &self.credentials);
+            let _ = audit::persist(&report, &self.paths.audit_dir);
+            items.push(scanner::DiscoveredItem {
+                id: p.entry.id.clone(),
+                dir_name: p.entry.id.clone(),
+                path: copy.to_string_lossy().into_owned(),
+                source_kind: p.entry.source.kind.clone(),
+                status: "update".into(),
+                installed_content_hash: Some(p.entry.content_hash.clone()),
+                update_diff: Some(scanner::compute_update_diff(&p, &report)),
+                report,
+            });
+        }
+        items.sort_by(|a, b| {
+            let rank = |s: &str| match s {
+                "audit_failed" => 0,
+                "update" => 1,
+                _ => 2,
+            };
+            rank(&a.status)
+                .cmp(&rank(&b.status))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let discovered = items.len();
         let last = outcome.last_scan_at.clone();
         if let Ok(mut c) = self.scan_cache.write() {
-            *c = outcome;
+            *c = scanner::ScanOutcome {
+                items,
+                last_scan_at: last.clone(),
+            };
         }
         let _ = self
             .events_tx
@@ -962,6 +1012,188 @@ impl PluginManager {
             last_scan_at: last,
             discovered,
         }
+    }
+
+    /// 更新候选入库（B4 BR-13）：新版副本 → `.versions/<id>/<hash>/`；旧版副本
+    /// 存在时恢复旧版目录内容（保持旧版可用——backend 懒启动跑的代码与注册表
+    /// 快照一致）；登记 pending_update。已在待确认态（同 hash）则幂等跳过。
+    fn stage_pending_update(&self, item: &scanner::DiscoveredItem) -> Result<(), String> {
+        let Some(installed) = self.registry.get(&item.id) else {
+            return Err("已装条目消失".into());
+        };
+        if installed
+            .entry
+            .pending_update
+            .as_ref()
+            .is_some_and(|p| p.content_hash == item.report.content_hash)
+        {
+            return Ok(()); // 同版本已在待确认态
+        }
+        if item.source_kind == "transient" {
+            return Ok(()); // transient 不参与更新比对（ADR-0001 第 4 条）
+        }
+        let new_copy = version_dir(&self.paths, &item.id, &item.report.content_hash);
+        copy_dir_recursive(Path::new(&item.path), &new_copy)
+            .map_err(|e| format!("新版副本入库失败：{e}"))?;
+        let old_copy = version_dir(&self.paths, &item.id, &installed.entry.content_hash);
+        let old_available = old_copy.join("plugin.json").is_file();
+        if old_available {
+            // 旧版恢复：目录内容回滚到已装版本（新副本已在 .versions，不丢失）
+            let live = self.paths.plugins_dir.join(&item.id);
+            std::fs::remove_dir_all(&live).map_err(|e| format!("目录重置失败：{e}"))?;
+            copy_dir_recursive(&old_copy, &live).map_err(|e| format!("旧版恢复失败：{e}"))?;
+        }
+        let _ = self.registry.set_pending_update(
+            &item.id,
+            Some(registry::PendingUpdate {
+                content_hash: item.report.content_hash.clone(),
+                version: item.report.plugin_version.clone(),
+                discovered_at: registry::now_rfc3339(),
+                old_version_available: old_available,
+            }),
+        );
+        prune_versions(&self.paths, &item.id, VERSIONS_KEEP);
+        tracing::info!(
+            plugin = %item.id,
+            new_hash = %item.report.content_hash,
+            old_restored = old_available,
+            "更新候选已入库待确认（BR-13）"
+        );
+        Ok(())
+    }
+
+    /// 应用更新（B4 BR-13 确认流）：`.versions` 副本重新审计（TOCTOU 再校验）→
+    /// 停 backend → 目录内容替换 → 注册表条目替换 → 留痕 + 广播。
+    pub async fn apply_update(
+        self: &Arc<Self>,
+        id: &str,
+        content_hash: &str,
+    ) -> Result<PluginView, String> {
+        let lock = self.plugin_lock(id);
+        let _guard = lock.lock().await;
+        let installed = self
+            .registry
+            .get(id)
+            .ok_or_else(|| format!("插件 {id} 不在注册表中"))?;
+        let pending = installed
+            .entry
+            .pending_update
+            .clone()
+            .ok_or_else(|| format!("插件 {id} 无待确认更新"))?;
+        if pending.content_hash != content_hash {
+            return Err(format!(
+                "待确认更新 hash 不一致（登记 {}/请求 {content_hash}），请刷新后重试",
+                pending.content_hash
+            ));
+        }
+        let copy = version_dir(&self.paths, id, content_hash);
+        if !copy.join("plugin.json").is_file() {
+            return Err(format!("新版本副本缺失：{}", copy.display()));
+        }
+        // 重新审计 + hash 再校验（防 TOCTOU：入库后副本被改）
+        let report = audit::audit_dir(&copy, &self.credentials);
+        if !report.errors.is_empty() {
+            let first = &report.errors[0];
+            return Err(format!(
+                "更新副本审计未通过：{}（字段 {} / 规则 {}）",
+                first.message, first.field, first.rule
+            ));
+        }
+        if report.content_hash != content_hash {
+            return Err("副本内容在入库后已变化（hash 不一致），已拒绝应用".into());
+        }
+        // 内容替换：运行中的 backend 先停（目录内容与进程镜像不一致期间不可调用）
+        self.supervisor.stop(id).await;
+        self.tickets.revoke_plugin(id);
+        let live = self.paths.plugins_dir.join(id);
+        std::fs::remove_dir_all(&live).map_err(|e| format!("目录替换失败：{e}"))?;
+        copy_dir_recursive(&copy, &live).map_err(|e| format!("目录替换失败：{e}"))?;
+        // 注册表条目替换：version/hash/权限面/pending 清除 + manifest 快照刷新
+        let parsed = manifest::parse(
+            &std::fs::read_to_string(live.join("plugin.json"))
+                .map_err(|e| format!("读取 plugin.json 失败：{e}"))?,
+        )
+        .map_err(|errs| {
+            format!(
+                "manifest 校验失败：{}",
+                errs.first().map(|e| e.message.clone()).unwrap_or_default()
+            )
+        })?;
+        self.registry
+            .apply_update(
+                id,
+                parsed.manifest.version.clone(),
+                content_hash.to_string(),
+                registry::permissions_hash(&parsed.manifest.permissions),
+                parsed.manifest,
+                live,
+            )
+            .map_err(|e| format!("注册表更新失败：{e}"))?;
+        let _ = self.registry.push_record(
+            id,
+            FaultRecord {
+                at: now_rfc3339(),
+                kind: FaultKind::Update,
+                message: format!(
+                    "更新已应用：{} → {}（hash {}）",
+                    pending.version,
+                    report.plugin_version,
+                    short_hash(content_hash)
+                ),
+            },
+        );
+        self.scan_now();
+        self.broadcast(id);
+        let p = self.registry.get(id).expect("entry exists");
+        Ok(self.view_of(&p))
+    }
+
+    /// 保持旧版（B4 BR-13 拒绝分支）：清除待确认态 + 删除新版副本 + 留痕。
+    /// 旧版自始至终未被替换（目录恢复语义），无需回滚动作。
+    pub async fn keep_old_version(
+        self: &Arc<Self>,
+        id: &str,
+        content_hash: &str,
+    ) -> Result<PluginView, String> {
+        let lock = self.plugin_lock(id);
+        let _guard = lock.lock().await;
+        let installed = self
+            .registry
+            .get(id)
+            .ok_or_else(|| format!("插件 {id} 不在注册表中"))?;
+        let pending = installed
+            .entry
+            .pending_update
+            .clone()
+            .ok_or_else(|| format!("插件 {id} 无待确认更新"))?;
+        if pending.content_hash != content_hash {
+            return Err(format!(
+                "待确认更新 hash 不一致（登记 {}/请求 {content_hash}）",
+                pending.content_hash
+            ));
+        }
+        let _ = self.registry.set_pending_update(id, None);
+        let copy = version_dir(&self.paths, id, content_hash);
+        if copy.is_dir() {
+            let _ = std::fs::remove_dir_all(&copy);
+        }
+        let _ = self.registry.push_record(
+            id,
+            FaultRecord {
+                at: now_rfc3339(),
+                kind: FaultKind::Update,
+                message: format!(
+                    "更新已拒绝，保持旧版 {}（拒绝 {}，hash {}）",
+                    installed.entry.version,
+                    pending.version,
+                    short_hash(content_hash)
+                ),
+            },
+        );
+        self.scan_now();
+        self.broadcast(id);
+        let p = self.registry.get(id).expect("entry exists");
+        Ok(self.view_of(&p))
     }
 
     /// 只审计不安装（插件作者自检入口，等价 `claude plugin validate`）。
@@ -996,13 +1228,14 @@ impl PluginManager {
         let lock = self.plugin_lock(id);
         let _guard = lock.lock().await;
 
-        // 已装且同 hash：幂等无操作；hash 变化 = 更新候选（BR-13 确认流在 B4，B1 拒绝静默覆盖）
+        // 已装且同 hash：幂等无操作；hash 变化 = 更新候选（BR-13 确认流走
+        // /update/apply 端点——扫描器已把候选入待确认区，此处拒绝静默覆盖）
         if let Some(existing) = self.registry.get(id) {
             if existing.entry.content_hash == content_hash {
                 return Ok((self.view_of(&existing), true));
             }
             return Err(format!(
-                "插件 {id} 内容已变化（已装 {} / 新目录 {content_hash}）；更新确认流在后续批次交付，本次拒绝静默覆盖（BR-13）",
+                "插件 {id} 内容已变化（已装 {} / 新目录 {content_hash}）——请走更新确认流（管理页「更新待确认」卡片，BR-13）",
                 existing.entry.content_hash
             ));
         }
@@ -1058,6 +1291,7 @@ impl PluginManager {
             enabled: false,
             state: PluginState::Stopped,
             last_fault: None,
+            pending_update: None,
         };
         let (installed, created) = self
             .registry
@@ -1070,6 +1304,15 @@ impl PluginManager {
                 self.fail_load(id, "load-failed", e);
             }
             let _ = audit::persist(&item.report, &self.paths.audit_dir);
+            // B4：安装即快照版本副本（未来更新的「保持旧版」恢复源）
+            if item.source_kind != "transient" {
+                let snapshot = version_dir(&self.paths, id, &item.report.content_hash);
+                if let Err(e) = copy_dir_recursive(Path::new(&item.path), &snapshot) {
+                    tracing::warn!(plugin = %id, error = %e, "版本快照失败（更新恢复源缺失）");
+                } else {
+                    prune_versions(&self.paths, id, VERSIONS_KEEP);
+                }
+            }
         }
         self.scan_now();
         self.broadcast(id);
@@ -1877,6 +2120,71 @@ fn versions_root(paths: &PluginPaths) -> PathBuf {
     paths.plugins_dir.join(".versions")
 }
 
+/// 每插件保留的版本副本份数（ADR-0008 拍板结论 4 的 B4 细化：保留 3 份，
+/// 新副本入库时按 mtime 剪枝）。
+const VERSIONS_KEEP: usize = 3;
+
+/// 单版本副本目录：`.versions/<id>/<hash 去 sha256: 前 16 hex>/`。
+fn version_dir(paths: &PluginPaths, id: &str, content_hash: &str) -> PathBuf {
+    versions_root(paths).join(id).join(short_hash(content_hash))
+}
+
+fn short_hash(content_hash: &str) -> String {
+    content_hash
+        .trim_start_matches("sha256:")
+        .chars()
+        .take(16)
+        .collect()
+}
+
+/// 目录递归复制（不跟随符号链接——副本内 symlink 跳过，与审计口径一致）。
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let target = dst.join(entry.file_name());
+        if meta.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else if meta.is_file() {
+            std::fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// 版本副本剪枝（按 mtime 留新弃旧；keep=0 关闭）。
+fn prune_versions(paths: &PluginPaths, id: &str, keep: usize) {
+    if keep == 0 {
+        return;
+    }
+    let dir = versions_root(paths).join(id);
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut entries: Vec<(PathBuf, std::time::SystemTime)> = read
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let modified = e.metadata().and_then(|m| m.modified()).ok()?;
+            Some((e.path(), modified))
+        })
+        .collect();
+    if entries.len() <= keep {
+        return;
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    for (path, _) in entries.into_iter().skip(keep) {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
 /// 目录体积（视图资产展示用；不跟随符号链接）。
 fn dir_bytes(dir: &Path, depth: usize) -> u64 {
     if depth > 16 {
@@ -1983,6 +2291,7 @@ mod tests {
                 enabled: true,
                 state: PluginState::Ready,
                 last_fault: None,
+                pending_update: None,
             },
             manifest: m,
             plugin_dir: PathBuf::from("/tmp/plugin-v"),

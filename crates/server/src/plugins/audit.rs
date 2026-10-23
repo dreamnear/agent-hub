@@ -77,6 +77,8 @@ pub struct CommandReach {
 #[serde(rename_all = "camelCase")]
 pub struct AuditReport {
     pub plugin_id: String,
+    /// manifest version（B4 更新差异面展示用；manifest 不可解析时为空）
+    pub plugin_version: String,
     pub plugin_dir: String,
     pub content_hash: String,
     pub contributions: Vec<Contribution>,
@@ -165,6 +167,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
             );
             return AuditReport {
                 plugin_id: String::new(),
+                plugin_version: String::new(),
                 plugin_dir: root.to_string_lossy().into_owned(),
                 content_hash: hash,
                 contributions,
@@ -185,6 +188,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
             errors.extend(errs);
             return AuditReport {
                 plugin_id: String::new(),
+                plugin_version: String::new(),
                 plugin_dir: root.to_string_lossy().into_owned(),
                 content_hash: hash,
                 contributions,
@@ -395,6 +399,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
         .collect();
     AuditReport {
         plugin_id: m.id.clone(),
+        plugin_version: m.version.clone(),
         plugin_dir: root.to_string_lossy().into_owned(),
         content_hash: hash,
         contributions,

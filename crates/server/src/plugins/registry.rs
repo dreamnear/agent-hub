@@ -29,6 +29,23 @@ pub enum FaultKind {
     Violation,
     Approval,
     Rejection,
+    /// 更新确认流留痕（B4 BR-13：应用/保持旧版均留痕，消息体区分）
+    Update,
+}
+
+/// 待确认更新（B4 BR-13）：新版本已入库（`.versions/<id>/<hash>/`），
+/// 确认前注册表继续以旧版服务（保持旧版可用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingUpdate {
+    /// 新版本内容 hash（确认时防 TOCTOU 的比对键）
+    pub content_hash: String,
+    /// 新版本 manifest version（展示用）
+    pub version: String,
+    /// 发现时间
+    pub discovered_at: String,
+    /// 发现时旧版副本是否可用（false = B4 前安装的存量插件，无法恢复旧目录内容）
+    pub old_version_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +101,9 @@ pub struct PluginEntry {
     pub state: PluginState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
+    /// 待确认更新（B4 BR-13；None = 无）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_update: Option<PendingUpdate>,
 }
 
 /// 运行时条目 = 持久态 + manifest 快照 + 故障记录（B1 内存态，重启保留 lastFault）。
@@ -337,6 +357,48 @@ impl Registry {
         Some(removed)
     }
 
+    /// 更新确认流的条目替换（B4 BR-13）：版本/hash/权限面/待确认态一次写入 +
+    /// manifest 快照刷新。状态位不动（启用/停用/故障语义与更新正交）。
+    pub fn apply_update(
+        &self,
+        id: &str,
+        version: String,
+        content_hash: String,
+        permissions_hash: String,
+        manifest: Manifest,
+        plugin_dir: PathBuf,
+    ) -> Result<PluginEntry, String> {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let Some(p) = guard.get_mut(id) else {
+            return Err(format!("插件 {id} 不在注册表中"));
+        };
+        p.entry.version = version;
+        p.entry.content_hash = content_hash;
+        p.entry.permissions_hash = permissions_hash;
+        p.entry.pending_update = None;
+        p.manifest = manifest;
+        p.plugin_dir = plugin_dir;
+        let entry = p.entry.clone();
+        let _ = self.save_locked(&guard);
+        Ok(entry)
+    }
+
+    /// 待确认更新登记/清除（B4；清除 = keep_old 路径）。
+    pub fn set_pending_update(
+        &self,
+        id: &str,
+        pending: Option<PendingUpdate>,
+    ) -> Result<PluginEntry, String> {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let Some(p) = guard.get_mut(id) else {
+            return Err(format!("插件 {id} 不在注册表中"));
+        };
+        p.entry.pending_update = pending;
+        let entry = p.entry.clone();
+        let _ = self.save_locked(&guard);
+        Ok(entry)
+    }
+
     fn save_locked(&self, map: &BTreeMap<String, InstalledPlugin>) -> std::io::Result<()> {
         if let Some(dir) = self.file.parent() {
             std::fs::create_dir_all(dir)?;
@@ -409,6 +471,7 @@ mod tests {
             enabled: true,
             state: PluginState::Ready,
             last_fault: None,
+            pending_update: None,
         }
     }
 

@@ -1103,3 +1103,246 @@ async fn startup_keeps_disabled_entry_disabled_even_when_dir_missing() {
         "停用态不得出现故障入口（BR-03）"
     );
 }
+
+// ===== B4：更新/扩权完整流（BR-13）=====
+
+/// 把已装插件目录内容升级为 0.2.0（+notes:read 扩权 + 新贡献物）；
+/// `tag` 保证不同轮次内容不同（hash 确定）。
+fn upgrade_plugin_dir(dir: &tempfile::TempDir, id: &str, tag: &str) -> String {
+    let p = dir.path().join("plugins").join(id);
+    std::fs::write(
+        p.join("plugin.json"),
+        format!(
+            r#"{{
+  "schemaVersion": 1,
+  "id": "{id}",
+  "name": "Demo Workbench",
+  "version": "0.2.0",
+  "hub": {{ "apiVersion": "1" }},
+  "contributes": {{
+    "tools": [{{ "id": "ping", "name": "Ping", "risk": "read",
+                "impl": {{ "kind": "backend", "ref": "ping" }} }},
+             {{ "id": "fetch2", "name": "Fetch2", "risk": "read",
+                "impl": {{ "kind": "backend", "ref": "fetch2" }}}}],
+    "views": [{{ "id": "home", "title": "Demo View", "entry": "view/index.html" }}]
+  }},
+  "permissions": {{ "data": ["projects:read", "notes:read"], "credentials": ["demo_pat"] }},
+  "backend": {{ "command": "backend/main.sh", "args": [] }}
+}}"#
+        ),
+    )
+    .unwrap();
+    // 重写任一非 manifest 文件保证 hash 变化确定
+    std::fs::write(p.join("view/app.js"), format!("document.title='{}';\n", tag)).unwrap();
+    server::plugins::audit::content_hash(&p)
+}
+
+#[tokio::test]
+async fn update_flow_stages_diff_apply_and_keep_old() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    let old_hash = state.plugins.list()[0].content_hash.clone();
+
+    // 1) 目录内容升级 → 扫描 → 待确认（差异面 + 权限扩权红标）
+    let new_hash = upgrade_plugin_dir(&dir, "demo-plugin", "v2");
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, discovered, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let item = discovered["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "demo-plugin" && i["status"] == "update")
+        .unwrap_or_else(|| panic!("更新候选缺失：{discovered}"));
+    let diff = &item["updateDiff"];
+    assert_eq!(diff["versionFrom"], "0.1.0");
+    assert_eq!(diff["versionTo"], "0.2.0");
+    assert_eq!(diff["permissionsChanged"], true, "扩权必须红标：{diff}");
+    assert!(
+        diff["dataAdded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "notes:read"),
+        "{diff}"
+    );
+    assert!(
+        diff["contributionsAdded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "tool:fetch2"),
+        "{diff}"
+    );
+
+    // 2) 未确认期间保持旧版可用：目录内容已恢复 0.1.0，注册表 hash 不变
+    assert_eq!(
+        state.plugins.list()[0].content_hash, old_hash,
+        "待确认期间注册表保持旧版"
+    );
+    let restored = server::plugins::audit::content_hash(&dir.path().join("plugins/demo-plugin"));
+    assert_eq!(restored, old_hash, "目录内容应恢复旧版（保持旧版可用）");
+    let new_copy = dir
+        .path()
+        .join("plugins/.versions/demo-plugin")
+        .join(new_hash.trim_start_matches("sha256:").chars().take(16).collect::<String>());
+    assert!(new_copy.join("plugin.json").is_file(), "新版副本已入库");
+    // PluginView 不直接暴露 pending（待确认态经 discovered 面呈递）
+    let reg = server::plugins::registry::Registry::open(dir.path().join("plugins.json"));
+    let entry = reg.get("demo-plugin").expect("entry exists");
+    assert!(entry.entry.pending_update.is_some(), "持久态登记 pending");
+
+    // 3) 应用更新 → 新版生效、pending 清除、留痕
+    let (status, apply_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "id": "demo-plugin", "contentHash": new_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{apply_text}");
+    assert!(apply_text.contains("\"applied\":true"), "{apply_text}");
+    let view = &state.plugins.list()[0];
+    assert_eq!(view.version, "0.2.0");
+    assert_eq!(view.content_hash, new_hash);
+    let (status, records, _) = req(
+        a.clone(),
+        "GET",
+        "/api/plugins/demo-plugin/records?limit=10",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        records["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "update" && r["message"].as_str().unwrap_or("").contains("已应用")),
+        "{records}"
+    );
+
+    // 4) 再来一轮更新 → 保持旧版：pending 清除、新版副本删除、留痕
+    let v3_hash = upgrade_plugin_dir(&dir, "demo-plugin", "v3");
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, keep_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/keep",
+        Some(json!({ "id": "demo-plugin", "contentHash": v3_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{keep_text}");
+    let view = &state.plugins.list()[0];
+    assert_eq!(view.version, "0.2.0", "保持旧版：版本不变");
+    let (status, records, _) = req(
+        a.clone(),
+        "GET",
+        "/api/plugins/demo-plugin/records?limit=10",
+        None,
+    )
+    .await;
+    assert!(records["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["kind"] == "update" && r["message"].as_str().unwrap_or("").contains("保持旧版")));
+}
+
+#[tokio::test]
+async fn update_apply_rejects_stale_hash_and_missing_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    // 无待确认更新 → 拒（AppError 响应为纯文本错因）
+    let (status, body) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "id": "demo-plugin", "contentHash": "sha256:deadbeefdeadbeef" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("无待确认更新"), "{body}");
+}
+
+// ===== B4：hub.sessions 只读投影 RPC =====
+
+/// sessions:list：只读投影可达（sessions:read 插件调用成功，返回聚合清单信封）；
+/// messages：未知会话明确报错；未声明 messages:read 的插件 → violation 拒绝。
+#[tokio::test]
+async fn sessions_read_only_projection_rpc_reachable() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    // 装 demo-plugin（projects:read；无 sessions:read）
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    // 未声明 sessions:read → 拒（violation）
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.list", "params": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // 给插件补声明 sessions:read + messages:read（重写 manifest → hash 变化走更新流）
+    let p = dir.path().join("plugins/demo-plugin");
+    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap();
+    let manifest = manifest.replace(
+        "\"data\": [\"projects:read\"]",
+        "\"data\": [\"projects:read\", \"sessions:read\", \"messages:read\"]",
+    );
+    std::fs::write(p.join("plugin.json"), manifest).unwrap();
+    let new_hash = server::plugins::audit::content_hash(&p);
+    req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    let (status, apply_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "id": "demo-plugin", "contentHash": new_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{apply_text}");
+    // sessions.list 可达（测试 drivers 无真实会话 → 空清单信封）
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.list", "params": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["result"]["sessions"].is_array(), "{body}");
+    // messages：未知会话 → 明确错（-32003 plugin_error → HTTP 400）
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.messages",
+                     "params": { "sessionId": "no-such-session" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // hub.sessions.send 永久不做：方法表中未注册 → 拒绝
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.send",
+                     "params": { "sessionId": "s", "text": "x" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}

@@ -987,6 +987,7 @@ mod tests {
                 enabled: true,
                 state: PluginState::Ready,
                 last_fault: None,
+                pending_update: None,
             },
             manifest: m.clone(),
             plugin_dir: PathBuf::from("/tmp/p1"),

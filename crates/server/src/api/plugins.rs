@@ -65,6 +65,9 @@ pub fn router() -> Router<SharedState> {
         .route("/api/plugins/{id}/enable", post(enable_plugin))
         .route("/api/plugins/{id}/disable", post(disable_plugin))
         .route("/api/plugins/{id}/retry", post(retry_plugin))
+        // 更新确认流（B4，BR-13）：应用（新版生效）/ 保持旧版（拒绝并留痕）
+        .route("/api/plugins/{id}/update/apply", post(apply_update))
+        .route("/api/plugins/{id}/update/keep", post(keep_old_version))
         .route("/api/plugins/{id}", delete(uninstall_plugin))
         .route("/api/plugins/{id}/records", get(plugin_records))
         .route("/api/plugins/{id}/view-ticket", post(view_ticket))
@@ -192,6 +195,38 @@ async fn retry_plugin(
     Ok(Json(
         json!({ "plugin": v, "state": v.state, "effect": "immediate" }),
     ))
+}
+
+// ===== 更新确认流（B4，BR-13）=====
+
+/// 应用更新：请求体 hash 必须与登记的待确认一致（防误应用过期候选）。
+async fn apply_update(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<InstallBody>,
+) -> Result<Json<Value>, AppError> {
+    let v = state
+        .plugins
+        .apply_update(&id, &body.content_hash)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(
+        json!({ "applied": true, "plugin": v, "effect": "immediate" }),
+    ))
+}
+
+/// 保持旧版：清待确认态 + 删新版副本 + 留痕；旧版自始可用。
+async fn keep_old_version(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<InstallBody>,
+) -> Result<Json<Value>, AppError> {
+    let v = state
+        .plugins
+        .keep_old_version(&id, &body.content_hash)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(json!({ "kept": true, "plugin": v })))
 }
 
 #[derive(Deserialize)]
@@ -817,6 +852,7 @@ mod tests {
                 enabled,
                 state,
                 last_fault: None,
+                pending_update: None,
             },
             manifest: manifest.clone(),
             plugin_dir: std::path::PathBuf::from("/tmp/cmd-p"),
