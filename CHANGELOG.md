@@ -4,6 +4,35 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.0] - 2026-10-24
+
+本批：插件体系 B4 终批（#41，epic agent-hub-mng#11）——生命周期钩子观察档 + 会话只读投影 + 治理与分发面一次性收口。
+
+### Added — 生命周期钩子（观察档）+ 会话只读投影（#41）
+
+- **5 个观察档钩子**：onSessionCreate / onSessionClose / onMessageAppend / onIdle / onJobsChanged——事后通知、只读、at-most-once（队列 cap 64 + 溢出/失败丢弃计数，管理页 hookStats 可见）、fire-and-forget、载荷最小化（onMessageAppend 默认 {sessionId,seq}，需 messages:read + scrub + 截断）；卸载/停用清队列；**拦截档 v1 明确不开**（beforeMessageSend/onToolCall/afterToolResult 审计硬失败 + dispatch 名集门 + notification 无等待，红线六项全仓搜证闭环）
+- **会话只读投影**：hub.sessions.list + hub.sessions.messages（hub.rpc 可发现面，只读；hub.sessions.send v1 永久不做，配有 unregistered 锚单测）
+- **观察档语义边界**：onIdle = 全 hub 空闲翻转（全局 working 归零）+ IdleFlipDetector 去抖状态机（单次空观测吞掉、连续 3 次 ≈15s 确认窗才翻转、忙重置、未武装不发射，4 态纯单测锁 + 武装行为实机）；实机终验受共享环境制约（全局 CLI daemon working 恒 >0 不可构造归零窗），留专项 #42 受控环境执行；并发读假设受控 18/18 实验证伪
+- **五驱动埋点对齐**：claude/omp/pi/dsh/opencode 的 create/close/jobs/hooks 探针闭包埋点（opencode/dsh 的 known_sessions 辅助抽 reconcile_session_hooks；dsh 三处拷贝→helper），per-driver running_count 容错聚合
+
+### Added — 治理与分发（#41）
+
+- **更新/扩权完整流**：hash 变化 → 待确认（差异面：贡献物增删 + 权限面扩权红标）→ 应用/保持旧版；`plugins/.versions/<id>/<hash16>/` 旧版恢复 + 保留 3 份；dismissed 账本（id+hash 精确对，hash 变化/重装即解除）；apply 的副本再审计 + hash 再校验防 TOCTOU；自撞豁免；更新前保留旧版语义；更新确认语境下 `oldVersionAvailable` 权威字段；B4 前存量插件首更新 pendingHint 按位分支文案（无旧副本场景不宣称「旧版可用」）
+- **git 直装 + 索引市场**：https + 本机绝对路径白名单（http/ssh/相对路径拒装）；clone 120s 超时 + 临时目录两路清理；URL 凭据形态级脱敏（含单引号包裹）；subPath 禁 `..`/绝对路径；marketplace.json 源管理（300s 缓存 + force）、条目 id 预检、错误 scrub、零外部网络依赖
+- **审计产物清理**：按每插件保留 10 份自动清理 + 管理页按量清点回报 + 卸载随清 + dismissed 防重生锁
+- **模板补齐与示例优化**：hook-observer 模板（backend/main.js + plugin.json + README）入插件模板体系；gitlab-issues-lite 示例增 hook 演示
+
+### Fixed — 存量收口
+
+- **B3 承接单全清**：O-1 双留痕收敛（decide_approval 单点）；#32 治理留痕；观察项三条（自撞豁免/no_contrib 10 类/模板外链）；M14；M17 门禁口径注记
+- **审查小钉**：M21 泵注释如实化 / M22 存量 pendingHint 分支 / M23 CONTRIBUTION_TYPES 6→10（ADR-0011 单一定义源）/ M25 分发文档树层级 / M26 语义类 `--c-*` token 样式 / M27 报告链口径（coder 499 vs tester 637 注记）/ M29 `--c-muted`→`--c-sub` / M30 无旧副本文案不矛盾 / M31 live 目录手改回滚提示
+
+### 工单索引
+
+- 本批：#41（B4 终批，hooks 观察档 + sessions 只读 + 治理分发）
+- 专项：#42（onIdle 实机翻转证据，受控环境执行）
+- 列后续：M26 视觉走查 / M28 实机证据（随 #42）/ M24 dsh 已合入；proxy 9 例 socket 竞争偶发为环境噪音（基线同现，#30 家族另行治理）
+
 ## [0.8.1] - 2026-10-23
 
 本批：文档树自动刷新缺陷修复（#36）+ green-text 暗色对比度口径修正（B3 存量欠账随批闭环）。
