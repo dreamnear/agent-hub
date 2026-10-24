@@ -595,7 +595,8 @@ export const en: Record<string, string> = {
   'plugin.update.versionSpan': '{from} → {to}',
   'plugin.update.permChanged': ' · permission set changed (review each line)',
   'plugin.update.pendingHint': 'Installed version stays in use until confirmed (both decisions are recorded)',
-  'plugin.update.noOldCopy': ' (plugin installed before B4: no old copy retained; applying is not reversible)',
+  'plugin.update.pendingHintNoOld':
+    'Installed capability/permission face stays until confirmed (live directory already holds the new content; applying is not reversible; both decisions are recorded)',
   'plugin.action.applyUpdate': 'Apply update',
   'plugin.action.keepOld': 'Keep old version',
   'plugin.toast.updated': 'Plugin updated: {name} v{version}',

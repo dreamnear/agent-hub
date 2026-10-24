@@ -601,12 +601,11 @@ export default function PluginManagerPage(): ReactElement {
                     <>
                       {/* B4 BR-13 更新确认流：差异面 + 应用/保持旧版（双侧留痕） */}
                       {item.updateDiff != null ? <UpdateDiffView diff={item.updateDiff} /> : null}
-                      {/* M22：存量插件（B4 前安装）首次更新无旧版副本可回滚——按位分支文案 */}
+                      {/* M22/M30：存量插件（B4 前安装）首更新无旧版副本可回滚——pendingHint 按 oldVersionAvailable 拆两段，不并列矛盾 */}
                       <span className="plugin-hint">
-                        {t('plugin.update.pendingHint')}
                         {item.updateDiff?.oldVersionAvailable === false
-                          ? t('plugin.update.noOldCopy')
-                          : ''}
+                          ? t('plugin.update.pendingHintNoOld')
+                          : t('plugin.update.pendingHint')}
                       </span>
                       <button
                         type="button"
