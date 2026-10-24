@@ -9,6 +9,8 @@ pub mod api_surface;
 pub mod approvals;
 pub mod audit;
 pub mod credentials;
+pub mod hooks;
+pub mod install;
 pub mod manifest;
 pub mod mcp_config;
 pub mod mcp_proxy;
@@ -59,6 +61,12 @@ pub struct PluginPaths {
     pub projects_file: PathBuf,
     pub scan_secs: u64,
     pub transient: Vec<PathBuf>,
+    /// 钩子通知队列上限（B4 ADR-0014；`[plugins] hook_queue_cap`，默认 64）
+    pub hook_queue_cap: usize,
+    /// 审计产物每插件保留份数（B4 治理；`[plugins] audit_keep`，默认 10）
+    pub audit_keep: usize,
+    /// 索引市场源清单文件（B4 ADR-0008 §3）
+    pub market_file: PathBuf,
 }
 
 impl PluginPaths {
@@ -72,7 +80,76 @@ impl PluginPaths {
             projects_file: cfg.projects_file.clone(),
             scan_secs: cfg.plugin_scan_secs,
             transient: cfg.plugin_transient_dirs.clone(),
+            hook_queue_cap: cfg.plugin_hook_queue_cap,
+            audit_keep: cfg.plugin_audit_keep,
+            market_file: cfg.plugin_market_file.clone(),
         }
+    }
+}
+
+/// 索引市场缓存（B4：300s TTL，避免每次 GET 重克隆索引仓库）
+#[derive(Clone)]
+struct MarketCache {
+    at: Instant,
+    sources: Vec<install::MarketSourceView>,
+    entries: Vec<install::MarketEntry>,
+}
+
+const MARKET_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// 空闲翻转到滑确认状态机（B4 方案 1 收口，主会话 2026-10-24 裁决）。
+///
+/// 设计动因（收敛分析，tester-report-4）：探针读「空」有两义——真实空闲，或
+/// **单次读降级**（claude CLI 高并发读时 `list` 内部静默降级 Ok(空集)，无 Err、
+/// 与 /api/agents 的并发调用呈输家分歧；dsh 401 同族降级 Ok(空)）。把一次空
+/// 观测当空闲会误发 onIdle；忙信号则只有真实工作会话才会产生（降级只造假空、
+/// 不造假忙）。
+///
+/// 因此：忙 → 立即武装；连续 `CONFIRM_ZEROS` 次空观测（5s × 3 ≈ 15s 确认窗，
+/// 约两倍于单次降级窗口的估计宽度）才判定忙→闲翻转并发射；任何忙观测重置
+/// 去抖计数（忙可信）。未武装（启动即全空）不发射——无忙基线无翻转。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdleFlipDetector {
+    /// 曾观测到忙（now > 0）
+    armed: bool,
+    /// 连续空观测计数
+    zero_streak: u32,
+}
+
+impl IdleFlipDetector {
+    /// 判闲需连续空观测次数（约 15s，5s 间隔）
+    pub const CONFIRM_ZEROS: u32 = 3;
+
+    pub fn new() -> Self {
+        Self {
+            armed: false,
+            zero_streak: 0,
+        }
+    }
+
+    /// 喂一次采样。返回 true = 判定忙→闲翻转（调用方应发射 onIdle）。
+    pub fn feed(&mut self, now: usize) -> bool {
+        if now > 0 {
+            self.armed = true;
+            self.zero_streak = 0;
+            return false;
+        }
+        if !self.armed {
+            return false; // 从未观测到忙：启动即全空 = 无翻转基线
+        }
+        self.zero_streak += 1;
+        if self.zero_streak >= Self::CONFIRM_ZEROS {
+            self.armed = false;
+            self.zero_streak = 0;
+            return true;
+        }
+        false
+    }
+}
+
+impl Default for IdleFlipDetector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -149,6 +226,9 @@ pub struct PluginView {
     pub theme_tokens: Option<ThemeTokensView>,
     pub file_decorations: Vec<FileDecorationView>,
     pub services: Vec<ServiceView>,
+    /// 生命周期钩子订阅与投递统计（B4，ADR-0014：丢弃计数管理页可见）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_stats: Option<hooks::HookStats>,
     pub backend: BackendInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
@@ -246,6 +326,35 @@ pub type AgentCwdProvider = Arc<
         + Sync,
 >;
 
+/// 空闲探针提供方（B4 onIdle 埋点）：返回当前运行中（Working/NeedsInput）会话数。
+pub type IdleProbeProvider = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = usize> + Send>> + Send + Sync,
+>;
+
+/// 会话清单提供方（B4 `hub.sessions.list` 只读投影）：drivers 全量聚合。
+pub type SessionsProvider = Arc<
+    dyn Fn()
+        -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Vec<crate::models::AgentSummary>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+/// 单会话最近消息提供方（B4 `hub.sessions.messages` 只读投影）：sessionId 解析 +
+/// 既有分页读取复用（不碰消息数据层）。
+pub type MessagesProvider = Arc<
+    dyn Fn(
+            &str,
+            usize,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<crate::models::ChatMessage>, String>>
+                    + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
 pub struct PluginManager {
     pub paths: PluginPaths,
     pub registry: Arc<Registry>,
@@ -255,15 +364,25 @@ pub struct PluginManager {
     /// 高危审批单表（B2 批3）：mcp-proxy 经 loopback 落单 + UI 决策，
     /// Approval/Rejection 决定入插件故障记录域
     pub approvals: Arc<approvals::ApprovalStore>,
+    /// 生命周期钩子·观察档总线（B4，ADR-0014）：dispatch 经门面/本句柄均可
+    pub hooks: Arc<hooks::HooksBus>,
     pub events_tx: broadcast::Sender<HubEvent>,
     /// 装配后回填的 agent cwd 提供方（`hub.projects.effective` 聚合用；
     /// 构造期为 None——drivers 在 AppState 装配序列里晚于插件门面建成）
     agent_cwds: StdMutex<Option<AgentCwdProvider>>,
+    /// 空闲探针提供方（B4 onIdle：返回当前运行中会话数；装配序列回填）
+    idle_probe: StdMutex<Option<IdleProbeProvider>>,
+    /// 空闲轮询任务已启动（回填即启动，防重入双轮）
+    idle_poll_started: std::sync::atomic::AtomicBool,
+    /// 会话只读投影提供方（B4 hub.sessions.*；装配序列回填，未装配拒答）
+    sessions: StdMutex<Option<SessionsProvider>>,
+    messages: StdMutex<Option<MessagesProvider>>,
     /// 工程便签存储路径（B3 `hub.notes.read/write`；与 /api/notes 同一文件）
     notes_file: StdMutex<Option<PathBuf>>,
     /// 定时任务管理器回填（B3 `hub.tasks.list/toggle`；与 /api/tasks 同一实例）
     tasks: StdMutex<Option<Arc<crate::tasks::TaskManager>>>,
     scan_cache: RwLock<scanner::ScanOutcome>,
+    market_cache: RwLock<Option<MarketCache>>,
     locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     retries: StdMutex<HashMap<String, RetryState>>,
     asset_cache: RwLock<HashMap<String, u64>>,
@@ -282,22 +401,97 @@ impl PluginManager {
         let paths = PluginPaths::from_config(cfg);
         let registry = Arc::new(Registry::open(paths.state_file.clone()));
         let credentials = Arc::new(CredentialsStore::load(paths.credentials_file.clone()));
-        Arc::new(Self {
+        let bus = hooks::HooksBus::new(paths.hook_queue_cap);
+        let me = Arc::new(Self {
             registry,
             supervisor: Arc::new(Supervisor::new()),
             credentials,
             tickets: Arc::new(view_ticket::TicketStore::default()),
             approvals: Arc::new(approvals::ApprovalStore::new()),
+            hooks: bus.clone(),
             events_tx,
             paths,
             agent_cwds: StdMutex::new(None),
+            idle_probe: StdMutex::new(None),
+            idle_poll_started: std::sync::atomic::AtomicBool::new(false),
+            sessions: StdMutex::new(None),
+            messages: StdMutex::new(None),
             notes_file: StdMutex::new(None),
             tasks: StdMutex::new(None),
             scan_cache: RwLock::new(scanner::ScanOutcome::default()),
+            market_cache: RwLock::new(None),
             locks: StdMutex::new(HashMap::new()),
             retries: StdMutex::new(HashMap::new()),
             asset_cache: RwLock::new(HashMap::new()),
-        })
+        });
+        bus.bind(&me);
+        // 进程级门面接线（tester-report-1 FAIL-1 回修）：drivers 埋点经
+        // hooks::global_dispatch 发射，漏挂 = 全部埋点静默短路——装配点收敛在
+        // PluginManager::new 单点（hub/node 两形态与测试共用），不散落启动序列
+        hooks::set_global(bus);
+        me
+    }
+
+    /// 空闲探针回填（B4 onIdle 埋点；AppState 装配序列调用）。
+    /// **回填即启动轮询任务**（tester-report-2 修复：原 spawn 放在 startup()
+    /// 读后回填字段，装配序一旦颠倒探针任务静默不启动——启动权归属回填侧，
+    /// 与探测器到位零窗口）。单管理器只启一轮（防重入）。
+    pub fn set_idle_probe(&self, probe: IdleProbeProvider) {
+        self.set_idle_probe_with_interval(probe, Duration::from_secs(5));
+    }
+
+    pub fn set_idle_probe_with_interval(&self, probe: IdleProbeProvider, interval: Duration) {
+        self.idle_probe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(probe.clone());
+        if self
+            .idle_poll_started
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let bus = self.hooks.clone();
+        tokio::spawn(async move {
+            // 忙→闲翻转点（统一归一逻辑处，单点）：去抖状态机——单次空观测
+            // （读降级形态）不翻转（tester-report-4 收敛分析 + 主会话方案 1 裁决）
+            let mut detector = IdleFlipDetector::new();
+            let mut prev: usize = 0;
+            loop {
+                let now = probe().await;
+                if now != prev {
+                    // 采样变化留痕（tester-report-3 建议的现场自证；翻转可观测）
+                    tracing::debug!(from = prev, to = now, "onIdle 探针计数变化");
+                }
+                if detector.feed(now) {
+                    tracing::info!("onIdle：忙→闲确认（连续 {} 次空观测）", IdleFlipDetector::CONFIRM_ZEROS);
+                    bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));
+                }
+                prev = now;
+                tokio::time::sleep(interval).await;
+            }
+        });
+    }
+
+    /// 会话清单只读投影回填（B4 hub.sessions.list；AppState 装配序列调用）。
+    pub fn set_sessions_provider(&self, provider: SessionsProvider) {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(provider);
+    }
+
+    /// 单会话消息只读投影回填（B4 hub.sessions.messages）。
+    pub fn set_messages_provider(&self, provider: MessagesProvider) {
+        self.messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(provider);
+    }
+
+    /// 钩子发射（观察档；本句柄与全局门面等价，进程内优先走门面）。
+    pub fn dispatch_hook(&self, hook: &str, params: Value) {
+        self.hooks.dispatch(hook, params);
     }
 
     /// 装配接线（AppState::from_config 末段调用）：drivers 全部注册完成后回填
@@ -353,6 +547,16 @@ impl PluginManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let messages = self
+            .messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Arc::new(HubRpcHandler {
             registry: self.registry.clone(),
             credentials: self.credentials.clone(),
@@ -361,6 +565,8 @@ impl PluginManager {
             agent_cwds,
             notes_file,
             tasks,
+            sessions,
+            messages,
             approvals: self.approvals.clone(),
             events_tx: self.events_tx.clone(),
         })
@@ -445,6 +651,26 @@ impl PluginManager {
                 me.monitor_once().await;
             }
         });
+
+        // B4 onJobsChanged（ADR-0014 §12.5 矩阵：HubEvent 单点转发）——
+        // 订阅既有广播通道，JobsChanged → onJobsChanged，drivers 零改动
+        let bus = self.hooks.clone();
+        let mut rx = self.events_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(HubEvent::JobsChanged { id }) => {
+                        bus.dispatch("onJobsChanged", json!({ "id": id }));
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(missed = n, "钩子 JobsChanged 订阅落后（事件已丢）");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
     }
 
     /// 后台监视一周期（纯逻辑可测）：死进程 → 崩溃记录 + 退避重试；空闲 → 回收。
@@ -693,6 +919,11 @@ impl PluginManager {
                     default: s.default.clone(),
                 })
                 .collect(),
+            hook_stats: if m.contributes.hooks.is_empty() {
+                None
+            } else {
+                self.hooks.stats_for(&p.entry.id, m.contributes.hooks.clone())
+            },
             backend: BackendInfo {
                 running: running.is_some(),
                 pid: running.as_ref().and_then(|r| r.pid),
@@ -791,7 +1022,7 @@ impl PluginManager {
 
     /// 手动/周期扫描：只发现，不安装。
     pub fn scan_now(&self) -> ScanResult {
-        let outcome = scanner::scan(
+        let mut outcome = scanner::scan(
             &self.paths.plugins_dir,
             &self.paths.transient,
             &self.registry,
@@ -802,10 +1033,76 @@ impl PluginManager {
                 tracing::warn!(plugin = %item.id, error = %e, "审计产物落盘失败");
             }
         }
-        let discovered = outcome.items.len();
+        // B4 BR-13：更新候选进待确认流——新版副本入库（.versions）、旧版内容
+        // 恢复进插件目录（保持旧版可用），注册表登记 pending_update；
+        // old_version_available 权威值回填进差异面（M22：卡片按位分支文案）
+        for item in outcome.items.iter_mut().filter(|i| i.status == "update") {
+            match self.stage_pending_update(item) {
+                Ok(old_available) => {
+                    if let Some(diff) = item.update_diff.as_mut() {
+                        diff.old_version_available = old_available;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(plugin = %item.id, error = %e, "更新候选入库失败（保持未确认态）");
+                }
+            }
+        }
+        // B4 治理（需求功能点 6）：按保留策略清理审计产物（每插件保留 N 份）
+        match audit::prune_artifacts(&self.paths.audit_dir, self.paths.audit_keep) {
+            Ok(removed) if removed > 0 => {
+                tracing::info!(removed, keep = self.paths.audit_keep, "审计产物按保留策略清理");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "审计产物清理失败"),
+        }
+        // 已入库待确认项（目录已恢复旧版，不再出现在扫描候选里）从持久态
+        // 重新投影进 discovered 面（审计源 = .versions 副本）
+        let mut items = outcome.items;
+        for p in self.registry.list() {
+            let Some(pending) = p.entry.pending_update.clone() else {
+                continue;
+            };
+            if items
+                .iter()
+                .any(|i| i.id == p.entry.id && i.status == "update")
+            {
+                continue;
+            }
+            let copy = version_dir(&self.paths, &p.entry.id, &pending.content_hash);
+            if !copy.join("plugin.json").is_file() {
+                continue;
+            }
+            let report = audit::audit_dir(&copy, &self.credentials);
+            let _ = audit::persist(&report, &self.paths.audit_dir);
+            items.push(scanner::DiscoveredItem {
+                id: p.entry.id.clone(),
+                dir_name: p.entry.id.clone(),
+                path: copy.to_string_lossy().into_owned(),
+                source_kind: p.entry.source.kind.clone(),
+                status: "update".into(),
+                installed_content_hash: Some(p.entry.content_hash.clone()),
+                update_diff: Some(scanner::compute_update_diff(&p, &report, pending.old_version_available)),
+                report,
+            });
+        }
+        items.sort_by(|a, b| {
+            let rank = |s: &str| match s {
+                "audit_failed" => 0,
+                "update" => 1,
+                _ => 2,
+            };
+            rank(&a.status)
+                .cmp(&rank(&b.status))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let discovered = items.len();
         let last = outcome.last_scan_at.clone();
         if let Ok(mut c) = self.scan_cache.write() {
-            *c = outcome;
+            *c = scanner::ScanOutcome {
+                items,
+                last_scan_at: last.clone(),
+            };
         }
         let _ = self
             .events_tx
@@ -814,6 +1111,193 @@ impl PluginManager {
             last_scan_at: last,
             discovered,
         }
+    }
+
+    /// 更新候选入库（B4 BR-13）：新版副本 → `.versions/<id>/<hash>/`；旧版副本
+    /// 存在时恢复旧版目录内容（保持旧版可用——backend 懒启动跑的代码与注册表
+    /// 快照一致）；登记 pending_update。已在待确认态（同 hash）则幂等跳过。
+    fn stage_pending_update(&self, item: &scanner::DiscoveredItem) -> Result<bool, String> {
+        let Some(installed) = self.registry.get(&item.id) else {
+            return Err("已装条目消失".into());
+        };
+        if installed
+            .entry
+            .pending_update
+            .as_ref()
+            .is_some_and(|p| p.content_hash == item.report.content_hash)
+        {
+            return Ok(installed
+                .entry
+                .pending_update
+                .as_ref()
+                .is_some_and(|p| p.old_version_available)); // 同版本已在待确认态
+        }
+        if item.source_kind == "transient" {
+            return Ok(true); // transient 不参与更新比对（ADR-0001 第 4 条）
+        }
+        let new_copy = version_dir(&self.paths, &item.id, &item.report.content_hash);
+        copy_dir_recursive(Path::new(&item.path), &new_copy)
+            .map_err(|e| format!("新版副本入库失败：{e}"))?;
+        let old_copy = version_dir(&self.paths, &item.id, &installed.entry.content_hash);
+        let old_available = old_copy.join("plugin.json").is_file();
+        if old_available {
+            // 旧版恢复：目录内容回滚到已装版本（新副本已在 .versions，不丢失）
+            let live = self.paths.plugins_dir.join(&item.id);
+            std::fs::remove_dir_all(&live).map_err(|e| format!("目录重置失败：{e}"))?;
+            copy_dir_recursive(&old_copy, &live).map_err(|e| format!("旧版恢复失败：{e}"))?;
+        }
+        let _ = self.registry.set_pending_update(
+            &item.id,
+            Some(registry::PendingUpdate {
+                content_hash: item.report.content_hash.clone(),
+                version: item.report.plugin_version.clone(),
+                discovered_at: registry::now_rfc3339(),
+                old_version_available: old_available,
+            }),
+        );
+        prune_versions(&self.paths, &item.id, VERSIONS_KEEP);
+        tracing::info!(
+            plugin = %item.id,
+            new_hash = %item.report.content_hash,
+            old_restored = old_available,
+            "更新候选已入库待确认（BR-13）"
+        );
+        Ok(old_available)
+    }
+
+    /// 应用更新（B4 BR-13 确认流）：`.versions` 副本重新审计（TOCTOU 再校验）→
+    /// 停 backend → 目录内容替换 → 注册表条目替换 → 留痕 + 广播。
+    pub async fn apply_update(
+        self: &Arc<Self>,
+        id: &str,
+        content_hash: &str,
+    ) -> Result<PluginView, String> {
+        let lock = self.plugin_lock(id);
+        let _guard = lock.lock().await;
+        let installed = self
+            .registry
+            .get(id)
+            .ok_or_else(|| format!("插件 {id} 不在注册表中"))?;
+        let pending = installed
+            .entry
+            .pending_update
+            .clone()
+            .ok_or_else(|| format!("插件 {id} 无待确认更新"))?;
+        if pending.content_hash != content_hash {
+            return Err(format!(
+                "待确认更新 hash 不一致（登记 {}/请求 {content_hash}），请刷新后重试",
+                pending.content_hash
+            ));
+        }
+        let copy = version_dir(&self.paths, id, content_hash);
+        if !copy.join("plugin.json").is_file() {
+            return Err(format!("新版本副本缺失：{}", copy.display()));
+        }
+        // 重新审计 + hash 再校验（防 TOCTOU：入库后副本被改）
+        let report = audit::audit_dir(&copy, &self.credentials);
+        if !report.errors.is_empty() {
+            let first = &report.errors[0];
+            return Err(format!(
+                "更新副本审计未通过：{}（字段 {} / 规则 {}）",
+                first.message, first.field, first.rule
+            ));
+        }
+        if report.content_hash != content_hash {
+            return Err("副本内容在入库后已变化（hash 不一致），已拒绝应用".into());
+        }
+        // 内容替换：运行中的 backend 先停（目录内容与进程镜像不一致期间不可调用）
+        self.supervisor.stop(id).await;
+        self.tickets.revoke_plugin(id);
+        let live = self.paths.plugins_dir.join(id);
+        std::fs::remove_dir_all(&live).map_err(|e| format!("目录替换失败：{e}"))?;
+        copy_dir_recursive(&copy, &live).map_err(|e| format!("目录替换失败：{e}"))?;
+        // 注册表条目替换：version/hash/权限面/pending 清除 + manifest 快照刷新
+        let parsed = manifest::parse(
+            &std::fs::read_to_string(live.join("plugin.json"))
+                .map_err(|e| format!("读取 plugin.json 失败：{e}"))?,
+        )
+        .map_err(|errs| {
+            format!(
+                "manifest 校验失败：{}",
+                errs.first().map(|e| e.message.clone()).unwrap_or_default()
+            )
+        })?;
+        self.registry
+            .apply_update(
+                id,
+                parsed.manifest.version.clone(),
+                content_hash.to_string(),
+                registry::permissions_hash(&parsed.manifest.permissions),
+                parsed.manifest,
+                live,
+            )
+            .map_err(|e| format!("注册表更新失败：{e}"))?;
+        let _ = self.registry.push_record(
+            id,
+            FaultRecord {
+                at: now_rfc3339(),
+                kind: FaultKind::Update,
+                // MINOR① 回修：from = 更新前已装版本（pending.version 是新版）
+                message: format!(
+                    "更新已应用：{} → {}（hash {}）",
+                    installed.entry.version,
+                    report.plugin_version,
+                    short_hash(content_hash)
+                ),
+            },
+        );
+        self.scan_now();
+        self.broadcast(id);
+        let p = self.registry.get(id).expect("entry exists");
+        Ok(self.view_of(&p))
+    }
+
+    /// 保持旧版（B4 BR-13 拒绝分支）：清除待确认态 + 删除新版副本 + 留痕。
+    /// 旧版自始至终未被替换（目录恢复语义），无需回滚动作。
+    pub async fn keep_old_version(
+        self: &Arc<Self>,
+        id: &str,
+        content_hash: &str,
+    ) -> Result<PluginView, String> {
+        let lock = self.plugin_lock(id);
+        let _guard = lock.lock().await;
+        let installed = self
+            .registry
+            .get(id)
+            .ok_or_else(|| format!("插件 {id} 不在注册表中"))?;
+        let pending = installed
+            .entry
+            .pending_update
+            .clone()
+            .ok_or_else(|| format!("插件 {id} 无待确认更新"))?;
+        if pending.content_hash != content_hash {
+            return Err(format!(
+                "待确认更新 hash 不一致（登记 {}/请求 {content_hash}）",
+                pending.content_hash
+            ));
+        }
+        let _ = self.registry.set_pending_update(id, None);
+        let copy = version_dir(&self.paths, id, content_hash);
+        if copy.is_dir() {
+            let _ = std::fs::remove_dir_all(&copy);
+        }
+        let _ = self.registry.push_record(
+            id,
+            FaultRecord {
+                at: now_rfc3339(),
+                kind: FaultKind::Update,
+                message: format!(
+                    "更新已拒绝，保持旧版 {}（拒绝 {}，hash {}）",
+                    installed.entry.version,
+                    pending.version,
+                    short_hash(content_hash)
+                ),
+            },
+        );
+        self.scan_now();
+        self.broadcast(id);
+        let p = self.registry.get(id).expect("entry exists");
+        Ok(self.view_of(&p))
     }
 
     /// 只审计不安装（插件作者自检入口，等价 `claude plugin validate`）。
@@ -848,13 +1332,14 @@ impl PluginManager {
         let lock = self.plugin_lock(id);
         let _guard = lock.lock().await;
 
-        // 已装且同 hash：幂等无操作；hash 变化 = 更新候选（BR-13 确认流在 B4，B1 拒绝静默覆盖）
+        // 已装且同 hash：幂等无操作；hash 变化 = 更新候选（BR-13 确认流走
+        // /update/apply 端点——扫描器已把候选入待确认区，此处拒绝静默覆盖）
         if let Some(existing) = self.registry.get(id) {
             if existing.entry.content_hash == content_hash {
                 return Ok((self.view_of(&existing), true));
             }
             return Err(format!(
-                "插件 {id} 内容已变化（已装 {} / 新目录 {content_hash}）；更新确认流在后续批次交付，本次拒绝静默覆盖（BR-13）",
+                "插件 {id} 内容已变化（已装 {} / 新目录 {content_hash}）——请走更新确认流（管理页「更新待确认」卡片，BR-13）",
                 existing.entry.content_hash
             ));
         }
@@ -910,11 +1395,14 @@ impl PluginManager {
             enabled: false,
             state: PluginState::Stopped,
             last_fault: None,
+            pending_update: None,
         };
         let (installed, created) = self
             .registry
             .insert_installed(entry, manifest, dir)
             .map_err(|e| format!("注册表写入失败：{e}"))?;
+        // 安装即解除清理登记（FAIL-2 回修配套：同 id 新装恢复常规发现面）
+        self.registry.undismiss_discovery(id);
         if created {
             // 装载 = 贡献物登记（backend 懒启动）：解析无误即就绪
             if let Err(e) = self.registry.apply(id, Transition::EnableOk) {
@@ -922,6 +1410,15 @@ impl PluginManager {
                 self.fail_load(id, "load-failed", e);
             }
             let _ = audit::persist(&item.report, &self.paths.audit_dir);
+            // B4：安装即快照版本副本（未来更新的「保持旧版」恢复源）
+            if item.source_kind != "transient" {
+                let snapshot = version_dir(&self.paths, id, &item.report.content_hash);
+                if let Err(e) = copy_dir_recursive(Path::new(&item.path), &snapshot) {
+                    tracing::warn!(plugin = %id, error = %e, "版本快照失败（更新恢复源缺失）");
+                } else {
+                    prune_versions(&self.paths, id, VERSIONS_KEEP);
+                }
+            }
         }
         self.scan_now();
         self.broadcast(id);
@@ -982,6 +1479,7 @@ impl PluginManager {
         // 停用：先停进程组与票据，再从查询面消失（无缓存窗口）
         self.supervisor.stop(id).await;
         self.tickets.revoke_plugin(id);
+        self.hooks.forget(id);
         self.retries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1058,6 +1556,7 @@ impl PluginManager {
         };
         self.supervisor.stop(id).await;
         self.tickets.revoke_plugin(id);
+        self.hooks.forget(id);
         self.retries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1072,6 +1571,20 @@ impl PluginManager {
                 if let Err(e) = std::fs::remove_dir_all(&data) {
                     tracing::warn!(plugin = %id, error = %e, "插件自持数据清除失败");
                 }
+            }
+            // B4 治理：purge_data 同包 purge_audit（卸载可选随卸载清理，需求功能点 6）
+            let _ = audit::purge_plugin_artifacts(&self.paths.audit_dir, id);
+            let versions = versions_root(&self.paths).join(id);
+            if versions.is_dir() {
+                let _ = std::fs::remove_dir_all(&versions);
+            }
+            // FAIL-2 回修：drop-in 目录按 ADR-0002 保留（dirKept），但登记清理记录
+            // 抑制周期扫描对同内容目录的重发现/重审计（产物不再重生）；用户放新版
+            // （hash 变化）即恢复正常发现面
+            let live = self.paths.plugins_dir.join(id);
+            if live.join("plugin.json").is_file() {
+                let hash = audit::content_hash(&live);
+                self.registry.dismiss_discovery(id, &hash);
             }
         }
         let _ = p;
@@ -1226,21 +1739,8 @@ impl PluginManager {
                     return Err(RpcError::Busy("高危确认等待超时（120s），可重试".into()));
                 }
             };
-            let (kind, verb) = match decision {
-                approvals::Decision::Approve => (FaultKind::Approval, "批准"),
-                approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
-            };
-            let _ = self.registry.push_record(
-                id,
-                FaultRecord {
-                    at: now_rfc3339(),
-                    kind,
-                    message: self.credentials.scrub(&format!(
-                        "高危工具 {tool_full} · 用户{verb} · {} · 参数 {}",
-                        issued.id, digest
-                    )),
-                },
-            );
+            // O-1 双留痕收敛（B3 review-1 M13）：决策留痕唯一落点 = decide_approval；
+            // 本执行点不再重复落 Approval/Rejection（同一次决策此前落两条）
             if decision == approvals::Decision::Reject {
                 return Err(RpcError::Violation(format!(
                     "高危工具 {tool_full} 被用户拒绝，未执行"
@@ -1311,6 +1811,108 @@ impl PluginManager {
         issued
     }
 
+    // ===== 分发面（B4，ADR-0008 §2/§3）=====
+
+    /// git 直装（clone → 校验 → 落盘 → 扫描进确认面）。
+    pub async fn install_git(
+        self: &Arc<Self>,
+        req: &install::GitInstallRequest,
+    ) -> Result<install::GitInstallOutcome, String> {
+        install::git_install(self, req).await
+    }
+
+    /// 索引源添加（用户显式；形态校验前置——错误源不进清单）。
+    pub fn market_add_source(&self, source: &str) -> Result<(), String> {
+        install::valid_git_source(source)?;
+        let mut store = install::MarketSources::load(&self.paths.market_file);
+        if store.sources.iter().any(|s| s == source) {
+            return Ok(()); // 幂等
+        }
+        store.sources.push(source.to_string());
+        store.save(&self.paths.market_file)
+    }
+
+    /// 索引源移除。
+    pub fn market_remove_source(&self, source: &str) -> Result<usize, String> {
+        let mut store = install::MarketSources::load(&self.paths.market_file);
+        let before = store.sources.len();
+        store.sources.retain(|s| s != source);
+        let removed = before - store.sources.len();
+        store.save(&self.paths.market_file)?;
+        Ok(removed)
+    }
+
+    /// 索引源清单 + 条目聚合（TTL 缓存 300s；force = 绕缓存重拉）。
+    pub async fn market_list(
+        self: &Arc<Self>,
+        force: bool,
+    ) -> (Vec<install::MarketSourceView>, Vec<install::MarketEntry>) {
+        if !force {
+            if let Ok(c) = self.market_cache.read() {
+                if let Some(c) = c.as_ref() {
+                    if c.at.elapsed() < MARKET_CACHE_TTL {
+                        return (c.sources.clone(), c.entries.clone());
+                    }
+                }
+            }
+        }
+        let store = install::MarketSources::load(&self.paths.market_file);
+        let mut views = Vec::new();
+        let mut entries = Vec::new();
+        for source in &store.sources {
+            match install::fetch_market_source(self, source).await {
+                Ok((name, list)) => {
+                    entries.extend(list.iter().cloned());
+                    views.push(install::MarketSourceView {
+                        source: source.clone(),
+                        name,
+                        plugin_count: list.len(),
+                        error: None,
+                    });
+                }
+                Err(e) => views.push(install::MarketSourceView {
+                    source: source.clone(),
+                    name: None,
+                    plugin_count: 0,
+                    error: Some(self.credentials.scrub(&e)),
+                }),
+            }
+        }
+        if let Ok(mut c) = self.market_cache.write() {
+            *c = Some(MarketCache {
+                at: Instant::now(),
+                sources: views.clone(),
+                entries: entries.clone(),
+            });
+        }
+        (views, entries)
+    }
+
+    /// 从索引触发安装：定位条目 → git 直装（进既有确认面）。
+    pub async fn market_install(
+        self: &Arc<Self>,
+        source: &str,
+        id: &str,
+    ) -> Result<install::GitInstallOutcome, String> {
+        let (_, entries) = self.market_list(false).await;
+        let entry = entries
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| format!("索引中无插件 {id:?}（源 {source:?} 未收录或未刷新）"))?;
+        self.install_git(&entry.into()).await
+    }
+
+    /// 审计产物清点（管理页可见性）：文件数与体积。
+    pub fn audit_artifact_stats(&self) -> (usize, u64) {
+        audit::artifact_stats(&self.paths.audit_dir)
+    }
+
+    /// 手动审计产物清理（保留策略同扫描期；返回清理数）。
+    pub fn audit_prune(&self) -> Result<usize, String> {
+        audit::prune_artifacts(&self.paths.audit_dir, self.paths.audit_keep)
+            .map_err(|e| e.to_string())
+    }
+
     /// 审批决策（UI 端点调用）：留痕 Approval/Rejection 入插件故障记录域 +
     /// 通知等待方。插件已卸载时决定照常生效（留痕目标已消失则跳过落痕）。
     pub fn decide_approval(
@@ -1363,6 +1965,10 @@ struct HubRpcHandler {
     notes_file: Option<PathBuf>,
     /// 定时任务管理器（B3 hub.tasks.*；None = 未装配，方法拒答）
     tasks: Option<Arc<crate::tasks::TaskManager>>,
+    /// 会话只读投影（B4 hub.sessions.list；None = 未装配，方法拒答）
+    sessions: Option<SessionsProvider>,
+    /// 单会话消息只读投影（B4 hub.sessions.messages；None = 未装配，方法拒答）
+    messages: Option<MessagesProvider>,
     agent_cwds: AgentCwdProvider,
     /// 高危审批单表（B2 批3）：`hub.sessions.send` 等高危方法命中
     /// HighRiskNeedsApproval 时落单阻塞等待（设计 §7）
@@ -1383,6 +1989,8 @@ impl HubCallHandler for HubRpcHandler {
         let events_tx = self.events_tx.clone();
         let notes_file = self.notes_file.clone();
         let tasks = self.tasks.clone();
+        let sessions = self.sessions.clone();
+        let messages = self.messages.clone();
         Box::pin(async move {
             let Some(p) = registry.get(&plugin_id) else {
                 return Err(RpcError::Unauthorized(format!("插件 {plugin_id} 未安装")));
@@ -1425,21 +2033,9 @@ impl HubCallHandler for HubRpcHandler {
                                     ));
                                 }
                             };
-                        let (kind, verb) = match decision {
-                            approvals::Decision::Approve => (FaultKind::Approval, "批准"),
-                            approvals::Decision::Reject => (FaultKind::Rejection, "拒绝"),
-                        };
-                        let _ = registry.push_record(
-                            &plugin_id,
-                            FaultRecord {
-                                at: now_rfc3339(),
-                                kind,
-                                message: credentials.scrub(&format!(
-                                    "高危方法 {method} · 用户{verb} · {}",
-                                    issued.id
-                                )),
-                            },
-                        );
+                        // O-1 双留痕收敛（B3 review-1 M13）：决策留痕唯一落点 =
+                        // decide_approval（UI 决策端点）；此处不再重复落 Approval/
+                        // Rejection——工具执行点与方法层只在执行结果上有差异时另行留痕
                         if decision == approvals::Decision::Reject {
                             return Err(RpcError::Violation(format!(
                                 "高危方法 {method} 被用户拒绝，未执行"
@@ -1600,6 +2196,58 @@ impl HubCallHandler for HubRpcHandler {
                         .unwrap_or_default();
                     Ok(json!({ "projects": projects }))
                 }
+                // —— B4 会话只读投影（需求功能点 2；hub.sessions.send 永久不做）——
+                "hub.sessions.list" => {
+                    let provider = sessions.clone().ok_or_else(|| {
+                        RpcError::PluginError("sessions 投影未装配（hub 内部状态）".into())
+                    })?;
+                    let agents = provider().await;
+                    let items: Vec<Value> = agents
+                        .iter()
+                        .map(|a| {
+                            json!({
+                                "driver": a.driver,
+                                "id": a.id,
+                                "sessionId": a.session_id,
+                                "name": a.name,
+                                "cwd": a.cwd,
+                                "state": a.group.as_str(),
+                                "detail": a.detail,
+                                "startedAt": a.started_at,
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "sessions": items }))
+                }
+                "hub.sessions.messages" => {
+                    let session_id = params
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| RpcError::PluginError("缺少 sessionId 参数".into()))?;
+                    let limit = params
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(20)
+                        .clamp(1, 200) as usize;
+                    let provider = messages.clone().ok_or_else(|| {
+                        RpcError::PluginError("messages 投影未装配（hub 内部状态）".into())
+                    })?;
+                    let msgs = provider(session_id, limit).await.map_err(|e| {
+                        RpcError::PluginError(credentials.scrub(&e))
+                    })?;
+                    let items: Vec<Value> = msgs
+                        .iter()
+                        .map(|m| {
+                            json!({
+                                "kind": m.kind.as_str(),
+                                "text": m.text.as_deref().map(|t| credentials.scrub(t)),
+                                "ts": m.ts,
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "sessionId": session_id, "messages": items }))
+                }
                 "hub.projects.effective" => {
                     // 可验证工程清单（预览反馈第 3 轮）：工程注册表 ∪ 全部 agent cwd 去重，
                     // 每项含 path 与 source（registry | agent-cwd）——视图下拉据此让用户
@@ -1679,6 +2327,77 @@ fn plugin_dir_of(p: &InstalledPlugin, paths: &PluginPaths) -> PathBuf {
             .unwrap_or_else(|| paths.plugins_dir.join(&p.entry.id))
     } else {
         paths.plugins_dir.join(&p.entry.id)
+    }
+}
+
+/// 旧版副本根（B4 更新流，ADR-0008 拍板结论 4 的加法目录约定：
+/// `plugins/.versions/<id>/<hash>/`；scanner 一层深扫描遇无 plugin.json 目录静默跳过）。
+fn versions_root(paths: &PluginPaths) -> PathBuf {
+    paths.plugins_dir.join(".versions")
+}
+
+/// 每插件保留的版本副本份数（ADR-0008 拍板结论 4 的 B4 细化：保留 3 份，
+/// 新副本入库时按 mtime 剪枝）。
+const VERSIONS_KEEP: usize = 3;
+
+/// 单版本副本目录：`.versions/<id>/<hash 去 sha256: 前 16 hex>/`。
+fn version_dir(paths: &PluginPaths, id: &str, content_hash: &str) -> PathBuf {
+    versions_root(paths).join(id).join(short_hash(content_hash))
+}
+
+fn short_hash(content_hash: &str) -> String {
+    content_hash
+        .trim_start_matches("sha256:")
+        .chars()
+        .take(16)
+        .collect()
+}
+
+/// 目录递归复制（不跟随符号链接——副本内 symlink 跳过，与审计口径一致）。
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let target = dst.join(entry.file_name());
+        if meta.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else if meta.is_file() {
+            std::fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// 版本副本剪枝（按 mtime 留新弃旧；keep=0 关闭）。
+fn prune_versions(paths: &PluginPaths, id: &str, keep: usize) {
+    if keep == 0 {
+        return;
+    }
+    let dir = versions_root(paths).join(id);
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut entries: Vec<(PathBuf, std::time::SystemTime)> = read
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let modified = e.metadata().and_then(|m| m.modified()).ok()?;
+            Some((e.path(), modified))
+        })
+        .collect();
+    if entries.len() <= keep {
+        return;
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    for (path, _) in entries.into_iter().skip(keep) {
+        let _ = std::fs::remove_dir_all(path);
     }
 }
 
@@ -1773,6 +2492,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hook_observer_template_passes_audit() {
+        // 模板即样例即测试（ADR-0015）：hook-observer 模板占位替换后必须过
+        // 静态审计（零 errors）且贡献物清单含 hook 类
+        let template = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/templates/hook-observer");
+        assert!(template.join("plugin.json").is_file());
+        let tmp = tempfile::tempdir().unwrap();
+        copy_dir_recursive(&template, tmp.path()).unwrap();
+        let manifest_path = tmp.path().join("plugin.json");
+        let raw = std::fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("{{PLUGIN_ID}}", "hook-observer-demo")
+            .replace("{{PLUGIN_NAME}}", "Hook Observer Demo")
+            .replace("{{AUTHOR}}", "agent-hub");
+        std::fs::write(&manifest_path, raw).unwrap();
+        let creds = credentials::CredentialsStore::load(
+            std::env::temp_dir().join("hub-test-no-such-credentials.json"),
+        );
+        let report = audit::audit_dir(tmp.path(), &creds);
+        assert!(report.installable, "{:?}", report.errors);
+        assert!(
+            report
+                .contributions
+                .iter()
+                .any(|c| c.kind == "hook" && c.id == "onSessionCreate"),
+            "{:?}",
+            report.contributions
+        );
+    }
+
+    #[test]
+    fn idle_flip_detector_debounces_read_degradation() {
+        // B4 方案 1 语义锁（主会话 2026-10-24 裁决）：
+        // 单次空观测（读降级形态）不翻转；连续 CONFIRM_ZEROS 次空才判闲；
+        // 忙观测重置去抖；未武装（启动即全空）不发射。
+        let mut d = IdleFlipDetector::new();
+        // 1) 启动即全空：无忙基线 → 永不翻转
+        for _ in 0..(IdleFlipDetector::CONFIRM_ZEROS + 2) {
+            assert!(!d.feed(0), "未武装不得翻转");
+        }
+        // 2) 忙 → 偶发单零（读降级）→ 忙：不翻转
+        assert!(!d.feed(1));
+        assert!(!d.feed(0)); // 单次降级
+        assert!(!d.feed(1)); // 忙重置去抖
+        // 3) 忙 → 连续 CONFIRM_ZEROS 次空：第 3 次翻转，之后重置
+        assert!(!d.feed(1));
+        assert!(!d.feed(0));
+        assert!(!d.feed(0), "2/3 次空仍不翻");
+        assert!(d.feed(0), "3/3 次空 → 判闲翻转");
+        assert!(!d.feed(0), "翻转后重置：需重新武装");
+        // 4) 可再武装再翻：忙 → 连续零 → 再翻
+        assert!(!d.feed(2));
+        assert!(!d.feed(0));
+        assert!(!d.feed(0));
+        assert!(d.feed(0));
+    }
+
+    #[test]
+    fn idle_flip_detector_confirms_window_is_reasonable() {
+        // 确认窗 = 5s × 3 ≈ 15s（约两倍于单次降级窗口估计宽度）；常量即语义
+        assert_eq!(IdleFlipDetector::CONFIRM_ZEROS, 3);
+    }
+
+    #[test]
     fn view_root_uses_view_subtree() {
         let raw = r#"{"schemaVersion":1,"id":"vp","name":"V","version":"0.1.0","hub":{"apiVersion":"1"},
           "contributes":{"views":[{"id":"a","title":"A","entry":"view/index.html"}]}}"#;
@@ -1788,6 +2571,7 @@ mod tests {
                 enabled: true,
                 state: PluginState::Ready,
                 last_fault: None,
+                pending_update: None,
             },
             manifest: m,
             plugin_dir: PathBuf::from("/tmp/plugin-v"),

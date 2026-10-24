@@ -24,6 +24,8 @@ use futures::future::BoxFuture;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+use crate::models::Group;
+
 use crate::models::{AgentSummary, ChatMessage};
 pub use claude::subagents::SubagentEntry;
 pub use claude::tasks::TaskEntry;
@@ -279,6 +281,49 @@ impl DriverRegistry {
             out.extend(d.list(all).await?);
         }
         Ok(out)
+    }
+
+    /// 运行中会话计数（fail-soft 聚合，B4 onIdle 探针专用）：单 driver Err 只
+    /// 跳过该 driver 不拖垮聚合——与 list_all 的全有全无语义不同（后者面向
+    /// /api/agents 的完整性，探针要的是尽力计数；tester-report-3 根因：dsh 401
+    /// 类 Err 经 list_all 短路 + 探针 unwrap_or_default 把整份清单吞成空集，
+    /// claude 的 working 计数被连带抹零）。
+    pub async fn running_count(&self) -> usize {
+        let mut n = 0usize;
+        for d in &self.drivers {
+            match d.list(false).await {
+                Ok(v) => {
+                    // 逐 driver 明细留痕（tester-report-4 建议的诊断锚；与同期
+                    // /api/agents 响应对比一轮即可锁定分歧层——含 Ok(空集) 降级
+                    // 形态：claude CLI 失败在 list 内部降级空清单，不会走 Err 分支）
+                    let detail: Vec<String> = v
+                        .iter()
+                        .map(|a| format!("{}={}", a.id, a.group.as_str()))
+                        .collect();
+                    let c = v
+                        .iter()
+                        .filter(|a| {
+                            matches!(
+                                a.group,
+                                Group::Working | Group::NeedsInput
+                            )
+                        })
+                        .count();
+                    n += c;
+                    tracing::debug!(
+                        driver = %d.name(),
+                        entries = v.len(),
+                        running = c,
+                        sessions = %detail.join(","),
+                        "running_count sample"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(driver = %d.name(), error = %e, "running_count：driver list 失败，跳过该 driver");
+                }
+            }
+        }
+        n
     }
 
     /// 驱动名清单（注册序）——StartDialog「新建 Agent」选项的事实源（去硬编码）。

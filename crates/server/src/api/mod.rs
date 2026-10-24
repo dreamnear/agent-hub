@@ -208,6 +208,53 @@ impl AppState {
                     .unwrap_or_default()
             })
         }));
+        // B4 会话只读投影（hub.sessions.list）与空闲探针（onIdle 埋点）：
+        // 同一 drivers 聚合清单的加法接线（不动既有字段）
+        let drivers_for_sessions = drivers.clone();
+        plugins.set_sessions_provider(Arc::new(move || {
+            let drivers = drivers_for_sessions.clone();
+            Box::pin(async move {
+                drivers.list_all(true).await.unwrap_or_default()
+            })
+        }));
+        let drivers_for_messages = drivers.clone();
+        plugins.set_messages_provider(Arc::new(
+            move |session_id: &str, limit: usize| {
+                let drivers = drivers_for_messages.clone();
+                let session_id = session_id.to_string();
+                Box::pin(async move {
+                    // sessionId → (driver, id) 解析：会话清单内按 sessionId 匹配
+                    //（AgentSummary.session_id 是插件可见的会话标识）
+                    let agents = drivers.list_all(true).await.unwrap_or_default();
+                    let found = agents
+                        .iter()
+                        .find(|a| a.session_id.as_deref() == Some(session_id.as_str()))
+                        .or_else(|| agents.iter().find(|a| a.id == session_id));
+                    let Some(agent) = found else {
+                        return Err(format!("会话 {session_id} 不存在"));
+                    };
+                    let d = drivers
+                        .get(&agent.driver)
+                        .map_err(|e| e.to_string())?;
+                    let page = d
+                        .page(&agent.id, limit, None)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    // 页序 = 旧→新（page 返回「最近窗口」，前端倒序渲染；投影取正序）
+                    let mut messages = page.map(|p| p.messages).unwrap_or_default();
+                    messages.reverse();
+                    Ok(messages)
+                })
+            },
+        ));
+        // B4 onIdle 探针：运行中（Working/NeedsInput）会话计数——fail-soft 逐
+        // driver 聚合（running_count），单 driver Err 不抹零整份计数
+        //（tester-report-3 根因修复）
+        let drivers_for_idle = drivers.clone();
+        plugins.set_idle_probe(Arc::new(move || {
+            let drivers = drivers_for_idle.clone();
+            Box::pin(async move { drivers.running_count().await })
+        }));
         // B3 视图 API（hub.notes.* / hub.tasks.*）：与 /api/notes、/api/tasks 同一
         // 存储/管理器实例（加法接线，不动既有字段）
         plugins.set_notes_file(cfg.notes_file.clone());

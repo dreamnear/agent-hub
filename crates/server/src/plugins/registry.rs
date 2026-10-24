@@ -29,6 +29,23 @@ pub enum FaultKind {
     Violation,
     Approval,
     Rejection,
+    /// 更新确认流留痕（B4 BR-13：应用/保持旧版均留痕，消息体区分）
+    Update,
+}
+
+/// 待确认更新（B4 BR-13）：新版本已入库（`.versions/<id>/<hash>/`），
+/// 确认前注册表继续以旧版服务（保持旧版可用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingUpdate {
+    /// 新版本内容 hash（确认时防 TOCTOU 的比对键）
+    pub content_hash: String,
+    /// 新版本 manifest version（展示用）
+    pub version: String,
+    /// 发现时间
+    pub discovered_at: String,
+    /// 发现时旧版副本是否可用（false = B4 前安装的存量插件，无法恢复旧目录内容）
+    pub old_version_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +101,9 @@ pub struct PluginEntry {
     pub state: PluginState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_fault: Option<FaultRecord>,
+    /// 待确认更新（B4 BR-13；None = 无）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_update: Option<PendingUpdate>,
 }
 
 /// 运行时条目 = 持久态 + manifest 快照 + 故障记录（B1 内存态，重启保留 lastFault）。
@@ -102,6 +122,20 @@ struct PersistedRegistry {
     schema_version: u32,
     #[serde(default)]
     plugins: Vec<PluginEntry>,
+    /// 已清理发现记录（B4 tester-report-1 FAIL-2）：卸载 + purge 后抑制同 id+hash
+    /// 的重发现/重审计（drop-in 目录按 ADR-0002 第 7 条保留，但其审计产物不应
+    /// 被周期扫描无限重生）；目录内容变化（hash 不同）即自动失效——用户放新版
+    /// 立即恢复正常发现面。
+    #[serde(default)]
+    dismissed: Vec<DismissedEntry>,
+}
+
+/// 一条已清理的发现记录（id + 目录内容 hash 精确对）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DismissedEntry {
+    pub id: String,
+    pub content_hash: String,
 }
 
 /// 合法迁移（BR-01 迁移表；非法边一律拒绝，防状态漂移）。
@@ -337,6 +371,117 @@ impl Registry {
         Some(removed)
     }
 
+    /// 更新确认流的条目替换（B4 BR-13）：版本/hash/权限面/待确认态一次写入 +
+    /// manifest 快照刷新。状态位不动（启用/停用/故障语义与更新正交）。
+    pub fn apply_update(
+        &self,
+        id: &str,
+        version: String,
+        content_hash: String,
+        permissions_hash: String,
+        manifest: Manifest,
+        plugin_dir: PathBuf,
+    ) -> Result<PluginEntry, String> {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let Some(p) = guard.get_mut(id) else {
+            return Err(format!("插件 {id} 不在注册表中"));
+        };
+        p.entry.version = version;
+        p.entry.content_hash = content_hash;
+        p.entry.permissions_hash = permissions_hash;
+        p.entry.pending_update = None;
+        p.manifest = manifest;
+        p.plugin_dir = plugin_dir;
+        let entry = p.entry.clone();
+        let _ = self.save_locked(&guard);
+        Ok(entry)
+    }
+
+    /// 待确认更新登记/清除（B4；清除 = keep_old 路径）。
+    pub fn set_pending_update(
+        &self,
+        id: &str,
+        pending: Option<PendingUpdate>,
+    ) -> Result<PluginEntry, String> {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let Some(p) = guard.get_mut(id) else {
+            return Err(format!("插件 {id} 不在注册表中"));
+        };
+        p.entry.pending_update = pending;
+        let entry = p.entry.clone();
+        let _ = self.save_locked(&guard);
+        Ok(entry)
+    }
+
+    /// 发现记录清理登记（B4 FAIL-2 回修）：卸载 + purge 后记录 (id, hash)，
+    /// scanner 据此跳过同目录的重发现/重审计。同 id 只保留最新一条。
+    pub fn dismiss_discovery(&self, id: &str, content_hash: &str) {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let persisted = self.load_persisted_locked(&guard);
+        let mut dismissed: Vec<DismissedEntry> = persisted
+            .dismissed
+            .into_iter()
+            .filter(|d| d.id != id)
+            .collect();
+        dismissed.push(DismissedEntry {
+            id: id.to_string(),
+            content_hash: content_hash.to_string(),
+        });
+        self.save_dismissed_locked(&guard, dismissed);
+    }
+
+    /// 安装后解除清理登记（同 id 全部条目）。
+    pub fn undismiss_discovery(&self, id: &str) {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let persisted = self.load_persisted_locked(&guard);
+        if persisted.dismissed.iter().any(|d| d.id == id) {
+            let dismissed = persisted
+                .dismissed
+                .into_iter()
+                .filter(|d| d.id != id)
+                .collect();
+            self.save_dismissed_locked(&guard, dismissed);
+        }
+    }
+
+    /// (id, hash) 是否在清理登记内（scanner 跳过判据）。
+    pub fn is_discovery_dismissed(&self, id: &str, content_hash: &str) -> bool {
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let persisted = self.load_persisted_locked(&guard);
+        persisted.dismissed.iter().any(|d| d.id == id && d.content_hash == content_hash)
+    }
+
+    /// 读持久文件里的 dismissed 段（inner 锁内调用；文件是唯一持久位，
+    /// 内存表不缓存——扫描频率低，逐次读文件足够）。
+    fn load_persisted_locked(&self, _guard: &BTreeMap<String, InstalledPlugin>) -> PersistedRegistry {
+        std::fs::read_to_string(&self.file)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_dismissed_locked(
+        &self,
+        guard: &BTreeMap<String, InstalledPlugin>,
+        dismissed: Vec<DismissedEntry>,
+    ) {
+        let persisted = PersistedRegistry {
+            schema_version: 1,
+            plugins: guard
+                .values()
+                .filter(|p| !p.entry.source.is_transient())
+                .map(|p| p.entry.clone())
+                .collect(),
+            dismissed,
+        };
+        if let Ok(raw) = serde_json::to_string_pretty(&persisted) {
+            let tmp = self.file.with_extension("json.tmp");
+            if std::fs::write(&tmp, raw).is_ok() && std::fs::rename(&tmp, &self.file).is_ok() {
+                crate::platform::harden_0600(&self.file);
+            }
+        }
+    }
+
     fn save_locked(&self, map: &BTreeMap<String, InstalledPlugin>) -> std::io::Result<()> {
         if let Some(dir) = self.file.parent() {
             std::fs::create_dir_all(dir)?;
@@ -349,6 +494,7 @@ impl Registry {
                 .filter(|p| !p.entry.source.is_transient())
                 .map(|p| p.entry.clone())
                 .collect(),
+            dismissed: self.load_persisted_locked(&map).dismissed,
         };
         let raw = serde_json::to_string_pretty(&persisted)?;
         let tmp = self.file.with_extension("json.tmp");
@@ -409,6 +555,7 @@ mod tests {
             enabled: true,
             state: PluginState::Ready,
             last_fault: None,
+            pending_update: None,
         }
     }
 

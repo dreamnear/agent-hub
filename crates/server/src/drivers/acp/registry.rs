@@ -63,9 +63,16 @@ impl AcpFeed {
         }
         let event = ChatEvent {
             session_id: self.session_id.clone(),
-            message,
             seq: self.seq.fetch_add(1, Ordering::Relaxed) + 1,
+            message: message.clone(),
         };
+        // B4 hooks 观察档（ADR-0014）：ACP ChatEvent 泵点发射（fire-and-forget）
+        crate::plugins::hooks::dispatch_message_append(
+            &self.session_id,
+            event.seq,
+            message.kind.as_str(),
+            message.text.as_deref(),
+        );
         if let Some(sender) = self
             .rooms
             .read()

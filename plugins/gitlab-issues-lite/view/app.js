@@ -11,6 +11,7 @@
   var boardEl = document.getElementById('board');
   var pickerEl = document.getElementById('picker');
   var metaEl = document.getElementById('meta');
+  var hookEl = document.getElementById('hooks');
 
   var pluginId = null;
   var rpcSeq = 0;
@@ -198,7 +199,26 @@
       var data = block && typeof block.text === 'string' ? JSON.parse(block.text) : null;
       if (!data || data.error) throw new Error((data && data.error) || '空结果');
       renderIssues(data);
+      loadHookStats();
     }).catch(function (e) { setState(failText(e), true); });
+  }
+
+  // B4 hooks 观察档展示：backend 把 hook/<名> 通知计数落 plugin_data `_hook_stats`，
+  // 视图只读展示（at-most-once——计数是「至少收到」的下界，不承诺完整流）。
+  function loadHookStats() {
+    callHub('hub.storage.get', { params: { key: '_hook_stats' } }).then(function (res) {
+      if (!res || !res.value) return;
+      try {
+        var stats = JSON.parse(res.value);
+        var counts = (stats && stats.counts) || {};
+        var parts = [];
+        if (counts.onSessionCreate) parts.push('会话创建 ' + counts.onSessionCreate);
+        if (counts.onJobsChanged) parts.push('jobs 变更 ' + counts.onJobsChanged);
+        if (parts.length > 0) {
+          hookEl.textContent = '钩子（观察档 · at-most-once）：' + parts.join(' · ');
+        }
+      } catch (_e) { /* 统计损坏不影响主链路 */ }
+    }).catch(function () { /* 无统计 */ });
   }
 
   function loadBindingAndProjects() {
@@ -247,6 +267,7 @@
       pluginId = p.pluginId;
       applyTokens(p.tokens, p.theme);
       loadBindingAndProjects();
+      loadHookStats();
       return;
     }
     if (data.type === 'hub:theme') { applyTokens(data.payload && data.payload.tokens, data.payload && data.payload.theme); return; }

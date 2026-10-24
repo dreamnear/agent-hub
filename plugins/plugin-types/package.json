@@ -1,0 +1,7 @@
+{
+  "name": "@agent-hub/plugin-types",
+  "version": "1.0.0",
+  "description": "Type definitions for agent-hub plugin manifests (apiVersion 1). Reference package: not published to npm; types live here as the single source alongside the hub api-schema endpoint (fallback path per tech-design §13.5).",
+  "types": "index.d.ts",
+  "license": "MIT"
+}

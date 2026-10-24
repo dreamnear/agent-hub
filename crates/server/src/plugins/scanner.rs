@@ -28,7 +28,34 @@ pub struct DiscoveredItem {
     /// 已安装条目的当前 hash（更新候选时用于展示版本差异）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed_content_hash: Option<String>,
+    /// 更新差异面（B4 BR-13：审计卡展示差异面；内容变化 + 权限面变化分列）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_diff: Option<UpdateDiff>,
     pub report: AuditReport,
+}
+
+/// 更新差异面（B4）：新版相对已装版的贡献物与权限面变化（BR-13 扩权确认的
+/// 展示依据——确认动作同时覆盖内容与权限面，差异逐条可读）。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDiff {
+    pub version_from: String,
+    pub version_to: String,
+    /// 权限面 hash 变化（true = 扩权/缩权/换权，卡片红标）
+    pub permissions_changed: bool,
+    /// 数据域变化（added/removed 各一侧）
+    pub data_added: Vec<String>,
+    pub data_removed: Vec<String>,
+    pub credentials_added: Vec<String>,
+    pub credentials_removed: Vec<String>,
+    pub high_risk_added: Vec<String>,
+    pub high_risk_removed: Vec<String>,
+    /// 贡献物增删（kind:id 形态；变更按 removed+added 各计一次）
+    pub contributions_added: Vec<String>,
+    pub contributions_removed: Vec<String>,
+    /// 旧版目录副本是否可用（B4 review-1 M22：false = B4 前安装的存量插件，
+    /// 应用更新后不可回滚——卡片按位分支文案）
+    pub old_version_available: bool,
 }
 
 /// 扫描结果。
@@ -36,6 +63,68 @@ pub struct DiscoveredItem {
 pub struct ScanOutcome {
     pub items: Vec<DiscoveredItem>,
     pub last_scan_at: String,
+}
+
+/// 更新差异面计算（B4，纯函数）：已装 manifest 快照 vs 新版审计投影。
+/// 贡献物按 `kind:id` 对齐；权限面按域集合对齐（数组序无关）。
+pub fn compute_update_diff(
+    installed: &super::registry::InstalledPlugin,
+    new_report: &AuditReport,
+    old_version_available: bool,
+) -> UpdateDiff {
+    let old_m = &installed.manifest;
+    let new_reach = &new_report.reach;
+    let set_diff = |old: &[String], new: &[String]| -> (Vec<String>, Vec<String>) {
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        for n in new {
+            if !old.contains(n) {
+                added.push(n.clone());
+            }
+        }
+        for o in old {
+            if !new.contains(o) {
+                removed.push(o.clone());
+            }
+        }
+        (added, removed)
+    };
+    let (data_added, data_removed) = set_diff(&old_m.permissions.data, &new_reach.data);
+    let cred_old: Vec<String> = old_m.permissions.credentials.clone();
+    let cred_new: Vec<String> = new_reach
+        .credentials
+        .iter()
+        .map(|c| c.name.clone())
+        .collect();
+    let (credentials_added, credentials_removed) = set_diff(&cred_old, &cred_new);
+    let high_risk_old: Vec<String> = old_m.permissions.high_risk.clone();
+    let high_risk_new: Vec<String> =
+        new_reach.high_risk.iter().map(|h| h.id.clone()).collect();
+    let (high_risk_added, high_risk_removed) = set_diff(&high_risk_old, &high_risk_new);
+    let key = |c: &super::audit::Contribution| format!("{}:{}", c.kind, c.id);
+    let old_contribs: Vec<String> = super::audit::contributions_of(old_m).iter().map(&key).collect();
+    let new_contribs: Vec<String> = new_report.contributions.iter().map(&key).collect();
+    let (contributions_added, contributions_removed) = set_diff(&old_contribs, &new_contribs);
+    let permissions_changed = !(data_added.is_empty()
+        && data_removed.is_empty()
+        && credentials_added.is_empty()
+        && credentials_removed.is_empty()
+        && high_risk_added.is_empty()
+        && high_risk_removed.is_empty());
+    UpdateDiff {
+        version_from: installed.entry.version.clone(),
+        version_to: new_report.plugin_version.clone(),
+        permissions_changed,
+        data_added,
+        data_removed,
+        credentials_added,
+        credentials_removed,
+        high_risk_added,
+        high_risk_removed,
+        contributions_added,
+        contributions_removed,
+        old_version_available,
+    }
 }
 
 /// 枚举插件根下的一层目录（不跟随符号链接，ADR-0001 第 5 条）。
@@ -144,6 +233,12 @@ pub fn scan(
         })
         .filter_map(|(i, claim)| {
             let key = (claim.kind.clone(), claim.value.clone());
+            // B3 观察项承接：update 候选的自撞豁免——占用方 == 候选自身 id
+            //（同一插件的新版替换旧版，match 面延续不算冲突）
+            let own_id = cand_id(&candidates[i]);
+            if claimed.get(&key).map(|o| o.as_str()) == Some(own_id.as_str()) {
+                return None;
+            }
             let owner = match claimed.get(&key) {
                 Some(o) => Some(o.clone()),
                 None => candidates.iter().enumerate().find_map(|(j, cj)| {
@@ -293,6 +388,21 @@ pub fn scan(
             // 已安装且 hash 一致：不需要用户处理，不进新发现区
             continue;
         };
+        // B4 FAIL-2 回修：卸载 + purge 清理登记内的 (id, hash) 不再重发现/重审计
+        //（目录按 ADR-0002 保留，但审计产物不随周期扫描无限重生；hash 变化即失效）
+        if status == "new" && registry.is_discovery_dismissed(&id, &report.content_hash) {
+            continue;
+        }
+        // B4 BR-13：更新候选的差异面（新版审计投影 vs 已装 manifest 快照）
+        // old_version_available 保守缺省 true；权威值由 scan_now 的 staging
+        // 回填（旧副本在 plugins 模块管理，scanner 不知 .versions 约定）
+        let update_diff = if status == "update" {
+            installed
+                .as_ref()
+                .map(|p| compute_update_diff(p, &report, true))
+        } else {
+            None
+        };
         items.push(DiscoveredItem {
             id,
             dir_name,
@@ -300,6 +410,7 @@ pub fn scan(
             source_kind,
             status: status.into(),
             installed_content_hash: installed_hash,
+            update_diff,
             report,
         });
     }
@@ -420,6 +531,7 @@ mod tests {
                 enabled: true,
                 state: super::super::registry::PluginState::Ready,
                 last_fault: None,
+                pending_update: None,
             },
             super::super::manifest::parse(
                 &fs::read_to_string(dir.path().join("a/plugin.json")).unwrap(),
@@ -431,5 +543,86 @@ mod tests {
         .unwrap();
         let second = scan(dir.path(), &[], &reg, &creds());
         assert!(second.items.is_empty(), "同 hash 已安装不应再进新发现区");
+    }
+}
+
+#[cfg(test)]
+mod b4_tests {
+    use super::*;
+    use std::fs;
+
+    fn creds() -> CredentialsStore {
+        CredentialsStore::load(std::env::temp_dir().join("hub-test-no-such-credentials.json"))
+    }
+
+    fn write_plugin(root: &Path, dir: &str, id: &str, version: &str, fence: Option<&str>) {
+        let d = root.join(dir);
+        fs::create_dir_all(&d).unwrap();
+        let renderer = fence
+            .map(|f| format!(
+                r#","renderers": [{{"id":"plug_{id}_g","match":{{"fence":["{f}"]}},"engine":"mermaid"}}]"#
+            ))
+            .unwrap_or_default();
+        fs::write(
+            d.join("plugin.json"),
+            format!(
+                r#"{{"schemaVersion":1,"id":"{id}","name":"{id}","version":"{version}","hub":{{"apiVersion":"1"}},"contributes":{{"views":[{{"id":"home","title":"H","entry":"view/index.html"}}]{renderer}}}}}"#
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(d.join("view")).unwrap();
+        fs::write(d.join("view/index.html"), "<html></html>").unwrap();
+    }
+
+    #[test]
+    fn update_candidate_keeping_own_renderer_claim_is_not_self_conflict() {
+        // B3 观察项承接：update 候选沿用自身 match 面 = 自撞豁免（B4 修复）
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "a", "rend-p", "0.1.0", Some("gantt"));
+        let reg = Registry::open(dir.path().join("plugins.json"));
+        // 安装 0.1.0（先占 fence gantt）
+        let first = scan(dir.path(), &[], &reg, &creds());
+        let item = &first.items[0];
+        let m = super::super::manifest::parse(
+            &fs::read_to_string(dir.path().join("a/plugin.json")).unwrap(),
+        )
+        .unwrap()
+        .manifest;
+        reg.insert_installed(
+            super::super::registry::PluginEntry {
+                id: "rend-p".into(),
+                version: "0.1.0".into(),
+                content_hash: item.report.content_hash.clone(),
+                permissions_hash: "sha256:x".into(),
+                source: super::super::registry::PluginSource::drop_in(),
+                installed_at: super::super::registry::now_rfc3339(),
+                enabled: true,
+                state: super::super::registry::PluginState::Ready,
+                last_fault: None,
+                pending_update: None,
+            },
+            m,
+            dir.path().join("a"),
+        )
+        .unwrap();
+        // 升级 0.2.0，沿用同一 fence
+        write_plugin(dir.path(), "a", "rend-p", "0.2.0", Some("gantt"));
+        let second = scan(dir.path(), &[], &reg, &creds());
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].status, "update", "自撞豁免：仍是普通更新候选");
+        assert!(
+            !second.items[0]
+                .report
+                .errors
+                .iter()
+                .any(|e| e.rule == "renderer-match-conflict"),
+            "{:?}",
+            second.items[0].report.errors
+        );
+        // 差异面：version 0.1.0 → 0.2.0
+        let diff = second.items[0].update_diff.as_ref().expect("update diff");
+        assert_eq!(diff.version_from, "0.1.0");
+        assert_eq!(diff.version_to, "0.2.0");
+        assert!(!diff.permissions_changed, "纯内容更新无权限面变化");
     }
 }

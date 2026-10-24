@@ -65,6 +65,9 @@ pub fn router() -> Router<SharedState> {
         .route("/api/plugins/{id}/enable", post(enable_plugin))
         .route("/api/plugins/{id}/disable", post(disable_plugin))
         .route("/api/plugins/{id}/retry", post(retry_plugin))
+        // 更新确认流（B4，BR-13）：应用（新版生效）/ 保持旧版（拒绝并留痕）
+        .route("/api/plugins/{id}/update/apply", post(apply_update))
+        .route("/api/plugins/{id}/update/keep", post(keep_old_version))
         .route("/api/plugins/{id}", delete(uninstall_plugin))
         .route("/api/plugins/{id}/records", get(plugin_records))
         .route("/api/plugins/{id}/view-ticket", post(view_ticket))
@@ -85,6 +88,16 @@ pub fn router() -> Router<SharedState> {
         // 前端 `/` 补全合并渲染（设计 §12.6「前端分组渲染加法」）——commands.rs
         // 的 Claude 插件枚举消费端一行不动（零回归红线）。
         .route("/api/plugins/commands", get(plugin_commands))
+        // 分发面（B4，ADR-0008 §2/§3）：git 直装 + 索引市场 + 审计产物治理
+        .route("/api/plugins/install-git", post(install_git))
+        .route("/api/plugins/market", get(market_list))
+        .route("/api/plugins/market/refresh", post(market_refresh))
+        .route(
+            "/api/plugins/market/sources",
+            post(market_add_source).delete(market_remove_source),
+        )
+        .route("/api/plugins/market/install", post(market_install))
+        .route("/api/plugins/audit/prune", post(audit_prune))
 }
 
 /// 视图资产路由（不并入 `router()` 的 `/api` 组；挂载点在 `lib.rs`，位于 SPA 通配之前）。
@@ -192,6 +205,46 @@ async fn retry_plugin(
     Ok(Json(
         json!({ "plugin": v, "state": v.state, "effect": "immediate" }),
     ))
+}
+
+// ===== 更新确认流（B4，BR-13）=====
+
+/// 更新确认流请求体：只带 contentHash（id 由路径段承载，MINOR② 回修——
+/// 复用 InstallBody 会要求冗余 id 字段，缺 id 报 422）
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateBody {
+    content_hash: String,
+}
+
+/// 应用更新：请求体 hash 必须与登记的待确认一致（防误应用过期候选）。
+async fn apply_update(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateBody>,
+) -> Result<Json<Value>, AppError> {
+    let v = state
+        .plugins
+        .apply_update(&id, &body.content_hash)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(
+        json!({ "applied": true, "plugin": v, "effect": "immediate" }),
+    ))
+}
+
+/// 保持旧版：清待确认态 + 删新版副本 + 留痕；旧版自始可用。
+async fn keep_old_version(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateBody>,
+) -> Result<Json<Value>, AppError> {
+    let v = state
+        .plugins
+        .keep_old_version(&id, &body.content_hash)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(json!({ "kept": true, "plugin": v })))
 }
 
 #[derive(Deserialize)]
@@ -434,6 +487,95 @@ async fn decide_approval(
         })?;
     Ok(Json(
         json!({ "applied": true, "decision": decision.as_str(), "approval": req }),
+    ))
+}
+
+// ===== 分发面（B4，ADR-0008 §2/§3）=====
+
+/// git 直装（clone → 校验 manifest → 落盘插件目录 → 扫描进确认面）。
+/// 落盘即「可审计态」：装不装仍由既有确认流决定（BR-02）。
+async fn install_git(
+    State(state): State<SharedState>,
+    Json(body): Json<crate::plugins::install::GitInstallRequest>,
+) -> Result<Json<Value>, AppError> {
+    let outcome = state
+        .plugins
+        .install_git(&body)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(serde_json::to_value(&outcome).unwrap_or(Value::Null)))
+}
+
+/// 索引市场浏览（本地检索/过滤在前端；源拉取带 300s 缓存）。
+async fn market_list(State(state): State<SharedState>) -> Json<Value> {
+    let (sources, entries) = state.plugins.market_list(false).await;
+    Json(json!({ "sources": sources, "entries": entries }))
+}
+
+/// 强制刷新索引（绕缓存重拉全部源）。
+async fn market_refresh(State(state): State<SharedState>) -> Json<Value> {
+    let (sources, entries) = state.plugins.market_list(true).await;
+    Json(json!({ "sources": sources, "entries": entries }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarketSourceBody {
+    source: String,
+}
+
+/// 添加索引源（用户显式；URL/路径形态校验前置）。
+async fn market_add_source(
+    State(state): State<SharedState>,
+    Json(body): Json<MarketSourceBody>,
+) -> Result<Json<Value>, AppError> {
+    state
+        .plugins
+        .market_add_source(&body.source)
+        .map_err(AppError::bad)?;
+    Ok(Json(json!({ "added": true, "source": body.source })))
+}
+
+/// 移除索引源。
+async fn market_remove_source(
+    State(state): State<SharedState>,
+    Query(q): Query<MarketSourceBody>,
+) -> Result<Json<Value>, AppError> {
+    let removed = state
+        .plugins
+        .market_remove_source(&q.source)
+        .map_err(AppError::bad)?;
+    Ok(Json(json!({ "removed": removed, "source": q.source })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarketInstallBody {
+    #[serde(default)]
+    source: Option<String>,
+    id: String,
+}
+
+/// 从索引触发安装（落 git 直装流 → 既有确认面）。
+async fn market_install(
+    State(state): State<SharedState>,
+    Json(body): Json<MarketInstallBody>,
+) -> Result<Json<Value>, AppError> {
+    let outcome = state
+        .plugins
+        .market_install(body.source.as_deref().unwrap_or(""), &body.id)
+        .await
+        .map_err(AppError::bad)?;
+    Ok(Json(serde_json::to_value(&outcome).unwrap_or(Value::Null)))
+}
+
+/// 审计产物治理：清点（可见）+ 手动清理（生效，保留策略与扫描期一致）。
+async fn audit_prune(State(state): State<SharedState>) -> Result<Json<Value>, AppError> {
+    let (files, bytes) = state.plugins.audit_artifact_stats();
+    let removed = state.plugins.audit_prune().map_err(AppError::bad)?;
+    let (remaining, _) = state.plugins.audit_artifact_stats();
+    Ok(Json(
+        json!({ "removed": removed, "filesBefore": files, "bytesBefore": bytes, "filesAfter": remaining }),
     ))
 }
 
@@ -817,6 +959,7 @@ mod tests {
                 enabled,
                 state,
                 last_fault: None,
+                pending_update: None,
             },
             manifest: manifest.clone(),
             plugin_dir: std::path::PathBuf::from("/tmp/cmd-p"),

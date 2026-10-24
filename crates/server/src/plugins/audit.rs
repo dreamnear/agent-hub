@@ -77,6 +77,8 @@ pub struct CommandReach {
 #[serde(rename_all = "camelCase")]
 pub struct AuditReport {
     pub plugin_id: String,
+    /// manifest version（B4 更新差异面展示用；manifest 不可解析时为空）
+    pub plugin_version: String,
     pub plugin_dir: String,
     pub content_hash: String,
     pub contributions: Vec<Contribution>,
@@ -165,6 +167,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
             );
             return AuditReport {
                 plugin_id: String::new(),
+                plugin_version: String::new(),
                 plugin_dir: root.to_string_lossy().into_owned(),
                 content_hash: hash,
                 contributions,
@@ -185,6 +188,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
             errors.extend(errs);
             return AuditReport {
                 plugin_id: String::new(),
+                plugin_version: String::new(),
                 plugin_dir: root.to_string_lossy().into_owned(),
                 content_hash: hash,
                 contributions,
@@ -395,6 +399,7 @@ pub fn audit_dir(root: &Path, creds: &CredentialsStore) -> AuditReport {
         .collect();
     AuditReport {
         plugin_id: m.id.clone(),
+        plugin_version: m.version.clone(),
         plugin_dir: root.to_string_lossy().into_owned(),
         content_hash: hash,
         contributions,
@@ -525,6 +530,16 @@ pub fn contributions_of(m: &super::manifest::Manifest) -> Vec<Contribution> {
             path: None,
         });
     }
+    for h in &m.contributes.hooks {
+        out.push(Contribution {
+            kind: "hook".into(),
+            id: h.clone(),
+            name: h.clone(),
+            description: Some("观察档 · 事后通知只读".into()),
+            risk: "-".into(),
+            path: None,
+        });
+    }
     out
 }
 
@@ -545,6 +560,107 @@ pub fn persist(report: &AuditReport, audit_dir: &Path) -> std::io::Result<PathBu
     let path = audit_dir.join(format!("{id}-{short}.json"));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
+}
+
+/// 审计产物保留策略（B4 治理，需求功能点 6）：按插件 id 分组，每插件仅保留
+/// 最近 N 份（mtime 新者优先）。返回清理的文件数。文件名约定 `<id>-<hash16>.json`
+/// ——id 分组 = 文件名剥掉末尾 `-<16 hex>.json`。
+pub fn prune_artifacts(audit_dir: &Path, keep_per_plugin: usize) -> std::io::Result<usize> {
+    if keep_per_plugin == 0 {
+        return Ok(0); // 0 = 关闭清理（保守缺省防误删）
+    }
+    let groups = group_artifacts(audit_dir)?;
+    let mut removed = 0;
+    for (_, mut files) in groups {
+        if files.len() <= keep_per_plugin {
+            continue;
+        }
+        // mtime 新者优先（新审计对当前版本更有追溯价值）
+        files.sort_by(|a, b| b.modified.cmp(&a.modified));
+        for f in files.into_iter().skip(keep_per_plugin) {
+            if std::fs::remove_file(&f.path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// 审计产物清点（B4 治理可见性）：文件数与总体积。
+pub fn artifact_stats(audit_dir: &Path) -> (usize, u64) {
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let Ok(read) = std::fs::read_dir(audit_dir) else {
+        return (0, 0);
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            count += 1;
+            bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    (count, bytes)
+}
+
+/// 卸载随清理（B4）：删除某插件的全部审计产物。
+pub fn purge_plugin_artifacts(audit_dir: &Path, plugin_id: &str) -> std::io::Result<usize> {
+    let groups = group_artifacts(audit_dir)?;
+    let mut removed = 0;
+    if let Some(files) = groups.get(plugin_id) {
+        for f in files {
+            if std::fs::remove_file(&f.path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
+}
+
+#[derive(Debug)]
+struct ArtifactFile {
+    path: PathBuf,
+    modified: std::time::SystemTime,
+}
+
+/// 审计目录清点：按插件 id 分组（文件名 `<id>-<hash16>.json` → id = 去尾 `-{16hex}`）。
+fn group_artifacts(
+    audit_dir: &Path,
+) -> std::io::Result<std::collections::BTreeMap<String, Vec<ArtifactFile>>> {
+    let mut groups: std::collections::BTreeMap<String, Vec<ArtifactFile>> = Default::default();
+    let read = match std::fs::read_dir(audit_dir) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(groups),
+        Err(e) => return Err(e),
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".json") || name.len() < 22 {
+            continue;
+        }
+        let stem = name.trim_end_matches(".json");
+        // 末段 16 hex hash 归 id；不合规形态归 "unknown" 组（保守保留原策略可清理）
+        let id = match stem.rsplit_once('-') {
+            Some((id, hash))
+                if hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                id.to_string()
+            }
+            _ => "unknown".to_string(),
+        };
+        let modified = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        groups.entry(id).or_default().push(ArtifactFile { path, modified });
+    }
+    Ok(groups)
 }
 
 /// 相对路径解析 + 逃逸检测（canonicalize 后必须仍在插件根内）。
@@ -839,5 +955,47 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with("demo-plugin-"));
+    }
+
+    #[test]
+    fn prune_keeps_newest_per_plugin() {
+        // B4 治理：保留策略——每插件留 N 份（mtime 新者优先），跨插件互不影响
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path();
+        let write_at = |name: &str, age: std::time::Duration| {
+            let p = a.join(name);
+            std::fs::write(&p, "{}").unwrap();
+            let old = std::time::SystemTime::now() - age;
+            std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        };
+        write_at("demo-aaaaaaaaaaaaaaaa.json", std::time::Duration::from_secs(300));
+        write_at("demo-bbbbbbbbbbbbbbbb.json", std::time::Duration::from_secs(100));
+        write_at("other-cccccccccccccccc.json", std::time::Duration::from_secs(50));
+        let removed = prune_artifacts(a, 1).unwrap();
+        assert_eq!(removed, 1);
+        assert!(!a.join("demo-aaaaaaaaaaaaaaaa.json").exists(), "旧的被清");
+        assert!(a.join("demo-bbbbbbbbbbbbbbbb.json").exists(), "新的保留");
+        assert!(a.join("other-cccccccccccccccc.json").exists(), "另一插件不受影响");
+        // keep=0 = 关闭清理
+        let removed = prune_artifacts(a, 0).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn purge_removes_only_target_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path();
+        for name in ["demo-aaaaaaaaaaaaaaaa.json", "other-bbbbbbbbbbbbbbbb.json"] {
+            std::fs::write(a.join(name), "{}").unwrap();
+        }
+        let removed = purge_plugin_artifacts(a, "demo").unwrap();
+        assert_eq!(removed, 1);
+        assert!(!a.join("demo-aaaaaaaaaaaaaaaa.json").exists());
+        assert!(a.join("other-bbbbbbbbbbbbbbbb.json").exists());
     }
 }

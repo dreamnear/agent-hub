@@ -104,6 +104,9 @@ function resolveTarget(args) {
 let nextId = 1;
 const pending = new Map(); // id -> resolve
 
+// B4 钩子通知计数（进程内累计；持久化到 plugin_data `_hook_stats` 供视图读取）
+const hookStats = {};
+
 function send(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
@@ -260,6 +263,18 @@ rl.on('line', (line) => {
       log('shutdown received, exiting');
       shuttingDown = true;
       process.exit(0);
+    }
+    // B4 hooks 观察档（ADR-0014）：hub 下行 notification（hook/<钩子名>，无 id
+    // 不等待）。观察档只读——计数落 plugin_data 供视图展示；at-most-once，
+    // 通知可能丢（队列满/离线），此处不做可靠性假设。
+    if (typeof frame.method === 'string' && frame.method.startsWith('hook/')) {
+      const hook = frame.method.slice(5);
+      hookStats[hook] = (hookStats[hook] ?? 0) + 1;
+      log(`hook ${hook} (${hookStats[hook]})`);
+      callHub('hub.storage.set', {
+        key: '_hook_stats',
+        value: JSON.stringify({ counts: hookStats, updatedAt: new Date().toISOString() }),
+      }).catch(() => { /* fire-and-forget：统计写失败不影响观察 */ });
     }
     return;
   }

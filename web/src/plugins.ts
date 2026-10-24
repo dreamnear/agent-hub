@@ -102,6 +102,8 @@ export interface PluginView {
   services?: ServiceView[];
   backend: BackendInfo;
   lastFault?: FaultRecord;
+  /** 生命周期钩子订阅与投递统计（B4；未订阅插件缺省） */
+  hookStats?: HookStatsView;
   assetBytes: number;
 }
 
@@ -162,7 +164,66 @@ export interface DiscoveredItem {
   sourceKind: string;
   status: 'new' | 'audit_failed' | 'update';
   installedContentHash?: string;
+  /** 更新差异面（B4，BR-13）：审计卡展示差异面 */
+  updateDiff?: UpdateDiff;
   report: AuditReport;
+}
+
+/** 更新差异面（B4）：贡献物与权限面变化逐条可读；permissionsChanged = 扩权红标 */
+export interface UpdateDiff {
+  versionFrom: string;
+  versionTo: string;
+  permissionsChanged: boolean;
+  dataAdded: string[];
+  dataRemoved: string[];
+  credentialsAdded: string[];
+  credentialsRemoved: string[];
+  highRiskAdded: string[];
+  highRiskRemoved: string[];
+  contributionsAdded: string[];
+  contributionsRemoved: string[];
+  /** 旧版目录副本是否可用（false = B4 前安装存量，应用后不可回滚） */
+  oldVersionAvailable: boolean;
+}
+
+/** 索引市场（B4，ADR-0008 §3）：条目与源呈现态 */
+export interface MarketEntry {
+  id: string;
+  name: string;
+  description?: string;
+  repoUrl: string;
+  subPath?: string;
+  gitRef?: string;
+  tags: string[];
+}
+
+export interface MarketSourceView {
+  source: string;
+  name?: string;
+  pluginCount: number;
+  error?: string;
+}
+
+export interface MarketView {
+  sources: MarketSourceView[];
+  entries: MarketEntry[];
+}
+
+/** git 直装结果（落盘即进确认面；status = new | update | already_installed | audit_failed） */
+export interface GitInstallOutcome {
+  id: string;
+  path: string;
+  status: string;
+  report: AuditReport;
+  gitRef?: string;
+}
+
+/** 钩子订阅与投递统计（B4，ADR-0014：丢弃计数可见） */
+export interface HookStatsView {
+  subscribed: string[];
+  delivered: number;
+  dropped: number;
+  queueDepth: number;
 }
 
 export interface RegressionCheck {
@@ -322,6 +383,59 @@ export const plugins = {
       method: 'POST',
       body: JSON.stringify({ decision }),
     }),
+
+  // ===== 分发面（B4，ADR-0008 §2/§3）=====
+
+  /// 应用更新（BR-13 确认流；hash 必须与登记的待确认一致）
+  applyUpdate: (id: string, contentHash: string): Promise<{ applied: boolean; plugin: PluginView }> =>
+    request(`/api/plugins/${encodeURIComponent(id)}/update/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ id, contentHash }),
+    }),
+
+  /// 保持旧版（拒绝此版；旧版自始可用，双侧留痕）
+  keepOldVersion: (id: string, contentHash: string): Promise<{ kept: boolean; plugin: PluginView }> =>
+    request(`/api/plugins/${encodeURIComponent(id)}/update/keep`, {
+      method: 'POST',
+      body: JSON.stringify({ id, contentHash }),
+    }),
+
+  /// git 直装（clone → 校验 → 落盘 → 确认面；不代持 git 凭据）
+  installGit: (repoUrl: string, subPath?: string): Promise<GitInstallOutcome> =>
+    request('/api/plugins/install-git', {
+      method: 'POST',
+      body: JSON.stringify({ repoUrl, subPath }),
+    }),
+
+  /// 索引市场浏览（300s 服务端缓存）
+  market: (): Promise<MarketView> => request('/api/plugins/market'),
+
+  /// 强制刷新索引
+  marketRefresh: (): Promise<MarketView> => request('/api/plugins/market/refresh', { method: 'POST' }),
+
+  /// 添加索引源（git 仓库或本地文件路径；无官方目录，用户显式添加）
+  marketAddSource: (source: string): Promise<{ added: boolean; source: string }> =>
+    request('/api/plugins/market/sources', {
+      method: 'POST',
+      body: JSON.stringify({ source }),
+    }),
+
+  /// 移除索引源
+  marketRemoveSource: (source: string): Promise<{ removed: number }> =>
+    request(`/api/plugins/market/sources?source=${encodeURIComponent(source)}`, {
+      method: 'DELETE',
+    }),
+
+  /// 从索引触发安装（落 git 直装流 → 确认面；source 可选，仅供服务端错因定位）
+  marketInstall: (id: string, source?: string): Promise<GitInstallOutcome> =>
+    request('/api/plugins/market/install', {
+      method: 'POST',
+      body: JSON.stringify({ id, source }),
+    }),
+
+  /// 审计产物治理：手动清理（保留策略与扫描期一致）+ 清点
+  auditPrune: (): Promise<{ removed: number; filesBefore: number; filesAfter: number }> =>
+    request('/api/plugins/audit/prune', { method: 'POST' }),
 };
 
 /// 从已安装清单派生侧栏导航条目（BR-03：停用/卸载后入口消失；

@@ -134,6 +134,13 @@ impl PiFeed {
 
     /// 广播单条到会话房间（无订阅者可忽略）。push/reseed 共用尾段。
     fn broadcast_one(&self, message: ChatMessage, seq: u64) {
+        // B4 hooks 观察档（ADR-0014 矩阵 pi 行）：ChatEvent 泵点发射
+        crate::plugins::hooks::dispatch_message_append(
+            &self.session_id,
+            seq,
+            message.kind.as_str(),
+            message.text.as_deref(),
+        );
         let event = ChatEvent {
             session_id: self.session_id.clone(),
             message,
@@ -708,6 +715,13 @@ impl PiDriver {
         match self.start_inner(&spawn_args, gen).await {
             Ok(()) => {
                 record(Ok(ASSISTANT_ID.into()));
+                // B4 hooks 观察档（ADR-0014 矩阵 pi 行）：ensure_started 成功
+                crate::plugins::hooks::dispatch_session_created(
+                    ASSISTANT_ID,
+                    "pi",
+                    None,
+                    Some("Hub 助手"),
+                );
                 Ok(ASSISTANT_ID.into())
             }
             Err(e) => {
@@ -811,6 +825,8 @@ impl PiDriver {
     pub async fn stop(&self) -> Result<()> {
         let session = self.inner.session.write().expect("pi session lock").take();
         if let Some(s) = session {
+            // B4 hooks 观察档：进程退出族——stop 即会话关闭
+            crate::plugins::hooks::dispatch_session_closed(&s.id, "pi", Some("stopped"));
             // shutdown 含宽限等待，不阻塞调用方 → 后台收尸
             let conn = s.conn.clone();
             tokio::spawn(async move { conn.shutdown().await });

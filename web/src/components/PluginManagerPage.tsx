@@ -6,6 +6,8 @@ import {
   type DiscoveredItem,
   type FaultRecord,
   type PluginView,
+  type UpdateDiff,
+  type MarketEntry,
 } from '../plugins';
 import { useI18n } from '../i18n';
 import './PluginManagerPage.css';
@@ -245,6 +247,188 @@ interface UninstallDialog {
   plugin: PluginView;
 }
 
+/// 更新差异面（B4 BR-13）：贡献物增删 + 权限面变化逐条可读；扩权红标置顶。
+function UpdateDiffView({ diff }: { diff: UpdateDiff }): ReactElement {
+  const t = useI18n();
+  const permRows: [string, string[]][] = [
+    ['plugin.perm.data', [...diff.dataAdded, ...diff.dataRemoved]],
+    ['plugin.perm.credentials', [...diff.credentialsAdded, ...diff.credentialsRemoved]],
+    ['plugin.perm.highRisk', [...diff.highRiskAdded, ...diff.highRiskRemoved]],
+  ].filter(([, xs]) => xs.length > 0) as [string, string[]][];
+  return (
+    <div className="plugin-updatediff" data-expanded>
+      <p className={`plugin-updatediff-ver ${diff.permissionsChanged ? 'plugin-updatediff--perm' : ''}`}>
+        {t('plugin.update.versionSpan', { from: diff.versionFrom, to: diff.versionTo })}
+        {diff.permissionsChanged ? t('plugin.update.permChanged') : null}
+      </p>
+      <ul>
+        {diff.contributionsAdded.map((c) => (
+          <li key={`a:${c}`} className="plugin-updatediff-add">+ {c}</li>
+        ))}
+        {diff.contributionsRemoved.map((c) => (
+          <li key={`r:${c}`} className="plugin-updatediff-del">− {c}</li>
+        ))}
+        {permRows.map(([key, xs]) => (
+          <li key={key} className="plugin-updatediff-perm">
+            {t(key)}: {xs.join('、')}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/// 索引市场与产物治理区（B4，ADR-0008 §3）：用户显式添加索引源 → 浏览/检索/
+/// 触发安装（落 git 直装流 → 既有确认面）；审计产物清点 + 手动清理。
+function MarketSection({ onDone }: { onDone: (msg: string) => void }): ReactElement {
+  const t = useI18n();
+  const qc = useQueryClient();
+  const [source, setSource] = useState('');
+  const [filter, setFilter] = useState('');
+  const [busy, setBusy] = useState(false);
+  const market = useQuery({ queryKey: ['plugins', 'market'], queryFn: plugins.market });
+
+  const run = async (fn: () => Promise<string>): Promise<void> => {
+    setBusy(true);
+    try {
+      onDone(await fn());
+    } catch (e: unknown) {
+      onDone(`${t('plugin.op.failed')}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+      void qc.invalidateQueries({ queryKey: ['plugins'] });
+    }
+  };
+
+  const entries: MarketEntry[] = market.data?.entries ?? [];
+  const kw = filter.trim().toLowerCase();
+  const shown =
+    kw === ''
+      ? entries
+      : entries.filter(
+          (e) =>
+            e.id.toLowerCase().includes(kw) ||
+            (e.name ?? '').toLowerCase().includes(kw) ||
+            (e.description ?? '').toLowerCase().includes(kw) ||
+            e.tags.some((tag) => tag.toLowerCase().includes(kw)),
+        );
+
+  return (
+    <section className="plugin-market" aria-label={t('plugin.market.title')}>
+      <h3 className="plugin-l1-title">{t('plugin.market.title')}</h3>
+      <div className="plugin-market-source-row">
+        <input
+          type="text"
+          className="plugin-cred-input plugin-market-source-input"
+          aria-label={t('plugin.market.sourcePlaceholder')}
+          placeholder={t('plugin.market.sourcePlaceholder')}
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy || source.trim() === ''}
+          onClick={() => {
+            const s = source.trim();
+            void run(async () => {
+              await plugins.marketAddSource(s);
+              setSource('');
+              return t('plugin.market.sourceAdded');
+            });
+          }}
+        >
+          {t('plugin.market.addSource')}
+        </button>
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy}
+          onClick={() => {
+            void run(async () => {
+              await plugins.marketRefresh();
+              return t('plugin.market.refreshed');
+            });
+          }}
+        >
+          {t('plugin.market.refresh')}
+        </button>
+      </div>
+      {(market.data?.sources ?? []).map((s) => (
+        <p key={s.source} className="plugin-hint plugin-market-source">
+          {s.name ?? s.source} · {t('plugin.market.pluginCount', { count: s.pluginCount })}
+          {s.error != null ? ` · ${t('plugin.market.sourceError')}: ${s.error}` : null}
+          <button
+            type="button"
+            className="btn-ghost plugin-market-remove"
+            disabled={busy}
+            onClick={() => {
+              void run(async () => {
+                await plugins.marketRemoveSource(s.source);
+                return t('plugin.market.sourceRemoved');
+              });
+            }}
+          >
+            {t('plugin.market.removeSource')}
+          </button>
+        </p>
+      ))}
+      <input
+        type="search"
+        className="plugin-cred-input"
+        aria-label={t('plugin.market.search')}
+        placeholder={t('plugin.market.search')}
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+      />
+      {shown.length === 0 ? (
+        <p className="plugin-empty-line">{t('plugin.market.empty')}</p>
+      ) : (
+        <ul className="plugin-contrib">
+          {shown.map((e) => (
+            <li key={e.id} className="plugin-market-entry">
+              <span className="plugin-contrib-name">{e.name}</span>
+              <span className="plugin-mono plugin-contrib-path">{e.id}</span>
+              {e.description != null ? (
+                <span className="plugin-contrib-desc">{e.description}</span>
+              ) : null}
+              <button
+                type="button"
+                className="btn-ghost plugin-market-install"
+                disabled={busy}
+                onClick={() => {
+                  void run(async () => {
+                    const r = await plugins.marketInstall(e.id);
+                    return `${t('plugin.market.installTriggered')} · ${r.id} (${r.status})`;
+                  });
+                }}
+              >
+                {t('plugin.market.install')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="plugin-market-prune">
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy}
+          onClick={() => {
+            void run(async () => {
+              const r = await plugins.auditPrune();
+              return t('plugin.market.pruned', { count: r.removed, after: r.filesAfter });
+            });
+          }}
+        >
+          {t('plugin.market.prune')}
+        </button>
+        <span className="plugin-hint">{t('plugin.market.pruneHint')}</span>
+      </div>
+    </section>
+  );
+}
+
 /// 插件管理视图（ui.md 层级 1）：L0 新发现/待处理 → L1 已安装清单 → L2 故障记录。
 /// 入口 = 设置页「插件管理」分区（设计中的「系统 · 插件管理」），零插件时主侧栏
 /// 不出现任何新增入口（BR-06：导航集合与引入前一致）。
@@ -415,11 +599,40 @@ export default function PluginManagerPage(): ReactElement {
                     </>
                   ) : item.status === 'update' ? (
                     <>
-                      {/* B2 无更新流（B4 交付）：对已安装插件点安装必被 hash 判定拒绝
-                          （400）——不再渲染死按钮，明示「旧版继续可用」（ADR-0007 保持旧版） */}
-                      <span className="plugin-hint">{t('plugin.update.deferred')}</span>
-                      <button type="button" className="btn-ghost" onClick={refresh}>
-                        {t('plugin.action.rescan')}
+                      {/* B4 BR-13 更新确认流：差异面 + 应用/保持旧版（双侧留痕） */}
+                      {item.updateDiff != null ? <UpdateDiffView diff={item.updateDiff} /> : null}
+                      {/* M22：存量插件（B4 前安装）首次更新无旧版副本可回滚——按位分支文案 */}
+                      <span className="plugin-hint">
+                        {t('plugin.update.pendingHint')}
+                        {item.updateDiff?.oldVersionAvailable === false
+                          ? t('plugin.update.noOldCopy')
+                          : ''}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={busy != null}
+                        onClick={() => {
+                          void run(item.id, async () => {
+                            const r = await plugins.applyUpdate(item.id, item.report.contentHash);
+                            return `${t(EFFECT_LABEL)} · ${t('plugin.toast.updated', { name: r.plugin.name, version: r.plugin.version })}`;
+                          });
+                        }}
+                      >
+                        {t('plugin.action.applyUpdate')}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={busy != null}
+                        onClick={() => {
+                          void run(item.id, async () => {
+                            const r = await plugins.keepOldVersion(item.id, item.report.contentHash);
+                            return `${t(EFFECT_LABEL)} · ${t('plugin.toast.keptOld', { name: r.plugin.name, version: r.plugin.version })}`;
+                          });
+                        }}
+                      >
+                        {t('plugin.action.keepOld')}
                       </button>
                     </>
                   ) : (
@@ -555,6 +768,9 @@ export default function PluginManagerPage(): ReactElement {
           ))
         )}
       </section>
+
+      {/* L3 分发面（B4）：索引市场 + 审计产物治理 */}
+      <MarketSection onDone={setToast} />
 
       {/* 安装确认弹窗（审计摘要 + 无沙箱诚实声明） */}
       {installFor != null ? (

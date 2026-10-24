@@ -439,6 +439,7 @@ done
                 enabled: true,
                 state: PluginState::Ready,
                 last_fault: None,
+                pending_update: None,
             },
             manifest,
             plugin_dir: dir.to_path_buf(),

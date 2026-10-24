@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "{{PLUGIN_ID}}",
+  "name": "{{PLUGIN_NAME}}",
+  "version": "0.1.0",
+  "description": "hook-observer template: receives lifecycle observer-hook notifications",
+  "author": { "name": "{{AUTHOR}}" },
+  "hub": { "apiVersion": "1" },
+  "contributes": {
+    "hooks": ["onSessionCreate", "onSessionClose", "onJobsChanged"]
+  },
+  "permissions": {
+    "data": ["hooks:observe", "projects:read"]
+  },
+  "backend": { "command": "node", "args": ["backend/main.js"], "idleTimeoutSecs": 300 }
+}

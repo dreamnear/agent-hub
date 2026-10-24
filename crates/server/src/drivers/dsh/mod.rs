@@ -365,6 +365,15 @@ impl DshDriver {
         }
         let rooms = self.rooms.read().expect("chat_rooms lock");
         if let Some(s) = rooms.get(id) {
+            // B4 hooks 观察档（ADR-0014 矩阵 dsh 行·编码期校正）：dsh 的推送与
+            // 会话房间绑定（backlog 语义：无房间不标记、开门重推）——钩子发射
+            // 只在真实推送路径上，即房间存在时；房间未开的会话不发 onMessageAppend
+            crate::plugins::hooks::dispatch_message_append(
+                id,
+                1,
+                msg.kind.as_str(),
+                msg.text.as_deref(),
+            );
             let _ = s.send(ChatEvent {
                 session_id: id.to_string(),
                 seq: 1,
@@ -373,6 +382,23 @@ impl DshDriver {
             1
         } else {
             0
+        }
+    }
+
+    /// mux 会话发现/消失对账（B4 hooks，ADR-0014 矩阵 dsh 行）：已知账本
+    /// 更新前的 diff 即新现/消失集（账本本身语义不变；M24 收敛三处逐字复制）。
+    fn reconcile_session_hooks(&self, items: &[api::DshSession]) {
+        let mut known = self.known_sessions.lock().expect("dsh known lock");
+        let current: std::collections::HashSet<String> =
+            items.iter().map(|s| s.session_id.clone()).collect();
+        for s in items {
+            if known.insert(s.session_id.clone()) {
+                crate::plugins::hooks::dispatch_session_created(&s.session_id, "dsh", None, None);
+            }
+        }
+        for gone in known.difference(&current).cloned().collect::<Vec<_>>() {
+            known.remove(&gone);
+            crate::plugins::hooks::dispatch_session_closed(&gone, "dsh", Some("vanished"));
         }
     }
 
@@ -700,10 +726,7 @@ impl AgentCatalog for DshDriver {
             // rm=归档自滤（2026-10-03 两连 ②）：dsh session/list 不排归档会话，
             // hub 按存下的归档集滤（集合来源=archiveSession 响应回带）
             let archived = self.archived.lock().expect("dsh archived lock").clone();
-            {
-                let mut known = self.known_sessions.lock().expect("dsh known lock");
-                *known = v.items.iter().map(|s| s.session_id.clone()).collect();
-            }
+            self.reconcile_session_hooks(&v.items);
             let items: Vec<api::DshSession> = v
                 .items
                 .into_iter()
@@ -774,10 +797,7 @@ impl AgentCatalog for DshDriver {
             // rm=归档自滤（2026-10-03 两连 ②）：dsh session/list 不排归档会话，
             // hub 按存下的归档集滤（集合来源=archiveSession 响应回带）
             let archived = self.archived.lock().expect("dsh archived lock").clone();
-            {
-                let mut known = self.known_sessions.lock().expect("dsh known lock");
-                *known = v.items.iter().map(|s| s.session_id.clone()).collect();
-            }
+            self.reconcile_session_hooks(&v.items);
             let items: Vec<api::DshSession> = v
                 .items
                 .into_iter()
@@ -1014,10 +1034,7 @@ impl SessionHistory for DshDriver {
             // rm=归档自滤（2026-10-03 两连 ②）：dsh session/list 不排归档会话，
             // hub 按存下的归档集滤（集合来源=archiveSession 响应回带）
             let archived = self.archived.lock().expect("dsh archived lock").clone();
-            {
-                let mut known = self.known_sessions.lock().expect("dsh known lock");
-                *known = v.items.iter().map(|s| s.session_id.clone()).collect();
-            }
+            self.reconcile_session_hooks(&v.items);
             let items: Vec<api::DshSession> = v
                 .items
                 .into_iter()

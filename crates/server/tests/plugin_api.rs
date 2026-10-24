@@ -38,6 +38,7 @@ fn cfg_with(dir: &tempfile::TempDir) -> Config {
     cfg.plugin_data_dir = dir.path().join("plugin_data");
     cfg.plugin_scan_secs = 0;
     cfg.plugin_transient_dirs = Vec::new();
+    cfg.plugin_market_file = dir.path().join("plugin_marketplaces.json");
     std::fs::create_dir_all(&cfg.plugins_dir).unwrap();
     cfg
 }
@@ -627,7 +628,11 @@ async fn audit_gate_rejects_and_hash_mismatch_is_blocked() {
     let (status, schema, _) = req(a.clone(), "GET", "/api/plugins/api-schema", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(schema["apiVersion"], 1);
-    assert_eq!(schema["contributions"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        schema["contributions"].as_array().unwrap().len(),
+        10,
+        "v1 十类全集（ADR-0011；M23 补齐 hooks/themeTokens/fileDecorations/services）"
+    );
     assert_eq!(schema["highRisk"].as_array().unwrap().len(), 4);
     let methods = schema["rpcMethods"].as_array().unwrap();
     assert!(methods.iter().any(|m| m["method"] == "hub.credentials.use"));
@@ -698,9 +703,11 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
     // 安装（drop-in 发现面）
     let body = install_demo(a.clone(), "gitlab-issues-lite").await;
     assert_eq!(body["plugin"]["uiState"], "enabled");
-    // 审计卡内容：贡献物 3 条（2 工具 + 1 视图）+ 凭据按名 + 高危声明随高危工具同步
+    // 审计卡内容：贡献物 5 条（2 工具 + 1 视图 + 2 钩子，B4 观察档接入示例）
+    // + 凭据按名 + 高危声明随高危工具同步
     let plugin = &body["plugin"];
-    assert_eq!(plugin["contributions"].as_array().unwrap().len(), 3);
+    assert_eq!(plugin["contributions"].as_array().unwrap().len(), 5);
+    assert!(plugin["hookStats"].is_null() || plugin["hookStats"]["subscribed"].is_array());
     assert_eq!(
         plugin["permissions"]["credentials"][0]["name"],
         "gitlab_pat"
@@ -1102,4 +1109,693 @@ async fn startup_keeps_disabled_entry_disabled_even_when_dir_missing() {
         state2.plugins.nav_entries().is_empty(),
         "停用态不得出现故障入口（BR-03）"
     );
+}
+
+// ===== B4：更新/扩权完整流（BR-13）=====
+
+/// 把已装插件目录内容升级为 0.2.0（+notes:read 扩权 + 新贡献物）；
+/// `tag` 保证不同轮次内容不同（hash 确定）。
+fn upgrade_plugin_dir(dir: &tempfile::TempDir, id: &str, tag: &str) -> String {
+    let p = dir.path().join("plugins").join(id);
+    std::fs::write(
+        p.join("plugin.json"),
+        format!(
+            r#"{{
+  "schemaVersion": 1,
+  "id": "{id}",
+  "name": "Demo Workbench",
+  "version": "0.2.0",
+  "hub": {{ "apiVersion": "1" }},
+  "contributes": {{
+    "tools": [{{ "id": "ping", "name": "Ping", "risk": "read",
+                "impl": {{ "kind": "backend", "ref": "ping" }} }},
+             {{ "id": "fetch2", "name": "Fetch2", "risk": "read",
+                "impl": {{ "kind": "backend", "ref": "fetch2" }}}}],
+    "views": [{{ "id": "home", "title": "Demo View", "entry": "view/index.html" }}]
+  }},
+  "permissions": {{ "data": ["projects:read", "notes:read"], "credentials": ["demo_pat"] }},
+  "backend": {{ "command": "backend/main.sh", "args": [] }}
+}}"#
+        ),
+    )
+    .unwrap();
+    // 重写任一非 manifest 文件保证 hash 变化确定
+    std::fs::write(p.join("view/app.js"), format!("document.title='{}';\n", tag)).unwrap();
+    server::plugins::audit::content_hash(&p)
+}
+
+#[tokio::test]
+async fn update_flow_stages_diff_apply_and_keep_old() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    let old_hash = state.plugins.list()[0].content_hash.clone();
+
+    // 1) 目录内容升级 → 扫描 → 待确认（差异面 + 权限扩权红标）
+    let new_hash = upgrade_plugin_dir(&dir, "demo-plugin", "v2");
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, discovered, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let item = discovered["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "demo-plugin" && i["status"] == "update")
+        .unwrap_or_else(|| panic!("更新候选缺失：{discovered}"));
+    let diff = &item["updateDiff"];
+    assert_eq!(diff["versionFrom"], "0.1.0");
+    assert_eq!(diff["versionTo"], "0.2.0");
+    assert_eq!(diff["permissionsChanged"], true, "扩权必须红标：{diff}");
+    assert!(
+        diff["dataAdded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "notes:read"),
+        "{diff}"
+    );
+    assert!(
+        diff["contributionsAdded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "tool:fetch2"),
+        "{diff}"
+    );
+
+    // 2) 未确认期间保持旧版可用：目录内容已恢复 0.1.0，注册表 hash 不变
+    assert_eq!(
+        state.plugins.list()[0].content_hash, old_hash,
+        "待确认期间注册表保持旧版"
+    );
+    let restored = server::plugins::audit::content_hash(&dir.path().join("plugins/demo-plugin"));
+    assert_eq!(restored, old_hash, "目录内容应恢复旧版（保持旧版可用）");
+    let new_copy = dir
+        .path()
+        .join("plugins/.versions/demo-plugin")
+        .join(new_hash.trim_start_matches("sha256:").chars().take(16).collect::<String>());
+    assert!(new_copy.join("plugin.json").is_file(), "新版副本已入库");
+    // PluginView 不直接暴露 pending（待确认态经 discovered 面呈递）
+    let reg = server::plugins::registry::Registry::open(dir.path().join("plugins.json"));
+    let entry = reg.get("demo-plugin").expect("entry exists");
+    assert!(entry.entry.pending_update.is_some(), "持久态登记 pending");
+
+    // 3) 应用更新 → 新版生效、pending 清除、留痕
+    let (status, apply_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "id": "demo-plugin", "contentHash": new_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{apply_text}");
+    assert!(apply_text.contains("\"applied\":true"), "{apply_text}");
+    let view = &state.plugins.list()[0];
+    assert_eq!(view.version, "0.2.0");
+    assert_eq!(view.content_hash, new_hash);
+    let (status, records, _) = req(
+        a.clone(),
+        "GET",
+        "/api/plugins/demo-plugin/records?limit=10",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        records["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| {
+                r["kind"] == "update"
+                    && r["message"].as_str().unwrap_or("").contains("已应用")
+                    && r["message"].as_str().unwrap_or("").contains("0.1.0 → 0.2.0")
+            }),
+            "MINOR①：from-version 应为旧版 0.1.0：{records}"
+        );
+
+    // 4) 再来一轮更新 → 保持旧版：pending 清除、新版副本删除、留痕
+    let v3_hash = upgrade_plugin_dir(&dir, "demo-plugin", "v3");
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, keep_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/keep",
+        Some(json!({ "id": "demo-plugin", "contentHash": v3_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{keep_text}");
+    let view = &state.plugins.list()[0];
+    assert_eq!(view.version, "0.2.0", "保持旧版：版本不变");
+    let (status, records, _) = req(
+        a.clone(),
+        "GET",
+        "/api/plugins/demo-plugin/records?limit=10",
+        None,
+    )
+    .await;
+    assert!(records["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["kind"] == "update" && r["message"].as_str().unwrap_or("").contains("保持旧版")));
+}
+
+#[tokio::test]
+async fn update_apply_rejects_stale_hash_and_missing_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    // 无待确认更新 → 拒（AppError 响应为纯文本错因）
+    let (status, body) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "id": "demo-plugin", "contentHash": "sha256:deadbeefdeadbeef" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("无待确认更新"), "{body}");
+}
+
+// ===== B4：hub.sessions 只读投影 RPC =====
+
+/// sessions:list：只读投影可达（sessions:read 插件调用成功，返回聚合清单信封）；
+/// messages：未知会话明确报错；未声明 messages:read 的插件 → violation 拒绝。
+#[tokio::test]
+async fn sessions_read_only_projection_rpc_reachable() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    // 装 demo-plugin（projects:read；无 sessions:read）
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    // 未声明 sessions:read → 拒（violation）
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.list", "params": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // 给插件补声明 sessions:read + messages:read（重写 manifest → hash 变化走更新流）
+    let p = dir.path().join("plugins/demo-plugin");
+    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap();
+    let manifest = manifest.replace(
+        "\"data\": [\"projects:read\"]",
+        "\"data\": [\"projects:read\", \"sessions:read\", \"messages:read\"]",
+    );
+    std::fs::write(p.join("plugin.json"), manifest).unwrap();
+    let new_hash = server::plugins::audit::content_hash(&p);
+    req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    let (status, apply_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "id": "demo-plugin", "contentHash": new_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{apply_text}");
+    // sessions.list 可达（测试 drivers 无真实会话 → 空清单信封）
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.list", "params": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["result"]["sessions"].is_array(), "{body}");
+    // messages：未知会话 → 明确错（-32003 plugin_error → HTTP 400）
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.messages",
+                     "params": { "sessionId": "no-such-session" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // hub.sessions.send 永久不做：方法表中未注册 → 拒绝
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/rpc",
+        Some(json!({ "method": "hub.sessions.send",
+                     "params": { "sessionId": "s", "text": "x" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+// ===== B4：git 直装 + 索引市场 =====
+
+/// 建本地 git 仓库 fixture：一个最小插件 + marketplace.json 索引。
+fn make_plugin_repo(dir: &tempfile::TempDir) -> String {
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(repo.join("plugins/git-market-demo/backend")).unwrap();
+    std::fs::write(
+        repo.join("plugins/git-market-demo/plugin.json"),
+        r#"{"schemaVersion":1,"id":"git-market-demo","name":"GitDemo","version":"0.1.0","hub":{"apiVersion":"1"},
+            "contributes":{"tools":[{"id":"ping","name":"Ping","risk":"read","impl":{"kind":"backend","ref":"ping"}}]},
+            "permissions":{"data":["projects:read"]},
+            "backend":{"command":"node","args":["backend/main.js"]}}"#,
+    )
+    .unwrap();
+    std::fs::write(repo.join("plugins/git-market-demo/backend/main.js"), "// demo\n").unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["add", "."]);
+    run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init"]);
+    let repo_url = repo.to_string_lossy().into_owned();
+    let index = format!(
+        r#"{{"name":"demo-index","plugins":[{{"id":"git-market-demo","name":"GitDemo","description":"fixture","repoUrl":"{}#main","subPath":"plugins/git-market-demo","tags":["demo"]}}]}}"#,
+        repo_url
+    );
+    std::fs::write(repo.join("marketplace.json"), index).unwrap();
+    run(&["add", "."]);
+    run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "index"]);
+    repo_url
+}
+
+#[tokio::test]
+async fn git_install_and_market_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_with(&dir);
+    let (state, a) = app(cfg);
+    let repo_url = make_plugin_repo(&dir);
+
+    // 1) 索引源添加（git 仓库形态）→ 浏览可见
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/market/sources",
+        Some(json!({ "source": repo_url })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body, _) = req(a.clone(), "GET", "/api/plugins/market", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let entries = body["entries"].as_array().unwrap();
+    assert!(entries.iter().any(|e| e["id"] == "git-market-demo"), "{body}");
+
+    // 2) 从索引触发安装 → 落盘 + 扫描面出现 new 候选 → 走既有确认流安装
+    let (status, install_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/market/install",
+        Some(json!({ "source": repo_url, "id": "git-market-demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{install_text}");
+    let body: Value = serde_json::from_str(&install_text).unwrap();
+    assert_eq!(body["status"], "new", "{body}");
+    let hash = body["report"]["contentHash"].as_str().unwrap().to_string();
+    let (status, body, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/install",
+        Some(json!({ "id": "git-market-demo", "contentHash": hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(state.plugins.list()[0].id, "git-market-demo");
+
+    // 3) git 直装 URL 形态（#ref）→ 已装同 hash → already_installed 幂等
+    let (status, git_text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/install-git",
+        Some(json!({ "repoUrl": format!("{repo_url}#main"), "subPath": "plugins/git-market-demo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{git_text}");
+    let body: Value = serde_json::from_str(&git_text).unwrap();
+    assert_eq!(body["status"], "already_installed", "{body}");
+
+    // 4) 审计产物治理：prune 可见且生效
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/audit/prune", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["filesAfter"].is_number(), "{body}");
+
+    // 5) 索引源移除
+    let (status, body, _) = req(
+        a.clone(),
+        "DELETE",
+        &format!("/api/plugins/market/sources?source={}", repo_url),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // 6) 不合法源形态被拒（ssh 不进 v1）
+    let (status, _, _) = req(
+        a.clone(),
+        "POST",
+        "/api/plugins/market/sources",
+        Some(json!({ "source": "git@github.com:a/b.git" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+
+// ===== B4 修复轮（tester-report-1）=====
+
+/// FAIL-1 回归锁：PluginManager::new 装配钩子全局门面——漏挂 = 全部 drivers
+/// 埋点静默短路（第 1 轮假绿盲区：单测只锁了「未装配时短路」这一侧）。
+#[tokio::test]
+async fn hooks_global_facade_is_set_by_plugin_manager_assembly() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = cfg_with(&dir);
+    let (_state, _a) = app(cfg);
+    assert!(
+        server::plugins::hooks::global_bus().is_some(),
+        "PluginManager::new 必须挂全局门面（drivers 埋点可达性前提）"
+    );
+}
+
+/// FAIL-2 回归锁：卸载 + purge 后审计留档不随周期扫描重生（清理登记抑制同
+/// hash 重发现）；目录放新版（hash 变化）即恢复发现面；重装解除登记。
+#[tokio::test]
+async fn uninstall_purge_suppresses_rediscovery_until_content_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+
+    // 卸载 + purge：审计产物被清 + 清理登记落
+    let (status, body, _) = req(
+        a.clone(),
+        "DELETE",
+        "/api/plugins/demo-plugin?purgeData=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let audit_files: Vec<_> = std::fs::read_dir(dir.path().join("plugin_audit"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert!(audit_files.is_empty(), "卸载随清理生效：{audit_files:?}");
+
+    // 周期扫描不再重生产物/发现记录（目录仍在，hash 未变）
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, discovered, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    assert!(
+        !discovered["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == "demo-plugin"),
+        "清理登记内目录不得重发现：{discovered}"
+    );
+    let audit_files: Vec<_> = std::fs::read_dir(dir.path().join("plugin_audit"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert!(audit_files.is_empty(), "扫描不得重生已清理插件的审计产物");
+
+    // 目录内容变化（新版）→ 清理登记失效，恢复「新发现」
+    let p = dir.path().join("plugins/demo-plugin");
+    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap().replace(
+        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.9.0\"",
+    );
+    std::fs::write(p.join("plugin.json"), manifest).unwrap();
+    let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, discovered, _) = req(a.clone(), "GET", "/api/plugins/discovered", None).await;
+    assert!(
+        discovered["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == "demo-plugin" && i["status"] == "new"),
+        "hash 变化后恢复发现面：{discovered}"
+    );
+}
+
+/// MINOR② 回归锁：update apply/keep 请求体只带 contentHash（无冗余 id）仍 200。
+#[tokio::test]
+async fn update_apply_body_without_redundant_id_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    write_credentials(&dir);
+    let cfg = cfg_with(&dir);
+    let (_state, a) = app(cfg);
+    write_plugin(&dir, "demo-plugin");
+    install_demo(a.clone(), "demo-plugin").await;
+    let p = dir.path().join("plugins/demo-plugin");
+    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap().replace(
+        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.2.0\"",
+    );
+    std::fs::write(p.join("plugin.json"), manifest).unwrap();
+    let new_hash = server::plugins::audit::content_hash(&p);
+    req(a.clone(), "POST", "/api/plugins/scan", None).await;
+    let (status, text) = req_text(
+        a.clone(),
+        "POST",
+        "/api/plugins/demo-plugin/update/apply",
+        Some(json!({ "contentHash": new_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+}
+
+/// FAIL（tester-report-2）回归锁：onIdle 忙→闲翻转可达。
+/// 探针任务随 set_idle_probe 回填启动（回填即启动，无装配序死角）——用短间隔
+/// 探针模拟 1→1→0 序列，订阅 onIdle 的插件（backend 不可启）应收到投递尝试
+///（队列丢弃计数 ≥1 = dispatch 发生且进入投递路径）。
+#[tokio::test]
+async fn on_idle_flip_dispatches_via_probe_backfill() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = cfg_with(&dir);
+    cfg.plugin_scan_secs = 0;
+    // 直构 PluginManager（不经 AppState）：from_config 会先回填 5s 探针并占用
+    // 「回填即启动」的单轮名额，测试要用可控短间隔探针
+    let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+    let manager = server::plugins::PluginManager::new(&cfg, events_tx);
+
+    // 注册一个订阅 onIdle 的插件（backend 命令不存在 → 投递失败 → dropped 计数）
+    let p = dir.path().join("plugins/idle-observer");
+    std::fs::create_dir_all(&p).unwrap();
+    std::fs::write(
+        p.join("plugin.json"),
+        r#"{"schemaVersion":1,"id":"idle-observer","name":"IdleObs","version":"0.1.0","hub":{"apiVersion":"1"},
+            "contributes":{"hooks":["onIdle"]},
+            "permissions":{"data":["hooks:observe"]},
+            "backend":{"command":"no-such-backend-bin-xyz","args":[]}}"#,
+    )
+    .unwrap();
+    let manifest = server::plugins::manifest::parse(
+        &std::fs::read_to_string(p.join("plugin.json")).unwrap(),
+    )
+    .unwrap()
+    .manifest;
+    manager
+        .registry
+        .insert_installed(
+            server::plugins::registry::PluginEntry {
+                id: "idle-observer".into(),
+                version: "0.1.0".into(),
+                content_hash: "sha256:idle".into(),
+                permissions_hash: "sha256:i".into(),
+                source: server::plugins::registry::PluginSource::drop_in(),
+                installed_at: server::plugins::registry::now_rfc3339(),
+                enabled: true,
+                state: server::plugins::registry::PluginState::Ready,
+                last_fault: None,
+                pending_update: None,
+            },
+            manifest,
+            p.clone(),
+        )
+        .unwrap();
+
+    // 探针序列：1 → 1 → 0（忙 → 忙 → 闲）；50ms 轮询间隔
+    let running = Arc::new(AtomicUsize::new(1));
+    let r = running.clone();
+    manager.set_idle_probe_with_interval(
+        Arc::new(move || {
+            let v = r.clone();
+            Box::pin(async move { v.load(Ordering::SeqCst) })
+        }),
+        std::time::Duration::from_millis(50),
+    );
+
+    // 等两拍后翻闲，再等投递路径走完（懒启动失败 → dropped++）
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    running.store(0, Ordering::SeqCst);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let stats = manager.hooks.stats_for("idle-observer", vec!["onIdle".into()]);
+        if stats.is_some_and(|s| s.dropped >= 1) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "onIdle 翻转未达投递路径（探针未启动或 dispatch 未发生）"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// r3 回归锁：探针计数 fail-soft——单 driver list Err 不抹零整份计数。
+/// 同构 FakeDriver 两个实例（fail 模式 Err / ok 模式返回 working 条目），
+/// running_count() 应仍计出 1（tester-report-3 的 list_all 短路 + unwrap 抹零
+/// 根因的直接反例）。
+#[tokio::test]
+async fn running_count_survives_single_driver_error() {
+    use anyhow::Result;
+    use server::drivers::{AgentCatalog, AgentDriver, DriverRegistry, SessionControl, SessionHistory, StartSpec};
+    use server::models::{AgentSummary, ChatMessage, Group};
+    use std::sync::Arc;
+
+    struct FakeDriver {
+        name: &'static str,
+        fail: bool,
+    }
+
+    fn summary(driver: &str, group: Group) -> AgentSummary {
+        AgentSummary {
+            driver: driver.to_string(),
+            id: format!("{driver}-1"),
+            name: None,
+            cwd: None,
+            kind: None,
+            raw_state: None,
+            group,
+            detail: None,
+            tokens: None,
+            context_tokens: None,
+            started_at: None,
+            session_id: None,
+        }
+    }
+
+    impl AgentCatalog for FakeDriver {
+        fn list<'a>(&'a self, _all: bool) -> futures::future::BoxFuture<'a, Result<Vec<AgentSummary>>> {
+            if self.fail {
+                Box::pin(async { Err(anyhow::anyhow!("fake dsh auth failure")) })
+            } else {
+                let s = summary("claude", Group::Working);
+                Box::pin(async { Ok(vec![s]) })
+            }
+        }
+        fn get<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Option<AgentSummary>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn start<'a>(&'a self, _spec: &'a StartSpec) -> futures::future::BoxFuture<'a, Result<String>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "start")) })
+        }
+        fn stop<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "stop")) })
+        }
+        fn remove<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "remove")) })
+        }
+        fn respawn<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "respawn")) })
+        }
+        fn logs<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<String>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "logs")) })
+        }
+    }
+
+    impl SessionControl for FakeDriver {
+        fn send<'a>(&'a self, _id: &'a str, _text: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "send")) })
+        }
+        fn cancel<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+            Box::pin(async { Err(server::drivers::unsupported("fake", "cancel")) })
+        }
+        fn is_finished(&self, _id: &str) -> bool { false }
+        fn release(&self, _id: &str) -> Result<()> { Ok(()) }
+        fn answer_permission(&self, _id: &str, _perm: &str, _opt: Option<&str>) -> Result<bool> {
+            Err(server::drivers::unsupported("fake", "answer_permission"))
+        }
+    }
+
+    impl SessionHistory for FakeDriver {
+        fn page<'a>(
+            &'a self,
+            _id: &'a str,
+            _limit: usize,
+            _before: Option<usize>,
+        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn full_history<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Vec<ChatMessage>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn is_active<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<bool>> {
+            Box::pin(async { Ok(false) })
+        }
+        fn subagents<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Vec<server::drivers::SubagentEntry>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn subagent_page<'a>(
+            &'a self,
+            _id: &'a str,
+            _sub: &'a str,
+            _limit: usize,
+            _before: Option<usize>,
+        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn tasks<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Option<Vec<server::drivers::TaskEntry>>>> {
+            Box::pin(async { Ok(None) })
+        }
+        fn ensure_chat_room(&self, _session_id: &str) -> tokio::sync::broadcast::Sender<server::drivers::events::ChatEvent> {
+            let (tx, _) = tokio::sync::broadcast::channel(1);
+            tx
+        }
+        fn ensure_subagent_room(
+            &self,
+            _session_id: &str,
+            _subagent_id: &str,
+        ) -> tokio::sync::broadcast::Sender<server::drivers::events::ChatEvent> {
+            let (tx, _) = tokio::sync::broadcast::channel(1);
+            tx
+        }
+    }
+
+    impl server::drivers::ModelSettings for FakeDriver {}
+    impl AgentDriver for FakeDriver {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+    }
+
+    let mut reg = DriverRegistry::new();
+    reg.register(Arc::new(FakeDriver { name: "dsh", fail: true }));
+    reg.register(Arc::new(FakeDriver { name: "claude", fail: false }));
+    let count = reg.running_count().await;
+    assert_eq!(count, 1, "dsh Err 不得抹零 claude 的 working 计数");
 }
