@@ -243,7 +243,9 @@ fn hook_payload_for(
     payload
 }
 
-/// 投递循环（每插件单飞：有队列即保证恰一个泵任务在跑）。
+/// 投递循环（fire-and-forget；多泵并发安全：pop 原子去重不会重复投递，
+/// 但同插件两条通知可能被不同泵乱序写出——观察档 at-most-once 语义下
+/// 顺序无保证，依赖顺序的插件应经声明面 RPC 对账）。
 fn spawn_delivery(manager: Arc<super::PluginManager>, plugin_id: String, queue: Arc<PluginQueue>) {
     tokio::spawn(async move {
         while let Some(n) = queue.pop() {

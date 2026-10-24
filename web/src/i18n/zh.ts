@@ -597,6 +597,7 @@ export const zh: Record<string, string> = {
   'plugin.update.versionSpan': '{from} → {to}',
   'plugin.update.permChanged': ' · 权限面有变化（请逐条核对）',
   'plugin.update.pendingHint': '确认前继续使用已安装版本（旧版可用，双侧均留痕）',
+  'plugin.update.noOldCopy': '（此插件为 B4 前安装：无旧版目录副本，确认后不可回滚）',
   'plugin.action.applyUpdate': '应用更新',
   'plugin.action.keepOld': '保持旧版',
   'plugin.toast.updated': '插件已更新：{name} v{version}',

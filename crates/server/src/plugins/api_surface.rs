@@ -28,8 +28,20 @@ pub const OBSERVER_HOOKS: [&str; 5] = [
 pub const INTERCEPT_HOOK_NAMES: [&str; 3] =
     ["beforeMessageSend", "onToolCall", "afterToolResult"];
 
-/// 贡献物类型（v1 六类，ADR-0011 加法：commands / renderers 新增）。
-pub const CONTRIBUTION_TYPES: [&str; 6] = ["tools", "skills", "mcp", "views", "commands", "renderers"];
+/// 贡献物类型（v1 十类全集，ADR-0011；B4 review-1 M23：hooks/themeTokens/
+/// fileDecorations/services 补齐进 api-schema contributions 面）。
+pub const CONTRIBUTION_TYPES: [&str; 10] = [
+    "tools",
+    "skills",
+    "mcp",
+    "views",
+    "commands",
+    "renderers",
+    "themeTokens",
+    "fileDecorations",
+    "services",
+    "hooks",
+];
 
 /// 内置渲染引擎清单（ADR-0012 拍板 1：首批 = mermaid / plantuml-server / image /
 /// html-sanitized + plugin-iframe 档；加法承诺，katex 随后续批次）。
@@ -235,7 +247,7 @@ pub fn api_version_mismatch(declared: &str) -> String {
 pub struct ApiSchema {
     pub api_version: u32,
     pub hub_version: &'static str,
-    pub contributions: [&'static str; 6],
+    pub contributions: [&'static str; 10],
     pub data_domains: [&'static str; 14],
     pub high_risk: Vec<HighRiskItem>,
     pub rpc_methods: Vec<RpcMethodDef>,

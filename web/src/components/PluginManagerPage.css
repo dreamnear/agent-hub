@@ -361,3 +361,63 @@
     bottom: 4.2rem; /* 避开手机迷你底栏 */
   }
 }
+
+/* B4 review-1 M26：更新差异面与新市场区样式（走 --c-* token，三态跟随） */
+.plugin-updatediff {
+  margin: 0.35rem 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-panel);
+}
+.plugin-updatediff--perm {
+  font-weight: 600;
+  color: var(--c-accent);
+}
+.plugin-updatediff-add {
+  color: var(--c-text);
+}
+.plugin-updatediff-del {
+  color: var(--c-muted);
+}
+.plugin-market {
+  margin-top: 1.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--c-border);
+}
+.plugin-market-source-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+  flex-wrap: wrap;
+}
+.plugin-market-source-input {
+  flex: 1 1 240px;
+}
+.plugin-market-source {
+  margin: 0.2rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.plugin-market-remove {
+  margin-inline-start: auto;
+}
+.plugin-market-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.plugin-market-install {
+  margin-inline-start: auto;
+}
+.plugin-market-prune {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}

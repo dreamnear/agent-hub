@@ -182,6 +182,8 @@ export interface UpdateDiff {
   highRiskRemoved: string[];
   contributionsAdded: string[];
   contributionsRemoved: string[];
+  /** 旧版目录副本是否可用（false = B4 前安装存量，应用后不可回滚） */
+  oldVersionAvailable: boolean;
 }
 
 /** 索引市场（B4，ADR-0008 §3）：条目与源呈现态 */

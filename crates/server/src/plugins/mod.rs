@@ -1022,7 +1022,7 @@ impl PluginManager {
 
     /// 手动/周期扫描：只发现，不安装。
     pub fn scan_now(&self) -> ScanResult {
-        let outcome = scanner::scan(
+        let mut outcome = scanner::scan(
             &self.paths.plugins_dir,
             &self.paths.transient,
             &self.registry,
@@ -1034,10 +1034,18 @@ impl PluginManager {
             }
         }
         // B4 BR-13：更新候选进待确认流——新版副本入库（.versions）、旧版内容
-        // 恢复进插件目录（保持旧版可用），注册表登记 pending_update
-        for item in outcome.items.iter().filter(|i| i.status == "update") {
-            if let Err(e) = self.stage_pending_update(item) {
-                tracing::warn!(plugin = %item.id, error = %e, "更新候选入库失败（保持未确认态）");
+        // 恢复进插件目录（保持旧版可用），注册表登记 pending_update；
+        // old_version_available 权威值回填进差异面（M22：卡片按位分支文案）
+        for item in outcome.items.iter_mut().filter(|i| i.status == "update") {
+            match self.stage_pending_update(item) {
+                Ok(old_available) => {
+                    if let Some(diff) = item.update_diff.as_mut() {
+                        diff.old_version_available = old_available;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(plugin = %item.id, error = %e, "更新候选入库失败（保持未确认态）");
+                }
             }
         }
         // B4 治理（需求功能点 6）：按保留策略清理审计产物（每插件保留 N 份）
@@ -1074,7 +1082,7 @@ impl PluginManager {
                 source_kind: p.entry.source.kind.clone(),
                 status: "update".into(),
                 installed_content_hash: Some(p.entry.content_hash.clone()),
-                update_diff: Some(scanner::compute_update_diff(&p, &report)),
+                update_diff: Some(scanner::compute_update_diff(&p, &report, pending.old_version_available)),
                 report,
             });
         }
@@ -1108,7 +1116,7 @@ impl PluginManager {
     /// 更新候选入库（B4 BR-13）：新版副本 → `.versions/<id>/<hash>/`；旧版副本
     /// 存在时恢复旧版目录内容（保持旧版可用——backend 懒启动跑的代码与注册表
     /// 快照一致）；登记 pending_update。已在待确认态（同 hash）则幂等跳过。
-    fn stage_pending_update(&self, item: &scanner::DiscoveredItem) -> Result<(), String> {
+    fn stage_pending_update(&self, item: &scanner::DiscoveredItem) -> Result<bool, String> {
         let Some(installed) = self.registry.get(&item.id) else {
             return Err("已装条目消失".into());
         };
@@ -1118,10 +1126,14 @@ impl PluginManager {
             .as_ref()
             .is_some_and(|p| p.content_hash == item.report.content_hash)
         {
-            return Ok(()); // 同版本已在待确认态
+            return Ok(installed
+                .entry
+                .pending_update
+                .as_ref()
+                .is_some_and(|p| p.old_version_available)); // 同版本已在待确认态
         }
         if item.source_kind == "transient" {
-            return Ok(()); // transient 不参与更新比对（ADR-0001 第 4 条）
+            return Ok(true); // transient 不参与更新比对（ADR-0001 第 4 条）
         }
         let new_copy = version_dir(&self.paths, &item.id, &item.report.content_hash);
         copy_dir_recursive(Path::new(&item.path), &new_copy)
@@ -1150,7 +1162,7 @@ impl PluginManager {
             old_restored = old_available,
             "更新候选已入库待确认（BR-13）"
         );
-        Ok(())
+        Ok(old_available)
     }
 
     /// 应用更新（B4 BR-13 确认流）：`.versions` 副本重新审计（TOCTOU 再校验）→

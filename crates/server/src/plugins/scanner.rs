@@ -53,6 +53,9 @@ pub struct UpdateDiff {
     /// 贡献物增删（kind:id 形态；变更按 removed+added 各计一次）
     pub contributions_added: Vec<String>,
     pub contributions_removed: Vec<String>,
+    /// 旧版目录副本是否可用（B4 review-1 M22：false = B4 前安装的存量插件，
+    /// 应用更新后不可回滚——卡片按位分支文案）
+    pub old_version_available: bool,
 }
 
 /// 扫描结果。
@@ -67,6 +70,7 @@ pub struct ScanOutcome {
 pub fn compute_update_diff(
     installed: &super::registry::InstalledPlugin,
     new_report: &AuditReport,
+    old_version_available: bool,
 ) -> UpdateDiff {
     let old_m = &installed.manifest;
     let new_reach = &new_report.reach;
@@ -119,6 +123,7 @@ pub fn compute_update_diff(
         high_risk_removed,
         contributions_added,
         contributions_removed,
+        old_version_available,
     }
 }
 
@@ -389,10 +394,12 @@ pub fn scan(
             continue;
         }
         // B4 BR-13：更新候选的差异面（新版审计投影 vs 已装 manifest 快照）
+        // old_version_available 保守缺省 true；权威值由 scan_now 的 staging
+        // 回填（旧副本在 plugins 模块管理，scanner 不知 .versions 约定）
         let update_diff = if status == "update" {
             installed
                 .as_ref()
-                .map(|p| compute_update_diff(p, &report))
+                .map(|p| compute_update_diff(p, &report, true))
         } else {
             None
         };

@@ -601,7 +601,13 @@ export default function PluginManagerPage(): ReactElement {
                     <>
                       {/* B4 BR-13 更新确认流：差异面 + 应用/保持旧版（双侧留痕） */}
                       {item.updateDiff != null ? <UpdateDiffView diff={item.updateDiff} /> : null}
-                      <span className="plugin-hint">{t('plugin.update.pendingHint')}</span>
+                      {/* M22：存量插件（B4 前安装）首次更新无旧版副本可回滚——按位分支文案 */}
+                      <span className="plugin-hint">
+                        {t('plugin.update.pendingHint')}
+                        {item.updateDiff?.oldVersionAvailable === false
+                          ? t('plugin.update.noOldCopy')
+                          : ''}
+                      </span>
                       <button
                         type="button"
                         className="btn-primary"

@@ -9,7 +9,8 @@
 ```
 ~/.claude-view/
 ├── plugins/<id>/                # 插件本体（drop-in 位；一层深、不递归）
-│   └── .versions/<id>/<hash>/   # 版本副本（B4 更新流的恢复源，保留 3 份）
+├── plugins/.versions/<id>/<hash>/ # 版本副本（B4 更新流的恢复源，保留 3 份；
+│                                   独立于插件根，扫描一层深不误入）
 ├── plugins.json                 # 注册表持久态（0600）
 ├── plugin_credentials.json      # 凭据代持（0600，值零回显）
 ├── plugin_audit/<id>-<hash>.json# 审计留档（每插件保留 10 份，可配）

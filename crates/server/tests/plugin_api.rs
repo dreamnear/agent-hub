@@ -628,7 +628,11 @@ async fn audit_gate_rejects_and_hash_mismatch_is_blocked() {
     let (status, schema, _) = req(a.clone(), "GET", "/api/plugins/api-schema", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(schema["apiVersion"], 1);
-    assert_eq!(schema["contributions"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        schema["contributions"].as_array().unwrap().len(),
+        10,
+        "v1 十类全集（ADR-0011；M23 补齐 hooks/themeTokens/fileDecorations/services）"
+    );
     assert_eq!(schema["highRisk"].as_array().unwrap().len(), 4);
     let methods = schema["rpcMethods"].as_array().unwrap();
     assert!(methods.iter().any(|m| m["method"] == "hub.credentials.use"));
