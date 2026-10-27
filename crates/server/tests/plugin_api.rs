@@ -31,6 +31,14 @@ fn cfg_with(dir: &tempfile::TempDir) -> Config {
     cfg.notes_file = dir.path().join("notes.json");
     cfg.allow_lan = false;
     cfg.token = None;
+    // opencode/dsh 隔离（api_agents test_app 同款三处全封，#5 全仓测试卫生）：
+    // bin 指空防 spawn 真 serve；port 指死口防认领残留；serve 文件指 tempdir。
+    cfg.opencode.bin = "/nonexistent/opencode-test-isolated".into();
+    cfg.opencode.port = 65001;
+    cfg.opencode_serve_file = dir.path().join("opencode_serve.json");
+    cfg.dsh.bin = "/nonexistent/dsh-test-isolated".into();
+    cfg.dsh.port = 65002;
+    cfg.dsh_serve_file = dir.path().join("dsh_serve.json");
     cfg.plugins_dir = dir.path().join("plugins");
     cfg.plugin_state_file = dir.path().join("plugins.json");
     cfg.plugin_credentials_file = dir.path().join("plugin_credentials.json");

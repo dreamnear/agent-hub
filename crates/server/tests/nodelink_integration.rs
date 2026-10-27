@@ -25,6 +25,14 @@ fn cfg_with(dir: &Path) -> Config {
     cfg.tasks_dir = dir.join("tasks");
     cfg.notes_file = dir.join("notes.json");
     cfg.projects_file = dir.join("projects.json");
+    // opencode/dsh 隔离（api_agents test_app 同款三处全封，#5 全仓测试卫生）：
+    // bin 指空防 spawn 真 serve；port 指死口防认领残留；serve 文件指 tempdir。
+    cfg.opencode.bin = "/nonexistent/opencode-test-isolated".into();
+    cfg.opencode.port = 65001;
+    cfg.opencode_serve_file = dir.join("opencode_serve.json");
+    cfg.dsh.bin = "/nonexistent/dsh-test-isolated".into();
+    cfg.dsh.port = 65002;
+    cfg.dsh_serve_file = dir.join("dsh_serve.json");
     cfg
 }
 

@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
 members = ["crates/server", "crates/cli", "desktop/src-tauri"]
+# #5：desktop 移出默认构建面。裸 `cargo test` / `cargo build`（全仓门禁、
+# release 脚本）只覆盖 crates；desktop 经 tauri externalBin 构建时会把
+# binaries/server-<triple>（陈旧手放产物，gitignored）拷进 target/<profile>/server
+# 覆盖 cargo 新构建的 bin → node_cli 集成测 spawn 到旧二进制 4 例假失败。
+# desktop 构建走显式 `-p claude-view-desktop` / tauri CLI（其 build.rs 会在
+# 构建前用最新 server 产物刷新 sidecar，见 desktop/src-tauri/build.rs）。
+default-members = ["crates/server", "crates/cli"]
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

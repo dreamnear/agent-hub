@@ -13,6 +13,14 @@ static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 fn test_app(dir: &std::path::Path) -> Arc<AppState> {
     // PI_AGENT_DIR 由各测试体首行的 ENV_LOCK 守卫（test_app 读 env 固化进 AppState）
+    // opencode/dsh 隔离（api_agents test_app 同款，#5 全仓测试卫生）：bin 指空
+    // 防 spawn 真 serve（本机装有真 opencode 时每个测试都会拉起真进程）；
+    // port 指死口防「认领健康端口」吃到本机残留 serve。
+    let mut base = server::config::Config::load();
+    base.opencode.bin = "/nonexistent/opencode-test-isolated".into();
+    base.opencode.port = 65001;
+    base.dsh.bin = "/nonexistent/dsh-test-isolated".into();
+    base.dsh.port = 65002;
     let cfg = server::config::Config {
         projects_file: dir.join("projects.json"),
         token_file: dir.join("token"),
@@ -27,7 +35,7 @@ fn test_app(dir: &std::path::Path) -> Arc<AppState> {
         pi_settings_file: dir.join("pi_settings.json"),
         pi_extension_file: dir.join("pi/hub-assistant.ts"),
         pi_session_dir: dir.join("pi/sessions"),
-        ..server::config::Config::load()
+        ..base
     };
     // P10：PI_AGENT_DIR 隔离（Config::load 读 env——tempdir 内）
     std::env::set_var("PI_AGENT_DIR", dir.join("pi-agent"));
