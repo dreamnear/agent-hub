@@ -4,6 +4,21 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.1] - 2026-10-27
+
+本批：hub 侧 claude spawn 全数静默失败的紧急修复（#48）——定时任务 spawn、UI 新建、恢复流全部受累。
+
+### Fixed — hub spawn 的 claude 会话 init 即崩（#48）
+
+- **现象**：定时任务 spawn / UI 新建会话在 CLI 2.1.309 下 hub 记 ok 但会话永不出现（无转录、daemon 无限 claimed-spare→crashed 循环）
+- **根因**：CLI 解析器把 `--mcp-config <file>` 后尾随的位置参数 prompt 吞成该开关的第二个值（按 cwd 相对路径解析）→ `Invalid MCP configuration: MCP config file not found: <cwd>/<prompt>` → init 即崩；失败发生在 CLI daemon 内部，hub 视野之外
+- **修复**：`--mcp-config` 改等号连写形态（`--mcp-config=<file>`，实测 spawn 正常到 working），prompt 保持尾随位置参数；回归锁钉死形态与参数序
+- 触发面：B2 插件桥启用插件时即注入 `--mcp-config`——此前所有经 hub 的 claude 新建 spawn 均受累
+
+### 工单索引
+
+- 本批：#48（spawn 参数形态修复）；关联 #32（CLI 2.1.309 缺陷首次记录于 B4 现场注记）
+
 ## [0.9.0] - 2026-10-24
 
 本批：插件体系 B4 终批（#41，epic agent-hub-mng#11）——生命周期钩子观察档 + 会话只读投影 + 治理与分发面一次性收口。
