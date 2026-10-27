@@ -214,13 +214,16 @@ async fn agents_aggregate_survives_dsh_auth_failure() {
 fn write_omp_session(dir: &Path, sid: &str, cwd: &Path, title: &str) {
     let slug = dir.join("--tmp--");
     std::fs::create_dir_all(&slug).unwrap();
+    // #45 起发现面只列有消息的转录（零消息 = 占位形态不入清单）——fixture 补
+    // 一条用户消息行对齐该不变量
     let body = format!(
-        "{}\n{}\n",
+        "{}\n{}\n{}\n",
         format_args!(r#"{{"type":"title","v":1,"title":"{title}"}}"#),
         format_args!(
             r#"{{"type":"session","id":"{sid}","cwd":"{}","timestamp":"2026-10-10T08:00:00Z"}}"#,
             cwd.display()
         ),
+        r#"{"type":"message","id":"e1","timestamp":"2026-10-10T08:00:01Z","message":{"role":"user","timestamp":"2026-10-10T08:00:01Z","content":[{"type":"text","text":"首轮输入"}]}}"#,
     );
     std::fs::write(slug.join(format!("20261010T080000Z_{sid}.jsonl")), body).unwrap();
 }
