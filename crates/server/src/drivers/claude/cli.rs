@@ -65,8 +65,12 @@ fn build_start_args(req: &StartReq) -> Vec<String> {
         args.push(e.clone());
     }
     if let Some(cfg) = &req.mcp_config {
-        args.push("--mcp-config".into());
-        args.push(cfg.clone());
+        // 等号连写（agent-hub#48）：CLI 2.1.309 的空格分隔形态会把尾随的位置
+        // 参数 prompt 再吞成该开关的第二个值（按 cwd 相对路径解析 → "Invalid
+        // MCP configuration: MCP config file not found: <cwd>/<prompt>"，init 即
+        // 崩、daemon 无限 claimed-spare→crashed 重试）。等号连写实测正常；
+        // prompt 保持尾随位置参数不动（避免 prompt 以 `-` 开头被误解析的边界）。
+        args.push(format!("--mcp-config={cfg}"));
     }
     if !req.prompt.is_empty() {
         args.push(req.prompt.clone());
@@ -351,16 +355,18 @@ mod tests {
         );
     }
 
+    /// 回归锁（agent-hub#48）：`--mcp-config` 必须走 `=` 连写——CLI 2.1.309 的
+    /// 空格分隔形态会把尾随位置参数 prompt 吞成该开关的第二个值（init 即崩）。
+    /// prompt 恒为尾随位置参数。
     #[test]
-    fn mcp_config_appended_before_prompt() {
+    fn mcp_config_uses_eq_form_prompt_trails() {
         let mut r = req("hello", None, None);
         r.mcp_config = Some("/tmp/plugin_mcp/sess.json".into());
         assert_eq!(
             build_start_args(&r),
             vec![
                 "--bg".to_string(),
-                "--mcp-config".to_string(),
-                "/tmp/plugin_mcp/sess.json".to_string(),
+                "--mcp-config=/tmp/plugin_mcp/sess.json".to_string(),
                 "hello".to_string()
             ]
         );
