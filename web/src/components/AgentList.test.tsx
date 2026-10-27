@@ -360,6 +360,24 @@ describe('AgentList Sidebar-v2', () => {
     await waitFor(() => expect(removeAgentMock).toHaveBeenCalledWith('acp1', 'acp'));
   });
 
+  // review-1 MINOR 1：移除项判定收紧为 claude + acp——omp 文件行（只读事实源）
+  // 及 pi/opencode/dsh（remove 均 unsupported）不得误显「删除会话」，危险区为空
+  // 也不得剩悬空分隔线
+  it('AgentRow ⋯ 菜单：omp 文件行无「删除会话」与危险区分隔线（review-1 MINOR 1）', () => {
+    render(
+      <AgentRow
+        agent={{ ...mk('omp-file-1', 'omp 文件行', 'other'), driver: 'omp', kind: 'omp' }}
+        onSelect={vi.fn()}
+        onAction={vi.fn()}
+      />,
+      { wrapper },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /omp 文件行 更多操作/ }));
+    expect(screen.queryByRole('menuitem', { name: '删除会话' })).toBeNull();
+    expect(document.querySelector('.agent-row-menu-sep')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: '中断' })).not.toBeNull();
+  });
+
   // #20：Esc 关闭行菜单（document 级监听——焦点在 body 也生效，原形态 Esc 全失效）
   // + 关闭后首击直达下层真实元素（backdrop 随菜单卸载，不吞点击）
   it('行 ⋯ 菜单：Esc 关闭（焦点在 body），关闭后首击落到行目标（#20）', () => {
