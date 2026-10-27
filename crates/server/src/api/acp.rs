@@ -107,6 +107,10 @@ async fn create_session(
 /// 重启恢复（批3 任务13）：持久化条目逐个走 session/load——成功（omp 实测支持）
 /// → 挂回注册表，agent 重放 update 回填 feed（list 恢复历史会话）；
 /// 失败 → 剪除条目（会话按新建呈现，不做假恢复）。终态重写持久化文件。
+/// #45 占位剪除：omp 驱动条目先做转录探测——零消息转录（空会话，仅驱动进程
+/// 写入的状态行）不恢复，条目剪除。恢复 spawn 的 omp acp 进程是纯驱动管道，
+/// 空会话恢复 = 占位行复活 + 转录状态行追加污染双重根源，恢复期剪除一并掐断。
+/// 仅对 omp 生效（通用 ACP agent 无转录探测面，照旧恢复）。
 pub async fn restore_persisted_sessions(state: SharedState) {
     let entries = registry::load_persisted(&state.cfg.acp_sessions_file).await;
     if entries.is_empty() {
@@ -115,6 +119,12 @@ pub async fn restore_persisted_sessions(state: SharedState) {
     tracing::info!(count = entries.len(), "开始恢复 ACP 会话");
     let mut kept = Vec::new();
     for entry in entries {
+        let omp_placeholder = entry.agent == state.omp.acp_agent_name()
+            && !state.omp.session_has_messages(&entry.id);
+        if omp_placeholder {
+            tracing::info!(id = %entry.id, "omp 零消息占位条目剪除（不恢复驱动进程）");
+            continue;
+        }
         match state
             .acp
             .resume_session(

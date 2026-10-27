@@ -32,6 +32,16 @@ fn cfg_with(dir: &Path) -> Config {
     cfg.tasks_dir = dir.join("tasks");
     cfg.notes_file = dir.join("notes.json");
     cfg.projects_file = dir.join("projects.json");
+    // opencode/dsh 隔离（api_agents test_app 同款三处全封，#5 全仓测试卫生）：
+    // bin 指空防 spawn 真 serve（本机装有真 opencode 时每个测试都会拉起真进程）；
+    // port 指死口防「认领健康端口」吃到本机残留 serve；serve 状态文件指 tempdir
+    // 防读写真实状态。
+    cfg.opencode.bin = "/nonexistent/opencode-test-isolated".into();
+    cfg.opencode.port = 65001;
+    cfg.opencode_serve_file = dir.join("opencode_serve.json");
+    cfg.dsh.bin = "/nonexistent/dsh-test-isolated".into();
+    cfg.dsh.port = 65002;
+    cfg.dsh_serve_file = dir.join("dsh_serve.json");
     cfg
 }
 
@@ -91,6 +101,18 @@ async fn wait_for(what: &str, secs: u64, mut cond: impl FnMut() -> bool) {
     }
 }
 
+/// 泵时序（#30 flake 治理）：原 5ms tick / 80ms 判死窗在全负载并行构建下会被
+/// 一次调度停顿击穿——节点误判静默判死 → 退避重连窗口内代理 503 → 断言失败
+/// （~30% 复现，串行恒过）。放宽到「停顿不敏感、测试不慢」：tick 250ms（ping
+/// 频率降 50 倍，pending/在线保持的活性来源不变——pong 刷新入站锚），判死窗
+/// 15s（生产 30s 的一半；测试全程 <15s，等价于「测试期不判死」），dial 2s。
+/// 断言零改动。
+const PUMP_TIMINGS: Timings = Timings {
+    tick: Duration::from_millis(250),
+    dead_after: Duration::from_secs(15),
+    dial_timeout: Duration::from_millis(2000),
+};
+
 /// 全链主测：enroll → approve（实例挂载）→ 泵换 token 在线 → 经 /p 浏览节点
 /// agents（N1 锚）→ POST body 保真（实例创建落到节点侧）→ 走私路径拒绝 →
 /// 节点停泵后离线 503
@@ -140,15 +162,7 @@ async fn mux_proxy_end_to_end() {
         local_port: 0,
         events_tx: None,
     };
-    let pump = tokio::spawn(run_node_link(
-        params,
-        node_file,
-        Timings {
-            tick: Duration::from_millis(5),
-            dead_after: Duration::from_millis(80),
-            dial_timeout: Duration::from_millis(500),
-        },
-    ));
+    let pump = tokio::spawn(run_node_link(params, node_file, PUMP_TIMINGS));
 
     // 首连 pending → approve（实例挂载，N1 前半）
     wait_for("节点首连 pending", 10, || {
@@ -248,9 +262,9 @@ async fn mux_proxy_end_to_end() {
     .await;
     assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE, "{body}");
 
-    // 节点离线 → 代理 503（对齐隧道离线语义）
+    // 节点离线 → 代理 503（对齐隧道离线语义）；deadline 留负载余量（#30）
     pump.abort();
-    wait_for("节点摘表", 5, || !gateway.node_conns.is_online(node_id)).await;
+    wait_for("节点摘表", 10, || !gateway.node_conns.is_online(node_id)).await;
     let (status, body) = api_oneshot(
         &gateway,
         "GET",
@@ -306,15 +320,7 @@ async fn events_ws_holds_and_closes_with_node() {
         local_port: 0,
         events_tx: None,
     };
-    let pump = tokio::spawn(run_node_link(
-        params,
-        node_file,
-        Timings {
-            tick: Duration::from_millis(5),
-            dead_after: Duration::from_millis(80),
-            dial_timeout: Duration::from_millis(500),
-        },
-    ));
+    let pump = tokio::spawn(run_node_link(params, node_file, PUMP_TIMINGS));
     wait_for("pending", 10, || {
         gateway
             .nodes

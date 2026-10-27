@@ -4,6 +4,7 @@ import type { Api } from '../api';
 import type { AgentSummary, CliSessionEntry } from '../types';
 import { isInjectableSessionId, resolveResumeRoute, type ResumeSpawnReason } from '../lib/resumeRoute';
 import { useI18n } from '../i18n';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import './SessionHistoryDialog.css';
 
 /// 恢复结果回抛信息（App 据 mode 分流 toast、据 targetSessionId 启动装载跟随）：
@@ -97,6 +98,9 @@ export default function SessionHistoryDialog({
   const [filter, setFilter] = useState('');
   const [resuming, setResuming] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // #20：Esc 统一关闭（document 级监听，焦点在 body 也生效——原 onKeyDown 挂
+  // backdrop div，无 tabIndex 焦点在 body 时永不触发）
+  useEscapeKey(true, onClose);
   // omp 生态行型归一（R1 tester FAIL-1）：omp 文件行（driver='omp'）与 hub-spawn
   // 的 ACP 行（driver='acp' + name=acp agent 名）取数/恢复都按 'omp' 端点寻址
   // （ACP 行 driver 恒 'acp'，按原样寻址会打 /api/agents/acp/… → 400）
@@ -213,9 +217,6 @@ export default function SessionHistoryDialog({
       aria-label={t('sesshist.titleNamed', { name: agentName })}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
       }}
     >
       <div className="dialog-card sesshist-card">

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import { createPortal } from 'react-dom';
 import { t } from '../i18n';
 import DriverBadge from './DriverBadge';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import type { AgentSummary } from '../types';
 import './AgentRow.css';
 
@@ -74,10 +75,18 @@ export default function AgentRow({
     .filter(Boolean)
     .join(' · ');
   const interactive = agent.kind === 'interactive';
-  // ocr-review 中：Logs/Stop/Respawn/删除是 claude 专属端点（/api/agents/claude/...），
-  // ACP 行隐藏（中断在 AgentList.handleAction 分流 cancelAcpSession）
+  // ocr-review 中：Logs/Stop/Respawn 是 claude 专属端点（/api/agents/claude/...），
+  // ACP 行隐藏（中断在 AgentList.handleAction 分流 cancelAcpSession）。
+  // 命名按字面：isClaudeDriver 才是 claude 驱动；isClaude 是「非 acp」的旧宽义，
+  // 仅 Logs/Stop/Respawn 沿用（review-1 MINOR 1：移除项曾因宽义误显于 omp/pi/
+  // opencode/dsh 行——后端均 unsupported，点击必报错）
   const isClaude = agent.driver !== 'acp';
   const isClaudeDriver = agent.driver === 'claude';
+  // #45 移除通道：acp 注册表行补「移除」项（/api/agents/acp/{id}/rm 已实装，
+  // 删除注册表条目 + 同步清 acp_sessions.json 持久化）——重启复活的占位行用户
+  // 可自行清掉。判定收紧为 claude + acp 两驱动（review-1 MINOR 1）：omp 文件行
+  // 只读事实源绝不删用户磁盘会话；pi/opencode/dsh 的 remove 均 unsupported
+  const canRemove = !interactive && (isClaudeDriver || agent.driver === 'acp');
   // R4 追加（tester 观察 1 查证）：所有非 claude 驱动的 AgentCatalog::logs 均返回
   // unsupported（pi 1078/opencode 401/dsh 863/omp 627/acp 584 各处）——Logs 项只有
   // claude 行有意义
@@ -95,6 +104,10 @@ export default function AgentRow({
     setMenuOpen(false);
     onAction(action, agent);
   };
+
+  // #20：菜单 Esc 统一关闭（document 级监听，焦点在 body 也生效）——关闭即
+  // 连带卸载透明 backdrop，Esc 后的下一次点击落到下层真实元素
+  useEscapeKey(menuOpen, () => setMenuOpen(false));
 
   const toggleMenu = (): void => {
     if (menuOpen) {
@@ -186,9 +199,11 @@ export default function AgentRow({
                     {t('row.interrupt')}
                   </button>
                 ) : null}
-                {/* 分组分隔 + 危险操作底部（Stop/Respawn/Remove 全桌聚焦改动避误触；claude 专属；
-                    interactive 的 unlist 同属危险区，故 claude 行恒有分隔线） */}
-                {isClaude ? <div className="agent-row-menu-sep" role="separator" /> : null}
+                {/* 分组分隔 + 危险操作底部（Stop/Respawn/Remove 全桌聚焦改动避误触；Stop/
+                    Respawn claude 专属，Remove claude + acp（#45，review-1 MINOR 1 收紧）；
+                    interactive 的 unlist 同属危险区，故 claude 行恒有分隔线；其余驱动
+                    危险区为空不显示分隔线（防悬空） */}
+                {isClaudeDriver || canRemove ? <div className="agent-row-menu-sep" role="separator" /> : null}
                 {!interactive && isClaude ? (
                   <button
                     type="button"
@@ -209,7 +224,7 @@ export default function AgentRow({
                     Respawn
                   </button>
                 ) : null}
-                {!interactive && isClaude ? (
+                {canRemove ? (
                   <button type="button" role="menuitem" className="agent-row-menu-danger" onClick={() => run('remove')}>
                     {t('row.remove')}
                   </button>

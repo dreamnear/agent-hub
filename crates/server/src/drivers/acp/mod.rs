@@ -575,8 +575,11 @@ impl AgentCatalog for AcpSendRouter {
         Box::pin(async move { Err(unsupported("acp", "stop")) })
     }
 
-    fn remove<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move { Err(unsupported("acp", "remove")) })
+    fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
+        // #45 移除通道：acp 注册表行可从 agents REST 删除（此前 unsupported → 404，
+        // 用户无法清掉重启复活的占位条目）。语义 = release：注册表摘除 + 子进程收尸
+        // + 持久化文件同步重写（条目删除 → 重启不复活）。
+        Box::pin(async move { super::MessageSender::release(self, id) })
     }
 
     fn respawn<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, Result<()>> {

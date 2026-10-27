@@ -159,6 +159,19 @@ impl OmpDriver {
         self.scan().into_iter().find(|s| s.id == id)
     }
 
+    /// 接管用的 ACP agent 名（restore 占位剪除判定用：持久化条目 agent 命中它
+    /// 才做转录探测，通用 ACP agent 无转录探测面不做剪除）
+    pub fn acp_agent_name(&self) -> &str {
+        &self.acp_agent
+    }
+
+    /// #45 恢复探测：该 session id 是否存在「有消息的」转录文件。零消息转录
+    /// 经 parse_session_file 的占位过滤后不入扫描集 → 这里 false（hub 重启恢复
+    /// 据此剪除条目，不 spawn 驱动进程 = 不产生占位行、不追加状态行）。
+    pub fn session_has_messages(&self, id: &str) -> bool {
+        self.session_meta(id).is_some()
+    }
+
     /// 某 cwd 的历史会话枚举（agent-hub-acp-session-history，历史弹窗数据源）：
     /// 全量扫（每次现扫不走 TTL——弹窗按需开，数据断言要求与盘上文件一致）
     /// → 按 session 行 cwd 精确过滤（cwd 字符串与 AgentSummary.cwd 同源，不做
@@ -366,6 +379,11 @@ impl OmpDriver {
 
 /// 单文件头解析：session 行（id/cwd/timestamp）+ title slot（非空标题）。
 /// 解析失败/无 session 行 → None（容错跳过）。
+/// #45 兜底：零 message 事件的转录 → None（不入任何发现面）——hub 拉起的
+/// acp 驱动进程会把 callbacks-state 等状态行写进转录文件（0 用户消息），
+/// 此类文件既非可恢复会话也不该以「活跃 omp 行」出现在侧栏/历史。
+/// 判据 = 头部 64KB 内无 message 行：首个用户消息必紧随 session 行落盘，
+/// 空会话则全文件零消息（>64KB 头部仍无消息的文件实际不存在）。
 fn parse_session_file(path: &Path) -> Option<FileSession> {
     let file = std::fs::File::open(path).ok()?;
     let mut reader = std::io::BufReader::new(file);
@@ -379,6 +397,7 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
     let mut title = None;
     let mut first_user = None;
     let mut ts_secs = None;
+    let mut saw_message = false;
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue; // 坏行/半行（尾部截断）跳过
@@ -399,10 +418,13 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
                     title = Some(t.to_string());
                 }
             }
-            Some("message") if first_user.is_none() => {
-                let m = &v["message"];
-                if m.get("role").and_then(|r| r.as_str()) == Some("user") {
-                    first_user = text_of(&m["content"]);
+            Some("message") => {
+                saw_message = true;
+                if first_user.is_none() {
+                    let m = &v["message"];
+                    if m.get("role").and_then(|r| r.as_str()) == Some("user") {
+                        first_user = text_of(&m["content"]);
+                    }
                 }
             }
             _ => {}
@@ -410,6 +432,10 @@ fn parse_session_file(path: &Path) -> Option<FileSession> {
         if id.is_some() && cwd.is_some() && title.is_some() && first_user.is_some() {
             break;
         }
+    }
+    // #45：零消息转录不入发现面（侧栏活跃行 / 历史枚举 / 恢复探测同源此解析）
+    if !saw_message {
+        return None;
     }
     let id = id?;
     let meta = std::fs::metadata(path).ok()?;
@@ -1113,6 +1139,62 @@ mod tests {
             .await
             .unwrap_err();
         assert!(e.to_string().contains("不存在"));
+    }
+
+    /// #45 转录卫生：零消息转录（仅驱动状态行）不入发现面——侧栏清单/历史枚举/
+    /// session_has_messages 三面同源此解析，全部不列出。
+    #[tokio::test]
+    async fn zero_message_transcripts_are_filtered_from_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let slug = dir.path().join("--tmp--");
+        std::fs::create_dir_all(&slug).unwrap();
+        // 占位形态：title + session + 驱动状态行（custom），零 message 事件
+        std::fs::write(
+            slug.join("20261003T000000Z_empty-1.jsonl"),
+            concat!(
+                "{\"type\":\"title\",\"v\":1,\"title\":\"\",\"pad\":\"    \"}\n",
+                "{\"type\":\"session\",\"id\":\"empty-1\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-10-03T00:00:00Z\"}\n",
+                "{\"type\":\"custom\",\"customType\":\"callbacks-state\",\"data\":{},\"id\":\"x1\"}\n",
+            ),
+        )
+        .unwrap();
+        // 对照：有用户消息的正常转录
+        write_fixture(&slug.join("20261003T000000Z_real-1.jsonl"), "real-1", "/tmp");
+
+        let registry = Arc::new(AcpRegistry::new());
+        let router = Arc::new(AcpSendRouter::new(
+            registry.clone(),
+            broadcast::channel(8).0,
+            Arc::new(RwLock::new(HashMap::new())),
+        ));
+        let d = OmpDriver::new(
+            dir.path().to_path_buf(),
+            Arc::new(AcpDriver {
+                agents: Arc::new(std::sync::RwLock::new(Vec::new())),
+            }),
+            router,
+            registry,
+            "omp".into(),
+            Arc::new(RwLock::new(HashMap::new())),
+            broadcast::channel(8).0,
+        );
+        let listed = AgentCatalog::list(&d, true).await.unwrap();
+        assert!(
+            listed.iter().all(|a| a.id != "empty-1"),
+            "零消息转录不得出现在侧栏清单"
+        );
+        assert!(
+            listed.iter().any(|a| a.id == "real-1"),
+            "有消息的转录照常列出"
+        );
+        let history = d.list_cwd_sessions("/tmp").unwrap();
+        assert!(
+            history.iter().all(|e| e.session_id != "empty-1"),
+            "零消息转录不得出现在历史枚举"
+        );
+        assert!(!d.session_has_messages("empty-1"), "占位探测应判空");
+        assert!(d.session_has_messages("real-1"), "真实会话应判有消息");
+        assert!(!d.session_has_messages("nope"), "文件不存在判空");
     }
 
     // —— 历史会话枚举/恢复（agent-hub-acp-session-history）——

@@ -229,6 +229,40 @@ describe('App 会话选择（终端入口移除后回归守卫）', () => {  con
     expect(stubs.chatMounts).toEqual(['agt-1']);
   });
 
+  // #19 家族 MINOR 根修：清单 error 态重探/抖动使 data 瞬时丢条目时，selected
+  // 回退最后已知快照——ChatTab 不重挂（composer draft 清零/textarea detach 根因）
+  it('清单瞬时丢条目不重挂 ChatTab（最后已知快照兜底）', () => {
+    stubs.renderAgentList = (props) => (
+      <button type="button" data-testid="row" onClick={() => props.onSelect(agent)}>
+        row
+      </button>
+    );
+    const view = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(q(view.container, '[data-testid="row"]'));
+    expect(stubs.chatMounts).toEqual(['agt-1']);
+    // 清单瞬时丢失（error 重探周期形态）：data = 空
+    stubs.agents = [];
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    // 瞬时 miss 不得重挂 ChatTab（composer draft 清零根因）
+    expect(stubs.chatMounts).toEqual(['agt-1']);
+    // 清单恢复：照常命中实时条目（仍然同 key，不重挂）
+    stubs.agents = [agent];
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <App />
+      </QueryClientProvider>,
+    );
+    expect(stubs.chatMounts).toEqual(['agt-1']);
+  });
+
   it('快速对话选会话挂载 ChatTab', () => {
     stubs.renderQuickChat = (props) => (
       <button type="button" data-testid="quick-pick" onClick={() => props.onPick(agent)}>
