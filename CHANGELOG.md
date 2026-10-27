@@ -4,6 +4,34 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.2] - 2026-10-28
+
+本批：P1 稳定性收口批（#45/#20/#30/#5）——行为缺陷与测试噪声一次清账。
+
+### Fixed — ACP 占位行根修（#45）
+
+- **ACP 注册表行移除通道**：`/rm` 端点对 acp 键可用（204）+ ⋯ 菜单「删除会话」项；移除同步原子删除 `acp_sessions.json` 持久化条目，重启不复活
+- **驱动占位会话不再进用户可见面**：hub 拉起的 omp acp 驱动进程的零消息占位条目在恢复路径剪除（创建路径保持可见可移除）；omp 历史发现面（侧栏/历史/探测三面同源）过滤零消息转录
+- **转录卫生**：hub 不再 eager spawn omp acp——无占位行、无转录追加
+
+### Fixed — Esc 键控与 backdrop（#20）
+
+- 新 `useEscapeKey` hook（document 级，焦点在 body 也生效）统一接管行 ⋯ 菜单 / 历史会话弹窗 / ⌘K 切换器三处 Esc 关闭
+- 透明 backdrop 随层卸载——关闭后的同一次点击直达下层真实元素（几何 + 事件双断言）
+- #19 两条 MINOR：ChatTab 挂 ErrorBoundary（畸形 payload 不再白屏）+ 选中快照兜底（error 态重探不再重挂 composer 清草稿）
+- 顺带收紧：侧栏「删除会话」项仅 claude/acp 行显示（omp 文件行等基线误显修正）
+
+### Test — 测试稳定性（#30/#5）
+
+- #30：mux_proxy 测试泵时序放宽为停顿容忍（5ms/80ms → 250ms/15s/2s，**断言语句零改动**）——治理口径 10/10 全绿 + 8 核负载 3/3
+- #5：desktop sidecar 不再覆盖 server 测试二进制（desktop 移出默认 workspace members + `build.rs` 构建期刷新）——全仓 `cargo test --no-fail-fast` 零 node_cli 假失败。**披露**：desktop 4 例单测退出默认门禁面，显式口令 `cargo test -p claude-view-desktop`
+- 沿途修复存量隔离缺口：四套件补 opencode/dsh 隔离（本机真 opencode 下全仓 6 例确定性 500，基线 d7bb369 对照实锤非本批引入；/api/agents 对真 opencode 的 500 另立 #51）
+
+### 工单索引
+
+- 本批：#45 / #20 / #30 / #5；关联 #19（MINOR 清账）、#51（opencode 500，后续批）
+- 门禁：cargo -p server 641/0 · 全仓 657/0 · vitest 680/680 · tsc 干净 · bundle gz 235,823B ≤300KB
+
 ## [0.9.1] - 2026-10-27
 
 本批：hub 侧 claude spawn 全数静默失败的紧急修复（#48）——定时任务 spawn、UI 新建、恢复流全部受累。
