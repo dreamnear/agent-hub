@@ -63,6 +63,15 @@ fn app_with_store(
     mode: &str,
     store_file: &Path,
 ) -> (axum::Router, std::sync::Arc<AppState>, tempfile::TempDir) {
+    app_with_store_named(mode, "fake", store_file)
+}
+
+/// 变体：agent 名可指定（#45 占位剪除测试用 "omp" 名命中 omp 驱动的接管 agent 推导）
+fn app_with_store_named(
+    mode: &str,
+    agent_name: &str,
+    store_file: &Path,
+) -> (axum::Router, std::sync::Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = Config::load();
     // 隔离 opencode 驱动（可选驱动不进断言口径）：三处全封——
@@ -75,8 +84,13 @@ fn app_with_store(
     cfg.dsh.bin = "/nonexistent/dsh-test-isolated".into();
     cfg.dsh.port = 65002;
     cfg.dsh_serve_file = dir.path().join("dsh_serve.json");
+    // omp sessions 目录指 tempdir（防读写真实 ~/.omp/agent/sessions——占位剪除
+    // 探测与发现面过滤的确定性前提）
+    cfg.omp.sessions_dir = dir.path().join("omp-sessions");
+    let mut agent = fake_agent(mode);
+    agent.name = agent_name.into();
     cfg.acp = AcpConfig {
-        agents: vec![fake_agent(mode)],
+        agents: vec![agent],
     };
     cfg.chat = ChatConfig::default();
     cfg.acp_sessions_file = store_file.to_path_buf();
@@ -235,5 +249,172 @@ async fn release_prunes_persisted_entry() {
             "release 后持久化条目应被清除"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+// —— #45 移除通道 + 占位剪除 ——
+
+/// #45 移除通道：agents REST 的 /rm 对 acp 键可用（此前 unsupported → 404）——
+/// 删除注册表条目 + 子进程收尸 + 持久化条目同步清除（重启不复活）。
+#[tokio::test]
+async fn remove_acp_row_via_rest_prunes_registry_and_store() {
+    let store = tempfile::tempdir().unwrap();
+    let store_file = store.path().join("acp_sessions.json");
+    let (app, state, workdir) = app_with_store("basic", &store_file);
+    let (status, created) = req(
+        &app,
+        "POST",
+        "/api/acp/sessions",
+        Some(json!({"agent": "fake", "cwd": workdir.path()})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sid = created["sessionId"].as_str().unwrap().to_string();
+    // 轮询等 persist 后台任务落盘（条目已在文件 = 移除路径有东西可清）
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let raw = std::fs::read_to_string(&store_file).unwrap_or_default();
+        if raw.contains(&sid) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "create 后持久化条目应存在"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let (status, _) = req(&app, "POST", &format!("/api/agents/acp/{sid}/rm"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "acp 行 /rm 应可用");
+    assert!(
+        state.acp_registry.get(&sid).is_none(),
+        "移除后注册表条目应删除"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let raw = std::fs::read_to_string(&store_file).unwrap_or_default();
+        let persisted: Value = serde_json::from_str(&raw).unwrap_or(json!([]));
+        if persisted.as_array().is_some_and(|a| a.is_empty()) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "移除后持久化条目应同步清除"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // 收尸：fake agent 子进程（release 内 spawn 的 shutdown 任务）跑完
+    tokio::time::sleep(Duration::from_millis(200)).await;
+}
+
+/// 合成 omp 转录 fixture（with_message=false = 仅状态行零消息的占位形态）
+fn write_omp_transcript(sessions_dir: &Path, sid: &str, with_message: bool) {
+    let slug = sessions_dir.join("--tmp--");
+    std::fs::create_dir_all(&slug).unwrap();
+    let message = if with_message {
+        r#"{"type":"message","id":"e1","timestamp":"2026-10-03T00:00:02Z","message":{"role":"user","timestamp":"2026-10-03T00:00:02Z","content":[{"type":"text","text":"真实对话"}]}}"#.to_string()
+    } else {
+        // hub 拉起的 acp 驱动进程写入的状态行形态（0 用户消息）
+        r#"{"type":"custom","customType":"callbacks-state","data":{"callbacks":[]},"id":"dcda"}"#
+            .to_string()
+    };
+    let body = format!(
+        "{{\"type\":\"title\",\"v\":1,\"title\":\"\",\"pad\":\"    \"}}\n{{\"type\":\"session\",\"id\":\"{sid}\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-10-03T00:00:00Z\"}}\n{message}\n",
+    );
+    std::fs::write(
+        slug.join(format!("20261003T000000Z_{sid}.jsonl")),
+        body,
+    )
+    .unwrap();
+}
+
+/// #45 占位剪除：omp 驱动条目 + 零消息转录 → 恢复期剪除（不 spawn 驱动进程 =
+/// 无占位行、无转录追加），持久化条目同步清除。agent 用 loadable 模式（session/load
+/// 可成功）——保证剪除来自占位判定本身，而非 load 兜底剪除。
+#[tokio::test]
+async fn restore_prunes_zero_message_omp_placeholder() {
+    let store = tempfile::tempdir().unwrap();
+    let store_file = store.path().join("acp_sessions.json");
+    let (app, state1, workdir1) = app_with_store_named("loadable", "omp", &store_file);
+    let (status, created) = req(
+        &app,
+        "POST",
+        "/api/acp/sessions",
+        Some(json!({"agent": "omp", "cwd": workdir1.path()})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sid = created["sessionId"].as_str().unwrap().to_string();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if store_file.exists() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "create 后持久化文件应存在"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    drop(state1);
+
+    // 重启态：转录文件只有驱动状态行（零消息）→ restore 必须剪除。
+    // fixture 落在 state2 的 sessions_dir（新 AppState 的 tempdir 路径）
+    let (_app2, state2, workdir2) = app_with_store_named("loadable", "omp", &store_file);
+    write_omp_transcript(&workdir2.path().join("omp-sessions"), &sid, false);
+    restore_persisted_sessions(state2.clone()).await;
+
+    assert!(
+        state2.acp_registry.get(&sid).is_none(),
+        "零消息占位条目不得恢复进注册表"
+    );
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(&store_file).unwrap()).unwrap();
+    assert_eq!(
+        persisted.as_array().unwrap().len(),
+        0,
+        "占位条目应从持久化文件剪除（重启不复活）"
+    );
+}
+
+/// #45 占位剪除对照：omp 条目转录有消息 → 照常恢复（真实会话重启可续）。
+#[tokio::test]
+async fn restore_keeps_omp_entry_with_transcript_messages() {
+    let store = tempfile::tempdir().unwrap();
+    let store_file = store.path().join("acp_sessions.json");
+    let (app, state1, workdir1) = app_with_store_named("loadable", "omp", &store_file);
+    let (status, created) = req(
+        &app,
+        "POST",
+        "/api/acp/sessions",
+        Some(json!({"agent": "omp", "cwd": workdir1.path()})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sid = created["sessionId"].as_str().unwrap().to_string();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if store_file.exists() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "create 后持久化文件应存在"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    drop(state1);
+
+    // 转录有用户消息（真实会话）→ 恢复路径不剪除（fixture 落 state2 的 sessions_dir）
+    let (_app2, state2, workdir2) = app_with_store_named("loadable", "omp", &store_file);
+    write_omp_transcript(&workdir2.path().join("omp-sessions"), &sid, true);
+    restore_persisted_sessions(state2.clone()).await;
+
+    assert!(
+        state2.acp_registry.get(&sid).is_some(),
+        "有消息的真实会话应照常恢复"
+    );
+    if let Some(s) = state2.acp_registry.get(&sid) {
+        s.conn.shutdown().await;
     }
 }

@@ -350,6 +350,32 @@ describe('AgentList Sidebar-v2', () => {
     );
   });
 
+  it('AgentRow ⋯ 菜单：acp 行显示「删除会话」并接线 removeAgent（#45 移除通道）', async () => {
+    renderList();
+    // acp 行（FIXTURE acp1）此前无移除项（/rm 对 acp 404）——补通道后可删
+    fireEvent.click(screen.getByRole('button', { name: /omp 会话 更多操作/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除会话' }));
+    // 确认弹窗（危险操作 Confirm，label = confirm.remove.label「Remove」）→ 确认后按 (id, driver) 调 rm 端点
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(removeAgentMock).toHaveBeenCalledWith('acp1', 'acp'));
+  });
+
+  // #20：Esc 关闭行菜单（document 级监听——焦点在 body 也生效，原形态 Esc 全失效）
+  // + 关闭后首击直达下层真实元素（backdrop 随菜单卸载，不吞点击）
+  it('行 ⋯ 菜单：Esc 关闭（焦点在 body），关闭后首击落到行目标（#20）', () => {
+    const onSelect = vi.fn();
+    renderList({ onSelect });
+    fireEvent.click(screen.getByRole('button', { name: /运行中的会话 更多操作/ }));
+    expect(document.querySelector('.agent-row-menu')).not.toBeNull();
+    // 模拟焦点在 body：keydown 直接派发到 document（不落在任何菜单内元素）
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.querySelector('.agent-row-menu')).toBeNull();
+    expect(document.querySelector('.agent-row-menu-backdrop')).toBeNull();
+    // 几何/事件断言的 jsdom 等价：backdrop 已卸载，同一次点击激活目标行
+    fireEvent.click(screen.getByRole('button', { name: '运行中的会话' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
   it('AgentRow ⋯ 菜单：会话操作经 onAction 发射（中断/删除）', () => {
     const onAction = vi.fn();
     render(
@@ -430,13 +456,15 @@ describe('AgentList 过滤安全底线（反馈轮 24-A）', () => {
 });
 
 describe('侧栏会话操作按驱动分流（ocr-review 中）', () => {
-  it('ACP 行菜单隐藏 claude 专属操作（Logs/Stop/Respawn/删除会话），保留 工程便签/中断', () => {
+  it('ACP 行菜单隐藏 claude 专属操作（Logs/Stop/Respawn），保留 工程便签/中断/删除会话（#45 移除通道）', () => {
     renderList();
     fireEvent.click(screen.getByRole('button', { name: /omp 会话 更多操作/ }));
     expect(screen.queryByRole('menuitem', { name: 'Logs' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'Stop' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: 'Respawn' })).toBeNull();
-    expect(screen.queryByRole('menuitem', { name: '删除会话' })).toBeNull();
+    // #45：删除会话已对 acp 键实装（/api/agents/acp/{id}/rm），菜单补此项；
+    // omp 文件行（driver='omp'）仍只读无删除项
+    expect(screen.getByRole('menuitem', { name: '删除会话' })).not.toBeNull();
     expect(screen.getByRole('menuitem', { name: '工程便签' })).not.toBeNull();
     expect(screen.getByRole('menuitem', { name: '中断' })).not.toBeNull();
   });
