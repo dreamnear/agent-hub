@@ -4,6 +4,16 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.3] - 2026-10-28
+
+本批：agents 面单源故障全局 500 的紧急修复（#51）。
+
+### Fixed — 单驱动 list 失败不再打垮 /api/agents（#51）
+
+- 本机装有真 opencode（v2.1.4，serve 响应形态变化）时 `/api/agents` 整面 500（主入口不可用）——基线即坏，P1 测试期间暴露
+- 修复：`list_all` 单 driver Err 降级为该源空集 + warn 留痕（对齐 claude 驱动内部降级先例与 running_count fail-soft 聚合），其余驱动不受影响；opencode 源的具体解析适配后续批跟进（#51 保持开放或随本修复关单由主会话裁量）
+- 实测：真 opencode 在场 `/api/agents` 200（13 行，claude+pi 正常，opencode 单源降级缺席）
+
 ## [0.9.2] - 2026-10-28
 
 本批：P1 稳定性收口批（#45/#20/#30/#5）——行为缺陷与测试噪声一次清账。
