@@ -274,18 +274,30 @@ impl DriverRegistry {
             .ok_or_else(|| anyhow::anyhow!("未知 driver: {driver}"))
     }
 
-    /// 聚合全部驱动清单（注册序）。
+    /// 聚合全部驱动清单（注册序）。单 driver Err 只降级该 driver 为空集（#51）：
+    /// agents 面是主入口，单源损坏（如 opencode serve 响应形态变化）不应把整个
+    /// /api/agents 打成 500；warn 留痕供排查（对齐 claude 驱动内部降级先例与
+    /// running_count 的 fail-soft 聚合语义）。
     pub async fn list_all(&self, all: bool) -> Result<Vec<AgentSummary>> {
         let mut out = Vec::new();
         for d in &self.drivers {
-            out.extend(d.list(all).await?);
+            match d.list(all).await {
+                Ok(v) => out.extend(v),
+                Err(e) => {
+                    tracing::warn!(
+                        driver = %d.name(),
+                        error = %e,
+                        "driver list 失败，降级为空集（不影响其他驱动）"
+                    );
+                }
+            }
         }
         Ok(out)
     }
 
     /// 运行中会话计数（fail-soft 聚合，B4 onIdle 探针专用）：单 driver Err 只
-    /// 跳过该 driver 不拖垮聚合——与 list_all 的全有全无语义不同（后者面向
-    /// /api/agents 的完整性，探针要的是尽力计数；tester-report-3 根因：dsh 401
+    /// 跳过该 driver 不拖垮聚合——与 list_all 的 fail-soft 语义同向（#51 起两者
+    /// 均为单源降级；tester-report-3 根因：dsh 401
     /// 类 Err 经 list_all 短路 + 探针 unwrap_or_default 把整份清单吞成空集，
     /// claude 的 working 计数被连带抹零）。
     pub async fn running_count(&self) -> usize {
