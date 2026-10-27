@@ -83,6 +83,17 @@ function itemButtons(): HTMLElement[] {
 afterEach(cleanup);
 
 describe('SessionHistoryDialog（agent-hub-session-history）', () => {
+  // #20：Esc 统一关闭（document 级监听——焦点在 body 也生效；原 onKeyDown 挂
+  // backdrop div 无 tabIndex，焦点落 body 后 Esc 失效）
+  it('Esc 关闭弹窗（焦点在 body），onClose 恰一次', async () => {
+    const api = mkApi(vi.fn().mockResolvedValue([entry()]));
+    const onClose = vi.fn();
+    renderDialog(api, vi.fn(), onClose);
+    await waitFor(() => expect(itemButtons().length).toBe(1));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('列表渲染：条目数与数据一致，行内字段（摘要/分支/体积/相对时间）齐全', async () => {
     const api = mkApi(
       vi.fn().mockResolvedValue([

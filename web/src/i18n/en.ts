@@ -408,6 +408,7 @@ export const en: Record<string, string> = {
   'chat.noMore': 'No more messages',
   'chat.sessionLoading': 'Loading session…',
   'chat.sessionFailed': 'Failed to load session',
+  'chat.renderFailed': 'Session failed to render',
   'chat.retry': 'Retry',
   'chat.emptySubagent': 'No messages in this subagent session yet',
   'chat.empty': 'No messages yet — type to start the conversation',

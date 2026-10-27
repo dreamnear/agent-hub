@@ -411,6 +411,7 @@ export const zh: Record<string, string> = {
   'chat.noMore': '无更多消息',
   'chat.sessionLoading': '正在加载会话…',
   'chat.sessionFailed': '会话加载失败',
+  'chat.renderFailed': '会话渲染异常',
   'chat.retry': '重试',
   'chat.emptySubagent': '该 subagent 会话暂无消息',
   'chat.empty': '暂无消息，输入开始对话',

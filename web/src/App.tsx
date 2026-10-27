@@ -22,6 +22,7 @@ import GitPanel from './components/GitPanel';
 import GitDiffView from './components/GitDiffView';
 import AgentList from './components/AgentList';
 import ChatTab from './components/ChatTab';
+import ErrorBoundary from './components/ErrorBoundary';
 import QuickChat from './components/QuickChat';
 import SettingsPage, { lastSettingsSection, type SettingsSectionKey } from './components/SettingsPage';
 import PluginNavGroup from './components/PluginNavGroup';
@@ -141,11 +142,25 @@ export default function App(): ReactElement {
   const setDraft = useCallback((key: string, text: string): void => {
     setDrafts((d) => (d[key] === text ? d : { ...d, [key]: text }));
   }, []);
-  const selected =
+  // 最后已知选中快照（#19 家族 MINOR 根修：清单 error 态 5s 重探/抖动期间
+  // data 瞬时 miss 选中条目 → selected 翻 null → ChatTab 整体重挂 → composer
+  // draft 清零、textarea detach，offline 中打字被打断）。miss 时回退该 key 的
+  // 最后一次已知条目，ChatTab 跨清单抖动保持挂载；清单恢复后自然命中实时条目。
+  // 单条缓存（只有当前 key 的快照有意义）；渲染期写 ref 为幂等缓存，无副作用。
+  const lastSelectedRef = useRef<{ key: string; agent: AgentSummary } | null>(null);
+  const selectedLive =
     selectedKey != null
       ? (data.find((a) => selectKey(a) === selectedKey) ??
         (historySel != null && selectKey(historySel) === selectedKey ? historySel : null))
       : null;
+  if (selectedLive != null) {
+    lastSelectedRef.current = { key: selectKey(selectedLive), agent: selectedLive };
+  }
+  const selected =
+    selectedLive ??
+    (selectedKey != null && lastSelectedRef.current?.key === selectedKey
+      ? lastSelectedRef.current.agent
+      : null);
   // P4 默认视图（agent-hub-pi-hub-agent）：无选中持久化机制（selectedKey 仅内存），
   // 裁量 = 每次打开默认 Hub 助手：数据首次到位且用户尚未选择时选中 pi 条目；
   // 用户手动切走（selectedKey 非空）后不再干预，尊重用户选择。
@@ -704,25 +719,29 @@ export default function App(): ReactElement {
                   ) : null}
                 </div>
               ) : null}
-              {/* 聊天常驻页签槽：文件页签聚焦时仅 CSS 隐藏，消息流/输入草稿不丢 */}
+              {/* 聊天常驻页签槽：文件页签聚焦时仅 CSS 隐藏，消息流/输入草稿不丢。
+                  ErrorBoundary（#19 家族 MINOR）：详情端点畸形响应等渲染期异常兜成
+                  错误卡，不再白屏整个主区 */}
               <div className={`pane-slot${activeTab != null ? ' pane-slot--hidden' : ''}`}>
-                <ChatTab
-                  key={`${selected.instanceId ?? ''}:${selected.id}`}
-                  agent={selected}
-                  api={selectedApi ?? undefined}
-                  // 草稿按会话键保留（#18 交互模型 4）：key 换即重挂载，草稿从
-                  // App 的 per-key 表喂回，切走再切回不丢、跨 agent 不串味
-                  initialDraft={selectedKey != null ? (drafts[selectedKey] ?? '') : ''}
-                  onDraftChange={(text) => setDraft(selectedKey ?? '', text)}
-                  onClose={closeSelected}
-                  onOpenSidebar={() => setLeftOpen(true)}
-                  notesOpen={notesFor?.cwd === selected.cwd}
-                  onToggleNotes={() =>
-                    setNotesFor((cur) => (cur && cur.cwd === selected.cwd ? null : selected))
-                  }
-                  onOpenTerminal={selected.cwd != null ? openTerminalTab : undefined}
-                  onOpenPluginView={openPluginView}
-                />
+                <ErrorBoundary key={`${selected.instanceId ?? ''}:${selected.id}`}>
+                  <ChatTab
+                    key={`${selected.instanceId ?? ''}:${selected.id}`}
+                    agent={selected}
+                    api={selectedApi ?? undefined}
+                    // 草稿按会话键保留（#18 交互模型 4）：key 换即重挂载，草稿从
+                    // App 的 per-key 表喂回，切走再切回不丢、跨 agent 不串味
+                    initialDraft={selectedKey != null ? (drafts[selectedKey] ?? '') : ''}
+                    onDraftChange={(text) => setDraft(selectedKey ?? '', text)}
+                    onClose={closeSelected}
+                    onOpenSidebar={() => setLeftOpen(true)}
+                    notesOpen={notesFor?.cwd === selected.cwd}
+                    onToggleNotes={() =>
+                      setNotesFor((cur) => (cur && cur.cwd === selected.cwd ? null : selected))
+                    }
+                    onOpenTerminal={selected.cwd != null ? openTerminalTab : undefined}
+                    onOpenPluginView={openPluginView}
+                  />
+                </ErrorBoundary>
               </div>
               {/* 文件页签面板：全会话组常挂（隐藏不卸载，滚动位置保留，Tab 组按会话
                   分组——切会话不销毁、切回即恢复），关页签才卸载 */}

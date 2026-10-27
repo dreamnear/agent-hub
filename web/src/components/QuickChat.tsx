@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { useI18n } from '../i18n';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import type { AgentSummary } from '../types';
 import './QuickChat.css';
 
@@ -39,6 +40,11 @@ export default function QuickChat({ agents, onPick, onClose }: Props): ReactElem
     onClose();
   };
 
+  // #20：⌘K 面板 Esc 统一关闭（document 级监听，焦点在 body 也生效——原挂
+  // backdrop onKeyDown，点过 backdrop 后焦点回 body，Esc 即失效）。
+  // ⌘K 再按一次关闭走 App 全局快捷键（面板打开时 toggle），此处不重复处理。
+  useEscapeKey(true, onClose);
+
   return (
     <div
       className="quickchat-backdrop"
@@ -47,10 +53,6 @@ export default function QuickChat({ agents, onPick, onClose }: Props): ReactElem
       aria-label="Quick agent switcher"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
-        if (e.key === 'k' && (e.metaKey || e.ctrlKey)) onClose();
       }}
     >
       <div className="quickchat-card">
