@@ -330,6 +330,10 @@ async fn write_first_send_confirmed(
             "first-send: no echo within window (CLI not consuming?)"
         );
     }
+    // 用尽仍失败：清行再报错（#57）——最后一次写入的残留正文若留在 TUI 输入行，
+    // 用户重试时会与 web 侧保留的草稿拼成两段提交；TUI 侧回到空行才与
+    // 「失败留草稿在 web」的语义对齐（Ctrl-U 同 attempt>1 的既有清行形态）
+    write_raw(sess, CLEAR_LINE).await?;
     anyhow::bail!(
         "首发注入未被 CLI 消费：{} 次写入均在 {}ms 内无回显（会话可能仍在初始化或 TUI 未接管 stdin），请稍后重试",
         FIRST_SEND_ATTEMPTS,
