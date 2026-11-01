@@ -520,26 +520,20 @@ impl AgentCatalog for ClaudeDriver {
     }
 
     fn stop<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
-        let mcp_dir = self.plugin_mcp_dir.clone();
         let id = id.to_string();
         let bin = self.bin.clone();
-        let injected = self
-            .mcp_config_paths
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
         Box::pin(async move {
             let r = cli::stop(&bin, &id).await;
             // B4 hooks 观察档：进程退出/移除族——stop 成功即会话关闭
             if r.is_ok() {
                 crate::plugins::hooks::dispatch_session_closed(&id, "claude", Some("stopped"));
             }
-            // F-6：优先按映射回收实际注入文件（占位名 hub-<uuid>.json）；
-            // remove_config_sync 兜底（`<id>.json` 命名约定，映射缺失时唯一线索）
-            if let Some(p) = injected {
-                let _ = std::fs::remove_file(p);
-            }
-            crate::plugins::mcp_config::remove_config_sync(&mcp_dir, &id);
+            // #60 completed-group：stop 不回收 plugin MCP 配置（原 F-6 回收废除）
+            // ——daemon 注册表仍存该会话 flags（--mcp-config=该文件），respawn
+            // 复活链按原路径重启；stop 即删会让复活 init 即崩（Invalid MCP
+            // configuration → send 恒 400，tester 轮次 1 证据闭环）。回收点移至
+            // remove（注册表条目消失，文件再无引用者；映射保留供 remove 定位
+            // hub-<uuid>.json 实际文件名）。
             r
         })
     }

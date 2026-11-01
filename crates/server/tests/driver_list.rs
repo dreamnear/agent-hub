@@ -155,3 +155,49 @@ async fn list_degrades_to_empty_when_cli_fails() {
     let all = d.list(true).await.unwrap();
     assert!(all.is_empty(), "R1：--all 同口径降级");
 }
+
+/// #60 回归锚（tester 轮次 1 FAIL 根因）：hub-stop 死亡会话可经 respawn 复活
+/// ——daemon 注册表仍存该会话 flags（--mcp-config=配置文件），stop 不得回收该
+/// 文件（否则复活 init 即崩 Invalid MCP configuration，send 恒 400）。回收点在
+/// remove（注册表条目消失，文件再无引用者）；映射同样保留至 remove（remove 按
+/// 它定位 hub-<uuid>.json 实际文件名）。
+#[tokio::test]
+async fn stop_keeps_mcp_config_for_respawn_remove_reclaims() {
+    use server::drivers::AgentCatalog;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mcp_dir = dir.path().join("plugin_mcp");
+    std::fs::create_dir_all(&mcp_dir).unwrap();
+    let cfg = mcp_dir.join("hub-test0000.json");
+    std::fs::write(&cfg, "{}").unwrap();
+    let d = ClaudeDriver::new_with_mcp(
+        fake_bin(),
+        dir.path().join("jobs"),
+        PathBuf::new(),
+        std::env::temp_dir().join(format!("driver-list-test-ignored-{}", std::process::id())),
+        Arc::new(RwLock::new(
+            HashMap::<String, broadcast::Sender<ChatEvent>>::new(),
+        )),
+        mcp_dir,
+        PathBuf::from("server"),
+        "127.0.0.1:0".into(),
+    );
+    d.mcp_config_paths
+        .lock()
+        .unwrap()
+        .insert("a1b2c3d4".into(), cfg.clone());
+
+    d.stop("a1b2c3d4").await.unwrap();
+    assert!(
+        cfg.exists(),
+        "stop 不回收 MCP 配置（respawn flags 仍引用该文件）"
+    );
+    assert!(
+        d.mcp_config_paths.lock().unwrap().contains_key("a1b2c3d4"),
+        "映射保留至 remove（uuid 文件名的唯一清理线索）"
+    );
+
+    d.remove("a1b2c3d4").await.unwrap();
+    assert!(!cfg.exists(), "remove 才是回收点（文件无引用者后清理）");
+    assert!(!d.mcp_config_paths.lock().unwrap().contains_key("a1b2c3d4"));
+}
