@@ -122,7 +122,9 @@ impl ClaudeDriver {
     /// CLI 列表为基座（driver="claude"）；id 命中 jobs 目录时增强 detail/tokens，
     /// name/sessionId/cwd 冲突以 CLI 为准；jobs 读取失败静默降级为仅 CLI 信息。
     /// group 归一（CLI state → 三态）在此完成，api 层只见成品（1.3）。
-    pub async fn list(&self, all: bool) -> Result<Vec<AgentSummary>> {
+    /// #60 起缺省面含 daemon 已死条目（Completed 桶），两面内容一致——`all` 仅
+    /// 保留 trait 兼容（历史面板全量口径不再与缺省面有差异）。
+    pub async fn list(&self, _all: bool) -> Result<Vec<AgentSummary>> {
         // 活跃清单（CLI 缺省口径）恒取：它是 daemon 活性的权威判据——`done` ≠
         // 退出（活 daemon 停在提示符时 state 也是 done，2026-10-02 反例实测），
         // 只有 --all 独有的条目才是 daemon 已死的真历史。
@@ -131,7 +133,13 @@ impl ClaudeDriver {
         // 注册表缺失会非零退出，此前传播为 500（agent-hub-gateway-first-run R1
         // 定版：200 空；决策变更依据 requirement.md，原「命令失败照常报错」废弃）。
         // 写路径（spawn/send）错误不受影响照常报错。
-        let active_list = match cli::agents_json(&self.bin, false).await {
+        // #60 completed-group：缺省面也需全量库存（daemon 已死条目仅出现在 --all
+        // 清单，实测 CLI 2.1.314 缺省面只列活 daemon）——两路并发拉取摊平延迟。
+        let (active_res, all_res) = tokio::join!(
+            cli::agents_json(&self.bin, false),
+            cli::agents_json(&self.bin, true),
+        );
+        let active_list = match active_res {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(
@@ -142,20 +150,16 @@ impl ClaudeDriver {
                 Vec::new()
             }
         };
-        let all_list = if all {
-            match cli::agents_json(&self.bin, true).await {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!(
-                        bin = %self.bin.display(),
-                        error = %e,
-                        "claude agents --json --all 失败，历史清单按空处理"
-                    );
-                    Some(Vec::new())
-                }
+        let all_list = match all_res {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    bin = %self.bin.display(),
+                    error = %e,
+                    "claude agents --json --all 失败，历史清单按空处理"
+                );
+                Some(Vec::new())
             }
-        } else {
-            None
         };
         let alive_ids: std::collections::HashSet<String> =
             active_list.iter().map(|c| c.id.clone()).collect();
@@ -185,10 +189,16 @@ impl ClaudeDriver {
                 None => None,
             };
             // done ≠ 退出：活 daemon 的 done（TUI 停在提示符等输入）→ Idle 组照常
-            // 显示；daemon 已死（--all 独有）的 done/exited → Completed（历史）。
-            let group = match c.state.as_deref() {
-                Some("done") if alive => crate::models::Group::Other,
-                _ => crate::models::map_group(c.state.as_deref().unwrap_or("")),
+            // 显示（2026-10-02 反例锚，勿动）；daemon 已死（缺省清单缺席）→
+            // Completed 桶（#60 对齐 CLI 2.1.314 全量库存视图，raw state 不论——
+            // 崩溃残留的 working 态同桶；空 id 的 interactive 条目不属 daemon 死活判据）
+            let group = if !c.id.is_empty() && !alive {
+                crate::models::Group::Completed
+            } else {
+                match c.state.as_deref() {
+                    Some("done") if alive => crate::models::Group::Other,
+                    _ => crate::models::map_group(c.state.as_deref().unwrap_or("")),
+                }
             };
             // R7 会话粘连修复：interactive 前台会话（用户终端手跑）无 daemon id，
             // 空 id 透传会在前端选中键上塌陷（多条同键恒同选中）。合成稳定 id
@@ -218,12 +228,8 @@ impl ClaudeDriver {
             });
         }
         self.apply_interrupt_overrides(&mut out).await;
-        // Done 不进默认侧栏（2026-10-02 全驱动展示纪律）：仅「daemon 已死」的
-        // Completed（--all 独有条目）被过滤——活 done 已映射 Other 不受影响。
-        // all=true（历史面板 opt-in）保留全量。
-        if !all {
-            out.retain(|a| a.group != crate::models::Group::Completed);
-        }
+        // #60 completed-group：旧「Completed 不进默认侧栏」retain 过滤废除（对齐
+        // CLI 2.1.314 全量库存视图）；all=true（历史面板 opt-in）语义不变。
         Ok(out)
     }
 
@@ -514,26 +520,20 @@ impl AgentCatalog for ClaudeDriver {
     }
 
     fn stop<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
-        let mcp_dir = self.plugin_mcp_dir.clone();
         let id = id.to_string();
         let bin = self.bin.clone();
-        let injected = self
-            .mcp_config_paths
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
         Box::pin(async move {
             let r = cli::stop(&bin, &id).await;
             // B4 hooks 观察档：进程退出/移除族——stop 成功即会话关闭
             if r.is_ok() {
                 crate::plugins::hooks::dispatch_session_closed(&id, "claude", Some("stopped"));
             }
-            // F-6：优先按映射回收实际注入文件（占位名 hub-<uuid>.json）；
-            // remove_config_sync 兜底（`<id>.json` 命名约定，映射缺失时唯一线索）
-            if let Some(p) = injected {
-                let _ = std::fs::remove_file(p);
-            }
-            crate::plugins::mcp_config::remove_config_sync(&mcp_dir, &id);
+            // #60 completed-group：stop 不回收 plugin MCP 配置（原 F-6 回收废除）
+            // ——daemon 注册表仍存该会话 flags（--mcp-config=该文件），respawn
+            // 复活链按原路径重启；stop 即删会让复活 init 即崩（Invalid MCP
+            // configuration → send 恒 400，tester 轮次 1 证据闭环）。回收点移至
+            // remove（注册表条目消失，文件再无引用者；映射保留供 remove 定位
+            // hub-<uuid>.json 实际文件名）。
             r
         })
     }

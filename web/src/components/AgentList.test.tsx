@@ -206,6 +206,11 @@ describe('AgentList Sidebar-v2', () => {
     for (const g of ['needs_input', 'working', 'completed'] as const) {
       expect(container.querySelector(`.agent-dot--${g}`)).not.toBeNull();
     }
+    // #60 completed-group：完成组行置灰（agent-row--muted）
+    const doneGroup = [...container.querySelectorAll('.agent-group')].find((grp) =>
+      grp.querySelector('.agent-group-head')?.textContent?.includes('已完成'),
+    );
+    expect(doneGroup?.querySelector('.agent-row-wrap')?.className).toContain('agent-row--muted');
     // 圆点在名字之前（行内首个元素）
     const row = container.querySelector('.agent-row');
     expect(row?.firstElementChild?.className).toContain('agent-dot');

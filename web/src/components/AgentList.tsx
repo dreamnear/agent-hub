@@ -417,7 +417,8 @@ export default function AgentList({
                         nodeSuffix={
                           multiNode && agent.driver !== 'pi' ? instNameOf(agent) : undefined
                         }
-                        muted={isOfflineInst(agent)}
+                        // 置灰两态：离线实例行 + 已完成组行（#60，历史库存弱呈现）
+                        muted={isOfflineInst(agent) || agent.group === 'completed'}
                       />
                     ))
                   : null}
