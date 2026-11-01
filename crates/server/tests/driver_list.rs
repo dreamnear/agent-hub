@@ -43,15 +43,17 @@ async fn merges_jobs_detail_and_tokens() {
     .unwrap();
 
     let driver = driver(fake_bin(), dir.path().to_path_buf());
-    // 默认清单（all=false）：daemon 已死的 Completed 不进侧栏（2026-10-02 展示
-    // 纪律）；done ≠ 退出——活 done 会话映射 Other 照常显示（误判修复回归锚点）
+    // 默认清单（all=false）#60 completed-group 新契约：daemon 已死条目在列且落
+    // Completed 桶（对齐 CLI 2.1.314 全量库存）；done ≠ 退出——活 done 会话
+    // 映射 Other 照常显示（误判修复回归锚点，勿动）
     let list = driver.list(false).await.unwrap();
+    assert_eq!(list.len(), 5, "默认面全量 5 条（daemon 已死的 exited 在列）");
+    let dead = list.iter().find(|a| a.id == "c9d0e1f2").unwrap();
     assert_eq!(
-        list.len(),
-        4,
-        "活跃清单 4 条（exited 不列，done+活 daemon 在列）"
+        dead.group,
+        Group::Completed,
+        "daemon 已死 → Completed 桶（默认面不再过滤）"
     );
-    assert!(list.iter().all(|a| a.group != Group::Completed));
     let done_alive = list.iter().find(|a| a.id == "f0a1b2c3").unwrap();
     assert_eq!(
         done_alive.group,
@@ -67,15 +69,12 @@ async fn merges_jobs_detail_and_tokens() {
     assert_eq!(a.tokens, Some(999));
     assert_eq!(a.name.as_deref(), Some("refactor-auth"), "CLI 优先于 jobs");
 
-    // all=true（历史面板 opt-in）：保留全量；--all 独有的 exited 条目才是 Completed
+    // all=true（历史面板）：全量口径不变；#60 起与缺省面内容一致（daemon 已死
+    // 条目两面同落 Completed）
     let all = driver.list(true).await.unwrap();
     assert_eq!(all.len(), 5);
     let dead = all.iter().find(|a| a.id == "c9d0e1f2").unwrap();
-    assert_eq!(
-        dead.group,
-        Group::Completed,
-        "--all 独有（daemon 已死）→ 历史口径"
-    );
+    assert_eq!(dead.group, Group::Completed, "历史口径同样落 Completed 桶");
 }
 
 #[tokio::test]
@@ -112,13 +111,12 @@ async fn interrupt_mark_overrides_group_and_relieves_by_state_change() {
 
     // 解除路径 1：state 真实离开工作态（c9d0e1f2 = exited，即不在覆盖集）→
     // 打标无意义，list 不覆盖且标记被清除（解除判据第一分支）。
-    // list(true)：exited 条目默认清单已过滤（Done 不进侧栏），解除判据在
-    // 全量口径上验证——过滤发生在 apply_interrupt_overrides 之后不冲突。
+    // #60 起 exited 条目随默认面在列（Completed 桶），解除判据直接在缺省口径验证。
     d.interrupted_at
         .lock()
         .unwrap()
         .insert("c9d0e1f2".into(), std::time::SystemTime::now());
-    let list = d.list(true).await.unwrap();
+    let list = d.list(false).await.unwrap();
     let c = list.iter().find(|a| a.id == "c9d0e1f2").unwrap();
     assert_eq!(c.group, Group::Completed, "非工作态不覆盖");
     assert!(
