@@ -4,6 +4,26 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.5] - 2026-11-01
+
+本批：侧栏「已完成」折叠组（#60）——对齐 CLI 2.1.314 的 agents 全量库存视图。
+
+### Added — 已完成折叠组（#60）
+
+- 侧栏新增第四组「已完成」：**默认收起**、行置灰、组头计数；承载 daemon 已死会话（集合 = `claude agents --all` 死库存），CLI 2.1.314 全量视图对齐
+- 点开已完成会话 → 发送即走既有 respawn 链复活归位「工作中」；⌘K 同样可见可选
+- 不变式保持：活 done（daemon 活、停在提示符）仍在「空闲」组（done≠退出，2026-10-02 规则不动）；等待/工作中/空闲三组与工程过滤语义不变
+
+### Fixed — respawn 断链根修（测试轮暴露的存量缺陷）
+
+- hub stop() 曾回收会话级插件 MCP 配置，之后 respawn 传 `--mcp-config` 指向已删文件 → daemon `MCP config file not found` 启动即崩 → send 恒 400
+- 修复：回收点 stop → remove（会话仍可能复活时保留配置），+1 生命周期锚单测（`stop_keeps_mcp_config_for_respawn_remove_reclaims`）
+
+### 工单索引
+
+- 本批：#60；列后续：pi 助手 list sessions 工具描述同步（MINOR，下批顺带）
+- 门禁：cargo 642/0 · vitest 680/680 · tsc 干净 · bundle gz 235,853B ≤300KB
+
 ## [0.9.4] - 2026-10-30
 
 本批：首发失败残留清理（#57）。
