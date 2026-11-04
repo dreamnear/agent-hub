@@ -416,7 +416,7 @@ impl Registry {
     /// 发现记录清理登记（B4 FAIL-2 回修）：卸载 + purge 后记录 (id, hash)，
     /// scanner 据此跳过同目录的重发现/重审计。同 id 只保留最新一条。
     pub fn dismiss_discovery(&self, id: &str, content_hash: &str) {
-        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let persisted = self.load_persisted_locked(&guard);
         let mut dismissed: Vec<DismissedEntry> = persisted
             .dismissed
@@ -432,7 +432,7 @@ impl Registry {
 
     /// 安装后解除清理登记（同 id 全部条目）。
     pub fn undismiss_discovery(&self, id: &str) {
-        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let persisted = self.load_persisted_locked(&guard);
         if persisted.dismissed.iter().any(|d| d.id == id) {
             let dismissed = persisted
@@ -500,7 +500,7 @@ impl Registry {
                 .filter(|p| !p.entry.source.is_transient())
                 .map(|p| p.entry.clone())
                 .collect(),
-            dismissed: self.load_persisted_locked(&map).dismissed,
+            dismissed: self.load_persisted_locked(map).dismissed,
         };
         let raw = serde_json::to_string_pretty(&persisted)?;
         let tmp = self.file.with_extension("json.tmp");

@@ -889,7 +889,7 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         check_relative_path(&d.icon, &field("icon"), &mut errors);
         // 色彩：空 = 无色装饰（合法）；成对值或 "$token:--c-*" 引用
         if let Some(c) = &d.color {
-            let blocked_colors = ["red", "blue", "green", "black", "white"];
+            let _blocked_colors = ["red", "blue", "green", "black", "white"];
             // 取值形态分三档：1) "$token:" 前缀→ token 白名单；2) 对象 {light,dark}→ 3:1 校验；3) 裸字符串 hex→ 3:1
             let builtins = crate::plugins::theme_tokens::builtin_tokens();
             if let Some(s) = c.as_str() {
@@ -1402,7 +1402,7 @@ mod tests {
         let raw = with_renderers(
             r#"[{"id":"plug_demo-plugin_pu","match":{"ext":["puml"]},"engine":"plantuml-server","config":{"service":"plantuml_base"}}]"#,
         );
-        let p = parse(&raw).expect("valid service config ref");
+        let _p = parse(&raw).expect("valid service config ref");
     }
 
     #[test]

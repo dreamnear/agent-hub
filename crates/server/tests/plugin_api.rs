@@ -875,7 +875,7 @@ async fn credential_can_be_set_and_cleared_from_management_api() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body.contains("configured"), true);
+    assert!(body.contains("configured"));
     assert!(!body.contains(secret), "响应不得回显凭据值：{body}");
 
     // 状态翻转 + 文件落盘 0600 + 值可读回（仅测试侧直读，非 API 通道）
@@ -961,7 +961,7 @@ async fn credential_can_be_set_and_cleared_from_management_api() {
 #[tokio::test]
 async fn projects_effective_unions_registry_and_agent_cwds() {
     let dir = tempfile::tempdir().unwrap();
-    let mut cfg = cfg_with(&dir);
+    let cfg = cfg_with(&dir);
     // 工程注册表两项
     std::fs::write(
         dir.path().join("projects.json"),
@@ -1054,7 +1054,7 @@ async fn projects_effective_unions_registry_and_agent_cwds() {
         .iter()
         .find(|i| i["id"] == "no-perm-plugin")
         .unwrap();
-    let (status, body, _) = req(
+    let (status, _body, _) = req(
         a.clone(),
         "POST",
         "/api/plugins/install",
@@ -1106,7 +1106,7 @@ async fn startup_keeps_disabled_entry_disabled_even_when_dir_missing() {
     state2.plugins.startup().await;
     let list = state2.plugins.list();
     assert_eq!(list.len(), 1, "停用条目保留注册记录");
-    assert_eq!(list[0].enabled, false, "enabled 位不得被启动装载翻转");
+    assert!(!list[0].enabled, "enabled 位不得被启动装载翻转");
     assert_eq!(
         list[0].ui_state, "disabled",
         "停用 + 目录缺失重启后仍是停用态"
@@ -1266,7 +1266,7 @@ async fn update_flow_stages_diff_apply_and_keep_old() {
     assert_eq!(status, StatusCode::OK, "{keep_text}");
     let view = &state.plugins.list()[0];
     assert_eq!(view.version, "0.2.0", "保持旧版：版本不变");
-    let (status, records, _) = req(
+    let (_status, records, _) = req(
         a.clone(),
         "GET",
         "/api/plugins/demo-plugin/records?limit=10",

@@ -267,6 +267,7 @@ pub struct ThemeTokenEntryView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(non_snake_case)] // matchExt 为 serde camelCase 契约字段（fileDecorations matchExt），重命名会破坏 API
 pub struct FileDecorationView {
     pub id: String,
     pub matchExt: Vec<String>,
@@ -2410,7 +2411,7 @@ fn prune_versions(paths: &PluginPaths, id: &str, keep: usize) {
     if entries.len() <= keep {
         return;
     }
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
     for (path, _) in entries.into_iter().skip(keep) {
         let _ = std::fs::remove_dir_all(path);
     }

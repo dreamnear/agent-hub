@@ -929,7 +929,7 @@ mod tests {
     /// 透传）；停用/故障插件零条目（BR-03 同现同隐）；name = command id。
     #[test]
     fn plugin_commands_extract_from_enabled_only() {
-        use crate::plugins::manifest::{parse, CommandDecl, CommandTarget};
+        use crate::plugins::manifest::parse;
         use crate::plugins::registry::{PluginEntry, PluginSource, PluginState};
         let raw = serde_json::json!({
             "schemaVersion": 1, "id": "cmd-p", "name": "CmdP", "version": "0.1.0",
