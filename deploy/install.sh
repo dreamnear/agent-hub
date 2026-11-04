@@ -190,6 +190,13 @@ install_binary() {
 install_binary
 
 # ---------- 数据目录（不覆盖已有 token）----------
+# #72 品牌迁移：存量远端 upgrade 时旧目录先迁（与 server 首启自迁同源逻辑）——
+# 此处若先 mkdir 预建空目标，server 迁移判「新已存在」幂等跳过 → 旧数据隐身、
+# 静默空目录起（第一红线）。
+if [ -d "$HOME/.claude-view" ] && [ ! -e "$HOME/.agent-hub" ]; then
+  echo "✓ 迁移旧数据目录 ~/.claude-view → ~/.agent-hub"
+  mv "$HOME/.claude-view" "$HOME/.agent-hub"
+fi
 mkdir -p "$HOME/.agent-hub"
 if [ -f "$HOME/.agent-hub/token" ]; then
   echo "✓ 已有 token 保留未动：$HOME/.agent-hub/token"

@@ -54,7 +54,15 @@ pub fn migrate_legacy_data_dir() -> anyhow::Result<bool> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let legacy = PathBuf::from(format!("{home}/.claude-view"));
     let target = PathBuf::from(format!("{home}/.agent-hub"));
-    if !legacy.exists() || target.exists() {
+    // 非空目标 = 已有数据/已迁移 → 幂等跳过；空目标（install.sh/mkdir 预建竞态）
+    // 与不存在同处理——rename 替换空目录（POSIX），绝不让预建导致旧数据隐身
+    if !legacy.exists()
+        || (target.exists()
+            && target
+                .read_dir()
+                .map(|mut it| it.next().is_some())
+                .unwrap_or(true))
+    {
         return Ok(false);
     }
     fs::rename(&legacy, &target).with_context(|| {

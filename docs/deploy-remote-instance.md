@@ -60,6 +60,10 @@ sudo cp agent-hub-server.service /etc/systemd/system/     # 先改 User= 与 AGE
 sudo systemctl daemon-reload && sudo systemctl enable --now agent-hub-server
 ```
 
+> 存量远端升级（曾用旧版 claude-view-server）：先 `sudo systemctl disable --now claude-view-server`
+> 移除旧单元，再按本页安装——install.sh 会迁移旧数据目录（~/.claude-view → ~/.agent-hub）
+> 并注册新单元名 agent-hub-server.service。
+
 单元文件 `deploy/agent-hub-server.service`：`User=` 必须是已 `claude` 登录的用户；
 `AGENT_HUB_TOKEN=` 填强随机串（`openssl rand -hex 32`），留 `CHANGE_ME` 则首启自生成并
 持久化到 `~/.agent-hub/token`。验证：`systemctl status agent-hub-server` +

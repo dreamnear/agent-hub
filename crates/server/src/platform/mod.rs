@@ -83,14 +83,18 @@ pub fn migrate_legacy_data_dir() -> io::Result<bool> {
     if !legacy.exists() {
         return Ok(false);
     }
-    if target.exists() {
+    if target.exists() && !is_empty_dir(&target) {
+        // 非空目标 = 已有新目录数据/已迁移完成 → 幂等跳过，旧目录原样保留
         tracing::debug!(
             legacy = %legacy.display(),
             target = %target.display(),
-            "legacy data dir present but target exists; skip migration (idempotent)"
+            "legacy data dir present but target has data; skip migration (idempotent)"
         );
         return Ok(false);
     }
+    // target 不存在、或存在但为空（install.sh mkdir/手工 mkdir 预建竞态——若照样
+    // 跳过会让旧数据隐身、静默空目录起，红线）→ rename 替换（POSIX：新=空目录
+    // 可被目录 rename 替换）。
     std::fs::rename(&legacy, &target)?;
     tracing::info!(
         from = %legacy.display(),
@@ -98,6 +102,14 @@ pub fn migrate_legacy_data_dir() -> io::Result<bool> {
         "migrated legacy data dir to agent-hub (atomic rename)"
     );
     Ok(true)
+}
+
+/// 目录存在且为空（read_dir 首项为 None；读失败按非空保守处理——宁可跳过不误迁）。
+fn is_empty_dir(p: &Path) -> bool {
+    match p.read_dir() {
+        Ok(mut it) => it.next().is_none(),
+        Err(_) => false,
+    }
 }
 
 /// 敏感文件写后强制 0600（结果忽略——与收敛前 dsh/serve persist 同语义）。
@@ -271,10 +283,27 @@ mod tests {
         // 二次：幂等（新已在、旧已不在）
         assert!(!migrate_legacy_data_dir().unwrap(), "二次启动不重复迁移");
 
-        // 双目录并存（用户已在新目录手工建过）→ 跳过且旧目录原样保留
+        // #72 reviewer BLOCKER #2 回归锚：新目录存在但为空（install.sh/mkdir 预建
+        // 竞态）→ 不得跳过——rename 替换空目录，旧数据必须迁移，否则静默空目录起
+        std::fs::remove_dir_all(fake_home.join(DATA_DIR_NAME)).unwrap(); // 清掉首迁结果
         std::fs::create_dir_all(fake_home.join(LEGACY_DATA_DIR_NAME)).unwrap();
         std::fs::write(fake_home.join(LEGACY_DATA_DIR_NAME).join("x"), "y").unwrap();
-        assert!(!migrate_legacy_data_dir().unwrap(), "新已存在应跳过");
+        std::fs::create_dir_all(fake_home.join(DATA_DIR_NAME)).unwrap(); // 空目标
+        assert!(
+            migrate_legacy_data_dir().unwrap(),
+            "空目标必须被迁移替换（预建竞态不跳过）"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fake_home.join(DATA_DIR_NAME).join("x")).unwrap(),
+            "y",
+            "空目标替换后旧数据在位"
+        );
+
+        // 双目录并存（新目录已有真实数据）→ 跳过且旧目录原样保留
+        std::fs::create_dir_all(fake_home.join(LEGACY_DATA_DIR_NAME)).unwrap();
+        std::fs::write(fake_home.join(LEGACY_DATA_DIR_NAME).join("x"), "y").unwrap();
+        std::fs::write(fake_home.join(DATA_DIR_NAME).join("real"), "z").unwrap();
+        assert!(!migrate_legacy_data_dir().unwrap(), "非空新目录应跳过");
         assert!(
             fake_home.join(LEGACY_DATA_DIR_NAME).join("x").exists(),
             "跳过时旧目录不动"
