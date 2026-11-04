@@ -31,7 +31,7 @@ backend 经 stdio JSON-RPC notification（`hook/<钩子名>`，无 id 不等待�
 ## 使用
 
 ```sh
-cp -r plugins/templates/hook-observer ~/.claude-view/plugins/my-observer
+cp -r plugins/templates/hook-observer ~/.agent-hub/plugins/my-observer
 # 改 plugin.json 的 id/name（id 须 2–40 字符 kebab-slug）
 # 重启 hub 或管理页「扫描」→ 新发现 · 待确认 → 安装
 ```

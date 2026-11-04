@@ -53,11 +53,11 @@ cargo run --release
 | `CLAUDE_BIN` | `claude` |
 | `JOBS_DIR` | `~/.claude/jobs` |
 | `POLL_SECS` | `10` |
-| `PROJECTS_FILE` | `~/.claude-view/projects.json` |
+| `PROJECTS_FILE` | `~/.agent-hub/projects.json` |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude` |
 | `AGENT_HUB_ALLOW_LAN` | 未设（仅 localhost 免认证；设 `1`/`true` 监听 `0.0.0.0` 并强制 token） |
-| `AGENT_HUB_TOKEN` | 未设（allow_lan 时首启随机生成并持久化到 `~/.claude-view/token`） |
-| `AGENT_HUB_TOKEN_FILE` | `~/.claude-view/token` |
+| `AGENT_HUB_TOKEN` | 未设（allow_lan 时首启随机生成并持久化到 `~/.agent-hub/token`） |
+| `AGENT_HUB_TOKEN_FILE` | `~/.agent-hub/token` |
 
 **局域网访问**：`AGENT_HUB_ALLOW_LAN=1` 启动后，手机（同 WiFi）打开 `http://<本机IP>:7800`，输入 token（本机访问 `/api/auth/token` 可查，页面内可生成二维码扫码携带 token 直接进入）。localhost 始终免认证。
 

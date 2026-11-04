@@ -698,7 +698,7 @@ describe('ChatTab paste/drop image (r71)', () => {
     silenceApi();
     const upload = vi
       .spyOn(api, 'uploadImage')
-      .mockResolvedValue({ path: '/tmp/claude-view-uploads/a.png' });
+      .mockResolvedValue({ path: '/tmp/agent-hub-uploads/a.png' });
     const { container, textarea } = renderInput();
     fireDataEvent(textarea, 'paste', {
       items: [
@@ -715,7 +715,7 @@ describe('ChatTab paste/drop image (r71)', () => {
     silenceApi();
     const upload = vi
       .spyOn(api, 'uploadImage')
-      .mockResolvedValue({ path: '/tmp/claude-view-uploads/b.png' });
+      .mockResolvedValue({ path: '/tmp/agent-hub-uploads/b.png' });
     const { container, form } = renderInput();
     fireDataEvent(form, 'drop', { files: [makePng(), new File(['x'], 'note.txt', { type: 'text/plain' })] });
     await waitFor(() => expect(container.querySelector('.image-chip')).not.toBeNull());
@@ -724,7 +724,7 @@ describe('ChatTab paste/drop image (r71)', () => {
 
   it('sends @path references at message tail after the draft text', async () => {
     silenceApi();
-    vi.spyOn(api, 'uploadImage').mockResolvedValue({ path: '/tmp/claude-view-uploads/c.png' });
+    vi.spyOn(api, 'uploadImage').mockResolvedValue({ path: '/tmp/agent-hub-uploads/c.png' });
     const sendMessage = vi.spyOn(api, 'sendMessage').mockResolvedValue();
     const { textarea, form } = renderInput();
     fireDataEvent(textarea, 'paste', {
@@ -737,7 +737,7 @@ describe('ChatTab paste/drop image (r71)', () => {
     // r71 实测格式：正文在前，@绝对路径 引用在尾（CLI 自动 attach 图片）
     expect(sendMessage).toHaveBeenCalledWith(
       agent.id,
-      '看这张图\n@/tmp/claude-view-uploads/c.png',
+      '看这张图\n@/tmp/agent-hub-uploads/c.png',
       'claude',
     );
   });

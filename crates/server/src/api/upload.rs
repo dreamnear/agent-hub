@@ -26,10 +26,121 @@ const ALLOWED_EXT: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 
 /// 上传根目录（上传与受限读取共用同一落盘位置）
 fn upload_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join("claude-view-uploads")
+    std::env::temp_dir().join("agent-hub-uploads")
 }
 
-/// POST /api/upload → { "path": "/tmp/claude-view-uploads/<uuid>.<ext>" }
+/// 历史 uploads 目录并入（#72 验收 2 后半）：旧 `claude-view-uploads` 的图必须仍可
+/// 经 `/api/images/{filename}` 取到（历史转录里的旧引用由 image.ts 双正则映射到
+/// 该端点，只按文件名取数）。主路径 = 新目录不存在时整体 rename（同卷原子）；
+/// 双目录并存（新版本已写过新目录且旧目录残留历史图）→ 逐文件复制缺失项
+/// （uuid 文件名，碰撞近零仍做存在性跳过）。旧目录不删（已无写入方）。
+/// 失败 WARN 不阻塞启动：缺图=前端回退 pill，非数据零丢失红线级（文件仍在旧目录）。
+/// 启动期调用一次（main.rs，先于 bind）；幂等。
+pub fn migrate_legacy_uploads() {
+    migrate_legacy_uploads_in(&std::env::temp_dir());
+}
+
+/// 目录参数化主体（单测无 env 变异，见 api_upload 集成测同款隔离纪律）。
+fn migrate_legacy_uploads_in(temp: &std::path::Path) {
+    let target = temp.join("agent-hub-uploads");
+    let legacy = temp.join("claude-view-uploads");
+    if !legacy.exists() {
+        return;
+    }
+    if !target.exists() {
+        match std::fs::rename(&legacy, &target) {
+            Ok(()) => tracing::info!(
+                from = %legacy.display(),
+                to = %target.display(),
+                "migrated legacy uploads dir (atomic rename)"
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "legacy uploads dir rename failed; historical images may 404")
+            }
+        }
+        return;
+    }
+    let mut copied = 0u32;
+    let Ok(entries) = std::fs::read_dir(&legacy) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let from = entry.path();
+        if !from.is_file() {
+            continue;
+        }
+        let to = target.join(entry.file_name());
+        if to.exists() {
+            continue;
+        }
+        match std::fs::copy(&from, &to) {
+            Ok(_) => copied += 1,
+            Err(e) => {
+                tracing::warn!(error = %e, file = %from.display(), "legacy upload copy skipped")
+            }
+        }
+    }
+    if copied > 0 {
+        tracing::info!(
+            from = %legacy.display(),
+            to = %target.display(),
+            copied,
+            "merged legacy uploads into new dir"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_legacy_uploads_in;
+
+    /// #72 验收 2 后半回归锚（tester 轮次 1 FAIL）：旧 uploads 目录必须并进新目录
+    /// ——历史转录旧引用按文件名经 /api/images/{filename} 取数，字节必须在目标目录。
+    #[test]
+    fn legacy_uploads_merge_into_new_dir_three_states() {
+        let dir = tempfile::tempdir().unwrap();
+        // ① 只有旧目录 → 整体 rename
+        std::fs::create_dir_all(dir.path().join("claude-view-uploads")).unwrap();
+        std::fs::write(dir.path().join("claude-view-uploads/old-1.png"), b"img1").unwrap();
+        migrate_legacy_uploads_in(dir.path());
+        assert!(
+            !dir.path().join("claude-view-uploads").exists(),
+            "旧目录已并入"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("agent-hub-uploads/old-1.png")).unwrap(),
+            b"img1",
+            "历史图字节可达（验收 2 后半）"
+        );
+        // ② 双目录并存 → 复制缺失文件，既有文件不动
+        std::fs::create_dir_all(dir.path().join("claude-view-uploads")).unwrap();
+        std::fs::write(dir.path().join("claude-view-uploads/old-2.png"), b"img2").unwrap();
+        std::fs::write(dir.path().join("agent-hub-uploads/new-1.png"), b"new1").unwrap();
+        migrate_legacy_uploads_in(dir.path());
+        assert_eq!(
+            std::fs::read(dir.path().join("agent-hub-uploads/old-2.png")).unwrap(),
+            b"img2",
+            "并存态旧图复制进新目录"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("agent-hub-uploads/new-1.png")).unwrap(),
+            b"new1",
+            "既有新图不被覆盖"
+        );
+        // ③ 再次调用幂等（目标已在 → 不重复搬移、内容不动）
+        migrate_legacy_uploads_in(dir.path());
+        assert_eq!(
+            std::fs::read(dir.path().join("agent-hub-uploads/old-1.png")).unwrap(),
+            b"img1"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("agent-hub-uploads/old-2.png")).unwrap(),
+            b"img2"
+        );
+    }
+}
+
+/// POST /api/upload → { "path": "/tmp/agent-hub-uploads/<uuid>.<ext>" }
 pub async fn upload(
     State(_state): State<SharedState>,
     Json(body): Json<UploadBody>,

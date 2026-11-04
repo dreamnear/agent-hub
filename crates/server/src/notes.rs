@@ -1,5 +1,5 @@
 //! 工程便签持久化（agent-hub-notes）：归一化 cwd → Markdown 内容的 JSON 映射。
-//! 文件 `~/.claude-view/notes.json`（env `NOTES_FILE` 覆盖，惯例同 projects.json）；
+//! 文件 `~/.agent-hub/notes.json`（env `NOTES_FILE` 覆盖，惯例同 projects.json）；
 //! 权限强制 0600——内容可能含服务端口、测试账密。内容不进任何日志/tracing。
 
 use std::collections::HashMap;

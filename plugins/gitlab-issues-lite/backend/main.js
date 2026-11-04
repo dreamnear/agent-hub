@@ -131,7 +131,7 @@ function callHub(method, params, timeoutMs = 15000) {
 async function getGitlabPat() {
   const res = await callHub('hub.credentials.use', { name: 'gitlab_pat' });
   if (!res || typeof res.value !== 'string' || res.value === '') {
-    throw new Error('credential-unconfigured: gitlab_pat 值为空（在 ~/.claude-view/plugin_credentials.json 配置）');
+    throw new Error('credential-unconfigured: gitlab_pat 值为空（在 ~/.agent-hub/plugin_credentials.json 配置）');
   }
   return res.value;
 }

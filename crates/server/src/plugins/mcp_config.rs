@@ -2,7 +2,7 @@
 //!
 //! 不写用户 `~/.claude`（`--mcp-config` 为单次调用级开关，纯加法；
 //! `--strict-mcp-config` 不使用——保持用户自有 MCP 不受影响）。
-//! 文件落 `~/.claude-view/plugin_mcp/<session>.json`（Config::plugin_mcp_dir，
+//! 文件落 `~/.agent-hub/plugin_mcp/<session>.json`（Config::plugin_mcp_dir，
 //! env `AGENT_HUB_PLUGIN_MCP_DIR` 覆盖），每会话一文件；会话结束由驱动层回收。
 
 use std::path::{Path, PathBuf};

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-view server 一键安装（只装服务端二进制，不装桌面壳 / tauri 任何产物）
+# agent-hub server 一键安装（只装服务端二进制，不装桌面壳 / tauri 任何产物）
 #
 # 用法：
 #   ./install.sh                      # 装二进制到 /usr/local/bin（无权限回退 ~/.local/bin）
@@ -17,12 +17,12 @@
 # systemd 单元用 0600 EnvironmentFile 携带（配对成功即消费，后续可删该文件）。
 #
 # 二进制来源优先级：RELEASE_BASE_URL 下载 > 脚本同目录（或 ./dist/）的同名文件。
-# 命名：claude-view-server-{os}-{arch}，os ∈ linux|darwin，arch ∈ x86_64|aarch64。
+# 命名：agent-hub-server-{os}-{arch}，os ∈ linux|darwin，arch ∈ x86_64|aarch64。
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST_BIN_NAME="claude-view-server"
+DEST_BIN_NAME="agent-hub-server"
 
 WITH_SYSTEMD=0
 FORCE_PREFIX=""
@@ -111,7 +111,7 @@ detect_arch() {
 
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
-ASSET="claude-view-server-${OS}-${ARCH}"
+ASSET="agent-hub-server-${OS}-${ARCH}"
 
 # ---------- 取二进制 ----------
 # SRC 指向来源文件（同目录模式可能是用户产物本身，绝不能在退出时删——只清 DOWNLOAD_TMP）
@@ -149,7 +149,7 @@ fetch_binary() {
   已有产物可用时扩展 x86_64：在对应架构的机器上
   docker run --rm --platform linux/amd64 -v \"\$PWD\":/app -w /app -e CARGO_TARGET_DIR=/tmp/t \\
     rust:1-alpine sh -c 'cargo build -p server --release --locked &&
-      cp /tmp/t/x86_64-unknown-linux-musl/release/server dist/claude-view-server-linux-x86_64'"
+      cp /tmp/t/x86_64-unknown-linux-musl/release/server dist/agent-hub-server-linux-x86_64'"
 }
 
 fetch_binary
@@ -190,9 +190,16 @@ install_binary() {
 install_binary
 
 # ---------- 数据目录（不覆盖已有 token）----------
-mkdir -p "$HOME/.claude-view"
-if [ -f "$HOME/.claude-view/token" ]; then
-  echo "✓ 已有 token 保留未动：$HOME/.claude-view/token"
+# #72 品牌迁移：存量远端 upgrade 时旧目录先迁（与 server 首启自迁同源逻辑）——
+# 此处若先 mkdir 预建空目标，server 迁移判「新已存在」幂等跳过 → 旧数据隐身、
+# 静默空目录起（第一红线）。
+if [ -d "$HOME/.claude-view" ] && [ ! -e "$HOME/.agent-hub" ]; then
+  echo "✓ 迁移旧数据目录 ~/.claude-view → ~/.agent-hub"
+  mv "$HOME/.claude-view" "$HOME/.agent-hub"
+fi
+mkdir -p "$HOME/.agent-hub"
+if [ -f "$HOME/.agent-hub/token" ]; then
+  echo "✓ 已有 token 保留未动：$HOME/.agent-hub/token"
 fi
 
 # ---------- node 形态（gateway-node-p3 M1）----------
@@ -208,7 +215,7 @@ if [ "$NODE_MODE" = 1 ]; then
   esac
   # node.json 不预写：server 首启自建（UUIDv4 身份 + 0600，--gateway 随启动参数、
   # code 经 env 携带）——比脚本手拼 JSON 更稳，且身份生成单一事实源在 server。
-  if [ -f "$HOME/.claude-view/node.json" ]; then
+  if [ -f "$HOME/.agent-hub/node.json" ]; then
     echo "⚠ 已有 node.json：server 将保留既有身份（gateway/enroll 以本次启动为准）"
   fi
   if [ -n "$ENROLL_CODE" ]; then
@@ -225,7 +232,7 @@ if [ "$WITH_SYSTEMD" = 1 ]; then
     echo "⚠ --with-systemd 仅 Linux 生效，${OS} 请改用 launchd（见 docs/deploy-remote-instance.md）"
   else
     UNIT_SRC=""
-    for cand in "$SCRIPT_DIR/claude-view-server.service" "$SCRIPT_DIR/../deploy/claude-view-server.service"; do
+    for cand in "$SCRIPT_DIR/agent-hub-server.service" "$SCRIPT_DIR/../deploy/agent-hub-server.service"; do
       [ -f "$cand" ] && {
         UNIT_SRC="$cand"
         break
@@ -235,26 +242,26 @@ if [ "$WITH_SYSTEMD" = 1 ]; then
     if [ -z "$UNIT_SRC" ]; then
       # curl|bash 管道执行时脚本在内存里，永远没有"同目录单元文件"可找
       # （2026-09-28 E2E 实测：此前 --with-systemd 在管道模式下必死于找不到单元）。
-      # 回退到内置模板——与 deploy/claude-view-server.service 保持一致，改动须双改。
+      # 回退到内置模板——与 deploy/agent-hub-server.service 保持一致，改动须双改。
       UNIT_SRC="$(mktemp)"
       EMBEDDED_UNIT="$UNIT_SRC"
       cat >"$UNIT_SRC" <<'UNIT'
 # agent-hub server systemd 常驻单元（Linux arm64/aarch64 远程实例）
 [Unit]
-Description=agent-hub server (claude-view)
+Description=agent-hub server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# 按实际用户改：登录态（~/.claude）与数据目录（~/.claude-view）都归属该用户
+# 按实际用户改：登录态（~/.claude）与数据目录（~/.agent-hub）都归属该用户
 User=pi
 Environment=AGENT_HUB_ALLOW_LAN=1
-# 占位：替换为强随机串（openssl rand -hex 32）；或删除本行，由 server 首启自生成并持久化到 ~/.claude-view/token
+# 占位：替换为强随机串（openssl rand -hex 32）；或删除本行，由 server 首启自生成并持久化到 ~/.agent-hub/token
 Environment=AGENT_HUB_TOKEN=CHANGE_ME
 # 可选：监听地址（默认 0.0.0.0:7801 时无需设置；allow_lan=1 已强制 0.0.0.0）
 # Environment=AGENT_HUB_BIND=0.0.0.0:7801
-ExecStart=/usr/local/bin/claude-view-server
+ExecStart=/usr/local/bin/agent-hub-server
 Restart=always
 RestartSec=3
 
@@ -268,7 +275,7 @@ UNIT
     if [ -n "${AGENT_HUB_TOKEN:-}" ]; then
       TOKEN_LINE="Environment=AGENT_HUB_TOKEN=${AGENT_HUB_TOKEN}"
     else
-      TOKEN_LINE="# Environment=AGENT_HUB_TOKEN=CHANGE_ME  # 未预置：server 首启自生成到 ~/.claude-view/token"
+      TOKEN_LINE="# Environment=AGENT_HUB_TOKEN=CHANGE_ME  # 未预置：server 首启自生成到 ~/.agent-hub/token"
     fi
 
     UNIT_TMP="$(mktemp)"
@@ -279,10 +286,10 @@ UNIT
       sed -e "s|^User=.*|User=$(id -un)|" \
         -e "s|^ExecStart=.*|ExecStart=${DEST} --node --gateway ${GATEWAY_URL}|" \
         -e "/^Environment=AGENT_HUB_TOKEN=/d" \
-        -e "s|^Description=.*|Description=agent-hub node (claude-view → ${GATEWAY_URL})|" \
+        -e "s|^Description=.*|Description=agent-hub node (gateway → ${GATEWAY_URL})|" \
         "$UNIT_SRC" >"$UNIT_TMP"
       if [ -n "$ENROLL_CODE" ]; then
-        ENROLL_ENV_FILE="$HOME/.claude-view/enroll.env"
+        ENROLL_ENV_FILE="$HOME/.agent-hub/enroll.env"
         ( umask 077 && printf 'AGENT_HUB_ENROLL=%s\n' "$ENROLL_CODE" >"$ENROLL_ENV_FILE" )
         # 紧随 ExecStart 行插 EnvironmentFile（须落 [Service] 段内——尾部追加
         # 会掉进 [Install] 使单元加载失败）
@@ -304,20 +311,20 @@ UNIT
     fi
 
     if [ -w /etc/systemd/system ]; then
-      install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
+      install -m 644 "$UNIT_TMP" /etc/systemd/system/agent-hub-server.service
     else
-      $SUDO install -m 644 "$UNIT_TMP" /etc/systemd/system/claude-view-server.service
+      $SUDO install -m 644 "$UNIT_TMP" /etc/systemd/system/agent-hub-server.service
     fi
     rm -f "$UNIT_TMP"
-    echo "✓ 已安装 systemd 单元 /etc/systemd/system/claude-view-server.service"
+    echo "✓ 已安装 systemd 单元 /etc/systemd/system/agent-hub-server.service"
 
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
       $SUDO systemctl daemon-reload
-      $SUDO systemctl enable --now claude-view-server
-      echo "✓ 已 enable --now，查看状态：systemctl status claude-view-server"
+      $SUDO systemctl enable --now agent-hub-server
+      echo "✓ 已 enable --now，查看状态：systemctl status agent-hub-server"
     else
       echo "⚠ 未检测到运行中的 systemd，未启动。装完单元后手动："
-      echo "  sudo systemctl daemon-reload && sudo systemctl enable --now claude-view-server"
+      echo "  sudo systemctl daemon-reload && sudo systemctl enable --now agent-hub-server"
     fi
   fi
 fi
@@ -329,7 +336,7 @@ cat <<EOF
   1) 装 claude CLI 并以 $(id -un) 登录一次（server 依赖它 spawn 会话）：
        npm install -g @anthropic-ai/claude-code && claude
   2) token：显式设 AGENT_HUB_TOKEN=<强随机串>（openssl rand -hex 32）；
-     未设时 server 首启自动生成并持久化到 ~/.claude-view/token
+     未设时 server 首启自动生成并持久化到 ~/.agent-hub/token
   3) 启动（默认只听 127.0.0.1 安全回环；远程接入才需要放开）：
        ${DEST}                                   # loopback，免认证
        AGENT_HUB_ALLOW_LAN=1 AGENT_HUB_TOKEN=<强随机串> ${DEST}   # 监听 0.0.0.0 且强制 token 认证

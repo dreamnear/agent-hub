@@ -1,5 +1,5 @@
 //! 多实例配置模型 + 持久化（agent-hub-multi-instance 批1 任务2）。
-//! 文件 `~/.claude-view/instances.json`（env `INSTANCES_FILE` 覆盖，惯例同 notes.json）；
+//! 文件 `~/.agent-hub/instances.json`（env `INSTANCES_FILE` 覆盖，惯例同 notes.json）；
 //! 权限强制 0600——内容含远程实例 token 与 ssh 密码。token/密码不进任何日志/tracing，
 //! 但 **会经 GET /api/instances 下发给浏览器**——浏览器直连方案固有属性（信任域
 //! 同 hub token），tasks.md 风险已标注；联邦网关是升级路径（本期明确不做）。

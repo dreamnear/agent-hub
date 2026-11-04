@@ -1,6 +1,6 @@
 //! node 形态身份文件 + N6 传输红线（agent-hub-gateway-node-p1 任务 2）。
 //!
-//! - node.json（`~/.claude-view/node.json`，env `AGENT_HUB_NODE_FILE` 覆盖）：
+//! - node.json（`~/.agent-hub/node.json`，env `AGENT_HUB_NODE_FILE` 覆盖）：
 //!   {gatewayUrl, nodeId, nodeName, token, allowInsecure}，0600 原子落盘（含
 //!   node token——节点完全控制权凭据，同 instances.json 纪律）；nodeId 首启
 //!   UUIDv4 生成后不变。enroll code 是一次性凭据，**不落盘**（只随当次泵参数）。

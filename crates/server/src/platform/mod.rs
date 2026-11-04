@@ -66,6 +66,52 @@ pub fn home_dir_str() -> String {
     home_dir().to_string_lossy().into_owned()
 }
 
+// —— 品牌迁移（agent-hub-rebrand-migration #72）：数据目录一次性更名 ——
+
+/// 旧品牌数据目录名（迁移源常量——全仓 grep 白名单内唯一代码引用点，勿扩散）。
+pub const LEGACY_DATA_DIR_NAME: &str = ".claude-view";
+/// 现品牌数据目录名（config.rs 全部默认路径的同源口径）。
+pub const DATA_DIR_NAME: &str = ".agent-hub";
+
+/// 启动期一次性数据目录迁移：旧目录存在且新目录不存在 → 同卷原子 `fs::rename`
+/// （INFO 留痕）；新目录已存在 = 已迁移/用户已在新目录 → 幂等跳过（Debug 留痕）。
+/// 返回是否发生迁移。**失败上抛**——调用方必须中止启动：静默以空目录起 = 数据
+/// 隐身（token/任务/插件状态/凭据全部「消失」），数据零丢失第一红线。
+pub fn migrate_legacy_data_dir() -> io::Result<bool> {
+    let legacy = home_dir().join(LEGACY_DATA_DIR_NAME);
+    let target = home_dir().join(DATA_DIR_NAME);
+    if !legacy.exists() {
+        return Ok(false);
+    }
+    if target.exists() && !is_empty_dir(&target) {
+        // 非空目标 = 已有新目录数据/已迁移完成 → 幂等跳过，旧目录原样保留
+        tracing::debug!(
+            legacy = %legacy.display(),
+            target = %target.display(),
+            "legacy data dir present but target has data; skip migration (idempotent)"
+        );
+        return Ok(false);
+    }
+    // target 不存在、或存在但为空（install.sh mkdir/手工 mkdir 预建竞态——若照样
+    // 跳过会让旧数据隐身、静默空目录起，红线）→ rename 替换（POSIX：新=空目录
+    // 可被目录 rename 替换）。
+    std::fs::rename(&legacy, &target)?;
+    tracing::info!(
+        from = %legacy.display(),
+        to = %target.display(),
+        "migrated legacy data dir to agent-hub (atomic rename)"
+    );
+    Ok(true)
+}
+
+/// 目录存在且为空（read_dir 首项为 None；读失败按非空保守处理——宁可跳过不误迁）。
+fn is_empty_dir(p: &Path) -> bool {
+    match p.read_dir() {
+        Ok(mut it) => it.next().is_none(),
+        Err(_) => false,
+    }
+}
+
 /// 敏感文件写后强制 0600（结果忽略——与收敛前 dsh/serve persist 同语义）。
 pub fn harden_0600(path: &Path) {
     let _ = set_mode(path, 0o600);
@@ -198,6 +244,74 @@ mod tests {
     fn home_dir_resolves() {
         assert!(home_dir_opt().is_some());
         assert!(home_dir().is_dir());
+    }
+
+    /// #72 迁移三态：旧在/新不在 → rename 且内容原样；二次调用幂等；旧在新在 →
+    /// 跳过不动旧目录。HOME 打桩到 tempdir（SAFETY：单测进程内改 env，其余测试
+    /// 不读 HOME 默认路径——有此依赖的测试均显式 env 覆盖具体文件路径）。
+    #[test]
+    fn migrate_legacy_data_dir_renames_once_and_is_idempotent() {
+        let fake_home = std::env::temp_dir().join(format!(
+            "hub-migrate-home-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(fake_home.join(LEGACY_DATA_DIR_NAME).join("tasks")).unwrap();
+        std::fs::write(
+            fake_home.join(LEGACY_DATA_DIR_NAME).join("token"),
+            "probe-token",
+        )
+        .unwrap();
+        // SAFETY: 见上
+        unsafe { std::env::set_var("HOME", &fake_home) };
+
+        // 首次：迁移发生，内容原样（rename 不复制）
+        let migrated = migrate_legacy_data_dir().unwrap();
+        assert!(migrated, "旧在/新不在应发生迁移");
+        assert!(!fake_home.join(LEGACY_DATA_DIR_NAME).exists(), "旧目录不在");
+        let target = fake_home.join(DATA_DIR_NAME);
+        assert!(target.join("token").exists(), "token 随目录迁移");
+        assert!(target.join("tasks").is_dir(), "任务目录随目录迁移");
+        assert_eq!(
+            std::fs::read_to_string(target.join("token")).unwrap(),
+            "probe-token"
+        );
+
+        // 二次：幂等（新已在、旧已不在）
+        assert!(!migrate_legacy_data_dir().unwrap(), "二次启动不重复迁移");
+
+        // #72 reviewer BLOCKER #2 回归锚：新目录存在但为空（install.sh/mkdir 预建
+        // 竞态）→ 不得跳过——rename 替换空目录，旧数据必须迁移，否则静默空目录起
+        std::fs::remove_dir_all(fake_home.join(DATA_DIR_NAME)).unwrap(); // 清掉首迁结果
+        std::fs::create_dir_all(fake_home.join(LEGACY_DATA_DIR_NAME)).unwrap();
+        std::fs::write(fake_home.join(LEGACY_DATA_DIR_NAME).join("x"), "y").unwrap();
+        std::fs::create_dir_all(fake_home.join(DATA_DIR_NAME)).unwrap(); // 空目标
+        assert!(
+            migrate_legacy_data_dir().unwrap(),
+            "空目标必须被迁移替换（预建竞态不跳过）"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fake_home.join(DATA_DIR_NAME).join("x")).unwrap(),
+            "y",
+            "空目标替换后旧数据在位"
+        );
+
+        // 双目录并存（新目录已有真实数据）→ 跳过且旧目录原样保留
+        std::fs::create_dir_all(fake_home.join(LEGACY_DATA_DIR_NAME)).unwrap();
+        std::fs::write(fake_home.join(LEGACY_DATA_DIR_NAME).join("x"), "y").unwrap();
+        std::fs::write(fake_home.join(DATA_DIR_NAME).join("real"), "z").unwrap();
+        assert!(!migrate_legacy_data_dir().unwrap(), "非空新目录应跳过");
+        assert!(
+            fake_home.join(LEGACY_DATA_DIR_NAME).join("x").exists(),
+            "跳过时旧目录不动"
+        );
+
+        let _ = std::fs::remove_dir_all(&fake_home);
+        // SAFETY: 恢复进程 HOME，避免污染同进程后续测试
+        unsafe { std::env::remove_var("HOME") };
     }
 
     /// D2 默认 shell 解析（收敛自 api/terminal 原测）：$SHELL 优先且须绝对路径，

@@ -80,7 +80,7 @@ impl ClaudeDriver {
             ignored_interactive_file,
             rooms,
             PathBuf::from(format!(
-                "{}/.claude-view/plugin_mcp",
+                "{}/.agent-hub/plugin_mcp",
                 crate::platform::home_dir_str()
             )),
             std::env::current_exe().unwrap_or_else(|_| PathBuf::from("server")),

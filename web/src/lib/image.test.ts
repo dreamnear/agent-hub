@@ -100,6 +100,12 @@ describe('imageUrlOf', () => {
     expect(imageUrlOf(up)).toBe('/api/images/e54054b6-48fe-4a42.png');
   });
 
+  it('#72 新目录名 agent-hub-uploads 同解析（与旧名双兼容）', () => {
+    expect(imageUrlOf('/tmp/agent-hub-uploads/new-1.png')).toBe('/api/images/new-1.png');
+    const segs = splitImageRefs('看新目录图 @/tmp/agent-hub-uploads/new-2.webp');
+    expect(segs.find((s) => s.kind === 'image')?.path).toBe('/tmp/agent-hub-uploads/new-2.webp');
+  });
+
   it('非 uploads 路径/非图片扩展名 → null（渲染层回落 pill）', () => {
     expect(imageUrlOf('/tmp/foo.png')).toBeNull();
     expect(imageUrlOf('/x/claude-view-uploads/readme.md')).toBeNull();

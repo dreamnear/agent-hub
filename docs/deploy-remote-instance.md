@@ -10,7 +10,7 @@
    loopback，远程接不进来）。
 2. **token 强制**——allow_lan 下所有非 loopback 请求都要求 token；推荐
    `AGENT_HUB_TOKEN=<强随机串>` 显式设置。未显式设置时 server 首启会随机生成并
-   持久化到 `~/.claude-view/token`（不会裸奔，但接入前需读取该文件取值）。
+   持久化到 `~/.agent-hub/token`（不会裸奔，但接入前需读取该文件取值）。
 3. **传输加密**——direct 模式必须 https（frp 已带证书即满足）；或改用 ssh-tunnel
    模式（SSH 加密内建，无需证书）。
 
@@ -20,7 +20,7 @@
 AGENT_HUB_ALLOW_LAN=1 \
 AGENT_HUB_TOKEN=<REDACTED> \
 AGENT_HUB_BIND=0.0.0.0:7801 \
-~/.local/bin/claude-view-server   # 实际二进制路径按部署为准
+~/.local/bin/agent-hub-server   # 实际二进制路径按部署为准
 ```
 
 ## Linux arm64 二进制获取与常驻
@@ -36,37 +36,41 @@ claude CLI。产物 **musl 静态链接**，无 glibc 版本依赖，任何 Linu
 
 ```bash
 # 1) 把 install.sh + 对应架构二进制传到远程（产物在 dist/）
-scp deploy/install.sh dist/claude-view-server-linux-aarch64 user@remote:~/hub-install/
+scp deploy/install.sh dist/agent-hub-server-linux-aarch64 user@remote:~/hub-install/
 # 2) 远程执行（--with-systemd 顺带装单元并 enable --now）
 ssh user@remote 'cd ~/hub-install && ./install.sh --with-systemd'
 ```
 
-- **二进制来源**二选一：① 同目录放 `claude-view-server-{os}-{arch}`（脚本目录或
+- **二进制来源**二选一：① 同目录放 `agent-hub-server-{os}-{arch}`（脚本目录或
   `./dist/` 子目录都认）；② 设 `RELEASE_BASE_URL=<分发 URL 前缀>` 由脚本 `curl` 下载
   （无默认源，留待日后自建分发）。
-- **已产出**：`claude-view-server-linux-aarch64`（arm64 远程）、`claude-view-server-darwin-aarch64`
+- **已产出**：`agent-hub-server-linux-aarch64`（arm64 远程）、`agent-hub-server-darwin-aarch64`
   （本机）。**x86_64 尚未构建**——脚本会明确报「本机需要 …-linux-x86_64 但目录内没有该
   文件」，扩展方式见 b 节把 `--platform` 换成 `linux/amd64`。
 - **安全默认**：脚本不自动放开 LAN，只打印两档启动命令（loopback 免认证 / 显式
-  `AGENT_HUB_ALLOW_LAN=1` + token 由用户选）；已有 `~/.claude-view/token` 不覆盖，重复
+  `AGENT_HUB_ALLOW_LAN=1` + token 由用户选）；已有 `~/.agent-hub/token` 不覆盖，重复
   执行安全。
 - `--prefix DIR` 可自定义安装目录（自测/无 root 场景）。
 
 不想用脚本时，手动等价三行：
 
 ```bash
-sudo install -m755 claude-view-server-linux-aarch64 /usr/local/bin/claude-view-server
-sudo cp claude-view-server.service /etc/systemd/system/     # 先改 User= 与 AGENT_HUB_TOKEN=
-sudo systemctl daemon-reload && sudo systemctl enable --now claude-view-server
+sudo install -m755 agent-hub-server-linux-aarch64 /usr/local/bin/agent-hub-server
+sudo cp agent-hub-server.service /etc/systemd/system/     # 先改 User= 与 AGENT_HUB_TOKEN=
+sudo systemctl daemon-reload && sudo systemctl enable --now agent-hub-server
 ```
 
-单元文件 `deploy/claude-view-server.service`：`User=` 必须是已 `claude` 登录的用户；
+> 存量远端升级（曾用旧版 claude-view-server）：先 `sudo systemctl disable --now claude-view-server`
+> 移除旧单元，再按本页安装——install.sh 会迁移旧数据目录（~/.claude-view → ~/.agent-hub）
+> 并注册新单元名 agent-hub-server.service。
+
+单元文件 `deploy/agent-hub-server.service`：`User=` 必须是已 `claude` 登录的用户；
 `AGENT_HUB_TOKEN=` 填强随机串（`openssl rand -hex 32`），留 `CHANGE_ME` 则首启自生成并
-持久化到 `~/.claude-view/token`。验证：`systemctl status claude-view-server` +
+持久化到 `~/.agent-hub/token`。验证：`systemctl status agent-hub-server` +
 `curl http://127.0.0.1:7801/health`。
 
 **macOS 远程（场景少见）**：安装动作相同（装到 `/usr/local/bin` 或 `~/.local/bin`），
-但 `--with-systemd` 不生效——常驻走 launchd：把 `claude-view-server` 写成 LaunchAgent
+但 `--with-systemd` 不生效——常驻走 launchd：把 `agent-hub-server` 写成 LaunchAgent
 plist（`EnvironmentVariables` 设 `AGENT_HUB_*`、`RunAtLoad=true`、`KeepAlive=true`）
 后 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`。仓库暂无现成
 plist，需要时按此生成。
@@ -80,7 +84,7 @@ plist，需要时按此生成。
 docker run --rm --platform linux/arm64 -v "$PWD":/app -v /tmp/cv-arm64-target:/build/target \
   -w /app -e CARGO_TARGET_DIR=/build/target rust:1-alpine \
   sh -c 'cargo build -p server --release --locked &&
-         cp /build/target/release/server dist/claude-view-server-linux-aarch64'
+         cp /build/target/release/server dist/agent-hub-server-linux-aarch64'
 ```
 
 x86_64 换 `--platform linux/amd64`、输出名 `-linux-x86_64`。挂 `/tmp/cv-arm64-target`
@@ -95,7 +99,7 @@ gitignore，rust-embed 编译期需要它）：
 ```bash
 cd web && npm ci && npm run build && cd ..   # 先建前端
 cargo build -p server --release              # 产物 target/release/server
-sudo install -m755 target/release/server /usr/local/bin/claude-view-server
+sudo install -m755 target/release/server /usr/local/bin/agent-hub-server
 ```
 
 小树莓派上全量编译较慢（10 分钟级），优先 a / b。
@@ -113,7 +117,7 @@ claude   # 交互式登录一次
 ### e. token 获取（接入本机仪表盘时用）
 
 - `AGENT_HUB_TOKEN` 已显式设置 → 直接读该值；
-- 未设置让 server 自生成 → `ssh user@remote 'cat ~/.claude-view/token'`。
+- 未设置让 server 自生成 → `ssh user@remote 'cat ~/.agent-hub/token'`。
 
 ## frp 侧建议（direct 模式）
 
@@ -164,7 +168,7 @@ claude   # 交互式登录一次
 
 ## 安全说明
 
-- `~/.claude-view/instances.json` 存实例配置（含 token / ssh 密码），**权限 0600**。
+- `~/.agent-hub/instances.json` 存实例配置（含 token / ssh 密码），**权限 0600**。
 - `GET /api/instances` 会把各实例 token 下发给浏览器——浏览器直连方案的固有属性，
   信任域等同 hub token（能开仪表盘 = 能控制全部已接入实例）。不可接受时的升级路径是
   联邦网关（hub 代理聚合），本期未实现。

@@ -56,14 +56,14 @@ describe('SettingsPage 外壳（B1）', () => {
 
   it('section 入参指定初始分区（侧栏入口定向跳转用）', () => {
     renderPage({ section: 'about', onClose: vi.fn() });
-    expect(screen.getByText('agent-hub（claude-view）')).toBeTruthy();
+    expect(screen.getByText('agent-hub')).toBeTruthy();
     expect(screen.getByLabelText('关于')).toBeTruthy();
   });
 
   it('分区切换：点「关于」→ 关于内容出现，外观内容消失', () => {
     renderPage({ onClose: vi.fn() });
     fireEvent.click(screen.getByRole('button', { name: '关于' }));
-    expect(screen.getByText('agent-hub（claude-view）')).toBeTruthy();
+    expect(screen.getByText('agent-hub')).toBeTruthy();
     expect(screen.queryByLabelText('外观设置')).toBeNull();
   });
 
