@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-claude-view（Agent Hub，Rust axum + React）源码仓的 Claude Code 指引。工程全量规则（需求流程、主题 token、端口分级等）在管理仓 `agent-hub-mng/CLAUDE.md`，本文件只列本仓日常要点。
+agent-hub（Rust axum + React）源码仓的 Claude Code 指引。工程全量规则（需求流程、主题 token、端口分级等）在管理仓 `agent-hub-mng/CLAUDE.md`，本文件只列本仓日常要点。
 
 ## 流程规则（2026-10-13/14 用户立规，强制）
 

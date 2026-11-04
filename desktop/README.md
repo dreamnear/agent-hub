@@ -1,4 +1,4 @@
-# desktop — Claude View 桌面壳（Tauri 2 sidecar）
+# desktop — agent-hub 桌面壳（Tauri 2 sidecar）
 
 P7 桌面打包：server release 二进制作 sidecar 嵌入 .app，壳启动即拉起 server
 （`AGENT_HUB_BIND=127.0.0.1:7801`——7800 让给 web preview/frp 的 LAN 通路，两边共存）、
@@ -35,7 +35,7 @@ env：`AGENT_HUB_ATTACH_URL`（壳启动读，不落盘；v1 仅支持 http—�
 # 3. 图标（已有 icons/icon.png 时跳过）：python3 gen-icon.py && cd src-tauri && tauri icon icons/icon.png
 # 4. 打包
 cd src-tauri && tauri build
-# 产物：src-tauri/target/release/bundle/macos/Claude View.app（+ macos/*.dmg）
+# 产物：src-tauri/target/release/bundle/macos/agent-hub.app（+ macos/*.dmg）
 ```
 
 ## 运行语义
