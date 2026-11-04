@@ -361,3 +361,88 @@ describe('useSession WS 重连对账（queue-stale-banner Q2）', () => {
     expect(result.current.messages).toHaveLength(1);
   });
 });
+
+// —— seq 空洞 splice 对账（chat-view-stall #63）：广播 Lagged 静默丢帧后，滞后段
+// 在 gap 帧之前——锚追加式 reconcile 补不到，需按 gap 前边界用末页快照 splice。——
+describe('useSession seq 空洞对账（chat-view-stall #63）', () => {
+  const frame = (seq: number, text: string): { data: string } => ({
+    data: JSON.stringify({ sessionId: 'sess-1', message: mkText('assistant', text), seq }),
+  });
+
+  it('seq 空洞触发 splice：滞后轮按 gap 前边界补回，快照晚到的在途帧保留', async () => {
+    vi.useFakeTimers();
+    chatConfigMock.mockResolvedValue({ pageSize: 20, bufferMax: 100 });
+    messagesPageMock.mockResolvedValue(textPage([mkText('user', '第一条')]));
+    const { result } = renderSession();
+    await flush();
+    await flush();
+    expect(result.current.messages).toHaveLength(1);
+    const ws = WsFake.instances[0] as WsFake;
+    ws.onopen?.();
+    // seq 1 正常续上
+    ws.onmessage?.(frame(1, 'live-1'));
+    await flush();
+    expect(result.current.messages).toHaveLength(2);
+    // 对账快照：含丢失的滞后轮（快照先于 gap 帧对账完成就位）
+    messagesPageMock.mockResolvedValue(
+      textPage([
+        mkText('user', '第一条'),
+        mkText('assistant', 'live-1'),
+        mkText('assistant', '滞后轮A'),
+        mkText('assistant', '滞后轮B'),
+        mkText('assistant', 'live-4'),
+      ]),
+    );
+    // seq 4 = 空洞（2/3 被 Lagged 丢弃）；紧随的 seq 5 模拟快照晚到的在途帧
+    ws.onmessage?.(frame(4, 'live-4'));
+    ws.onmessage?.(frame(5, 'live-5'));
+    await flush();
+    await flush();
+    // 滞后轮补回；live-4 不重复；快照里没有的 live-5（在途帧）保留
+    expect(result.current.messages.map((m) => m.text)).toEqual([
+      '第一条',
+      'live-1',
+      '滞后轮A',
+      '滞后轮B',
+      'live-4',
+      'live-5',
+    ]);
+  });
+
+  it('锚不在快照窗内（丢段过大）→ 保持现状不劣化，gap 帧照常入库', async () => {
+    vi.useFakeTimers();
+    chatConfigMock.mockResolvedValue({ pageSize: 20, bufferMax: 100 });
+    messagesPageMock.mockResolvedValue(textPage([mkText('user', '第一条')]));
+    const { result } = renderSession();
+    await flush();
+    await flush();
+    const ws = WsFake.instances[0] as WsFake;
+    ws.onopen?.();
+    ws.onmessage?.(frame(1, 'live-1'));
+    await flush();
+    // 快照不含 kept 尾帧（live-1 已滚出末页窗）→ 放弃本次修复
+    messagesPageMock.mockResolvedValue(textPage([mkText('assistant', '快照里的行')]));
+    ws.onmessage?.(frame(9, 'live-9'));
+    await flush();
+    await flush();
+    expect(result.current.messages.map((m) => m.text)).toEqual(['第一条', 'live-1', 'live-9']);
+  });
+
+  it('无 seq 的帧（旧服务端）不触发空洞逻辑——连接期零额外拉取', async () => {
+    vi.useFakeTimers();
+    chatConfigMock.mockResolvedValue({ pageSize: 20, bufferMax: 100 });
+    messagesPageMock.mockResolvedValue(textPage([mkText('user', '第一条')]));
+    const { result } = renderSession();
+    await flush();
+    await flush();
+    const ws = WsFake.instances[0] as WsFake;
+    ws.onopen?.();
+    pushLine(ws, 'assistant', 'a');
+    pushLine(ws, 'assistant', 'b');
+    await flush();
+    await flush();
+    expect(result.current.messages.map((m) => m.text)).toEqual(['第一条', 'a', 'b']);
+    // 无 seq 不触发对账拉取
+    expect(messagesPageMock).toHaveBeenCalledTimes(1);
+  });
+});

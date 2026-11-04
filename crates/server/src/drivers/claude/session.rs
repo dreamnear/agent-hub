@@ -717,12 +717,18 @@ pub fn spawn_subagent_tail(
 }
 
 /// tail 共享循环：500ms 轮询行数游标，新行解析后以 `session_label` 入房间。
+/// 游标只推进到完整行（#63）：CLI 大行（attachment 实测上百 KB）分多次 write，
+/// 轮询落进行中时按 lines() 计数会把半行计满——行写完后按旧游标 skip 会永久
+/// 跳过它（实测：整轮输出滞留，直到重连对账/刷新才回到视图）。
 async fn tail_file(
     path: PathBuf,
     session_label: String,
     tx: tokio::sync::broadcast::Sender<ChatEvent>,
 ) {
-    let mut last_lines = count_lines(&path).await.unwrap_or(0);
+    let mut last_lines = match tokio::fs::read_to_string(&path).await {
+        Ok(raw) => complete_line_count(&raw),
+        Err(_) => 0,
+    };
     let mut seq: u64 = 0;
     loop {
         tokio::time::sleep(TAIL_INTERVAL).await;
@@ -731,27 +737,47 @@ async fn tail_file(
             continue;
         }
         if let Ok(raw) = tokio::fs::read_to_string(&path).await {
-            for line in raw.lines().skip(last_lines as usize) {
-                for message in parse_line(line) {
-                    seq += 1;
-                    // B4 hooks 观察档（ADR-0014）：消息落库点发射，fire-and-forget，
-                    // 载荷最小化（messages:read 门）在 plugins::hooks 内逐插件裁决
-                    crate::plugins::hooks::dispatch_message_append(
-                        &session_label,
-                        seq,
-                        message.kind.as_str(),
-                        message.text.as_deref(),
-                    );
-                    let _ = tx.send(ChatEvent {
-                        session_id: session_label.clone(),
-                        message,
-                        seq,
-                    });
-                }
+            let (cursor, messages) = tail_step(last_lines, &raw);
+            for message in messages {
+                seq += 1;
+                // B4 hooks 观察档（ADR-0014）：消息落库点发射，fire-and-forget，
+                // 载荷最小化（messages:read 门）在 plugins::hooks 内逐插件裁决
+                crate::plugins::hooks::dispatch_message_append(
+                    &session_label,
+                    seq,
+                    message.kind.as_str(),
+                    message.text.as_deref(),
+                );
+                let _ = tx.send(ChatEvent {
+                    session_id: session_label.clone(),
+                    message,
+                    seq,
+                });
             }
+            last_lines = cursor;
         }
-        last_lines = total;
     }
+}
+
+/// 完整行数（尾行无换行 = 可能仍在写入，不计入游标；空文件 0）。
+fn complete_line_count(raw: &str) -> u64 {
+    let n = raw.lines().count() as u64;
+    if n > 0 && !raw.ends_with('\n') {
+        n - 1
+    } else {
+        n
+    }
+}
+
+/// 单次轮询推进（纯函数，便于单测）：解析 (last_lines, 完整行数] 区间的新行，
+/// 返回（新游标, 新消息）。游标不回退（文件异常收缩时保持旧值）。
+fn tail_step(last_lines: u64, raw: &str) -> (u64, Vec<ChatMessage>) {
+    let complete = complete_line_count(raw);
+    let mut out = Vec::new();
+    for line in raw.lines().take(complete as usize).skip(last_lines as usize) {
+        out.extend(parse_line(line));
+    }
+    (last_lines.max(complete), out)
 }
 
 const TAIL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
@@ -779,6 +805,50 @@ mod tests {
         // tempdir 在返回后释放 → 泄漏目录换稳定路径（测试进程生命周期内可接受）
         std::mem::forget(dir);
         path
+    }
+
+    #[tokio::test]
+    async fn tail_step_never_skips_a_line_that_was_partial_at_poll_time() {
+        // #63 回归锚：轮询落进行中（尾行无换行）时旧行数游标把半行计满，行写完后
+        // 按旧游标 skip = 该行永久跳过（实测：整轮 assistant 输出滞留到重连/刷新）。
+        // 现契约：半行不计游标不消费；写完后的下一轮必须解析到它。
+        let line1 = user_line(1);
+        let line2 = user_line(2);
+        let line3 = user_line(3);
+        // 轮询 1：line1 完整，line2 写了一半（无尾换行）→ 只消费 line1，游标 1
+        let raw1 = format!("{line1}\n{}", &line2[..line2.len() / 2]);
+        let (cursor, msgs) = tail_step(0, &raw1);
+        assert_eq!(cursor, 1);
+        assert_eq!(msgs.len(), 1, "只消费完整行 line1");
+        // 轮询 2：line2 写完，line3 写了一半 → line2（上一轮的半行）必须被解析
+        let raw2 = format!("{line1}\n{line2}\n{}", &line3[..line3.len() / 2]);
+        let (cursor, msgs) = tail_step(cursor, &raw2);
+        assert_eq!(cursor, 2);
+        assert_eq!(msgs.len(), 1, "半行写完后下一轮消费（旧行为：永久跳过）");
+        assert_eq!(msgs[0].text.as_deref(), Some("msg 2"));
+        // 轮询 3：全部完整 → line3 正常消费
+        let raw3 = format!("{line1}\n{line2}\n{line3}\n");
+        let (cursor, msgs) = tail_step(cursor, &raw3);
+        assert_eq!(cursor, 3);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].text.as_deref(), Some("msg 3"));
+    }
+
+    #[tokio::test]
+    async fn tail_step_cursor_never_regresses_and_counts_only_complete_lines() {
+        let l1 = user_line(1);
+        let l2 = user_line(2);
+        // 完整两行 → 游标 2
+        let (cursor, _) = tail_step(0, &format!("{l1}\n{l2}\n"));
+        assert_eq!(cursor, 2);
+        // 文件异常收缩（完整行数 < 游标）→ 游标保持、不产生消息
+        let (cursor2, msgs) = tail_step(cursor, &format!("{l1}\n"));
+        assert_eq!(cursor2, 2, "游标不回退");
+        assert!(msgs.is_empty());
+        // 空文件
+        let (cursor3, msgs) = tail_step(cursor2, "");
+        assert_eq!(cursor3, 2);
+        assert!(msgs.is_empty());
     }
 
     #[tokio::test]
