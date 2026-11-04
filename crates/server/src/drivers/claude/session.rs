@@ -774,7 +774,11 @@ fn complete_line_count(raw: &str) -> u64 {
 fn tail_step(last_lines: u64, raw: &str) -> (u64, Vec<ChatMessage>) {
     let complete = complete_line_count(raw);
     let mut out = Vec::new();
-    for line in raw.lines().take(complete as usize).skip(last_lines as usize) {
+    for line in raw
+        .lines()
+        .take(complete as usize)
+        .skip(last_lines as usize)
+    {
         out.extend(parse_line(line));
     }
     (last_lines.max(complete), out)

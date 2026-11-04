@@ -98,11 +98,13 @@ pub fn compute_update_diff(
         .collect();
     let (credentials_added, credentials_removed) = set_diff(&cred_old, &cred_new);
     let high_risk_old: Vec<String> = old_m.permissions.high_risk.clone();
-    let high_risk_new: Vec<String> =
-        new_reach.high_risk.iter().map(|h| h.id.clone()).collect();
+    let high_risk_new: Vec<String> = new_reach.high_risk.iter().map(|h| h.id.clone()).collect();
     let (high_risk_added, high_risk_removed) = set_diff(&high_risk_old, &high_risk_new);
     let key = |c: &super::audit::Contribution| format!("{}:{}", c.kind, c.id);
-    let old_contribs: Vec<String> = super::audit::contributions_of(old_m).iter().map(&key).collect();
+    let old_contribs: Vec<String> = super::audit::contributions_of(old_m)
+        .iter()
+        .map(&key)
+        .collect();
     let new_contribs: Vec<String> = new_report.contributions.iter().map(&key).collect();
     let (contributions_added, contributions_removed) = set_diff(&old_contribs, &new_contribs);
     let permissions_changed = !(data_added.is_empty()
@@ -228,9 +230,7 @@ pub fn scan(
     let conflicts: Vec<(usize, String, String, String)> = candidates
         .iter()
         .enumerate()
-        .flat_map(|(i, c)| {
-            c.2.render_claims.iter().map(move |claim| (i, claim))
-        })
+        .flat_map(|(i, c)| c.2.render_claims.iter().map(move |claim| (i, claim)))
         .filter_map(|(i, claim)| {
             let key = (claim.kind.clone(), claim.value.clone());
             // B3 观察项承接：update 候选的自撞豁免——占用方 == 候选自身 id
@@ -243,8 +243,12 @@ pub fn scan(
                 Some(o) => Some(o.clone()),
                 None => candidates.iter().enumerate().find_map(|(j, cj)| {
                     (j != i
-                        && cj.2.render_claims.iter().any(|x| x.kind == claim.kind && x.value == claim.value))
-                        .then(|| cand_id(cj))
+                        && cj
+                            .2
+                            .render_claims
+                            .iter()
+                            .any(|x| x.kind == claim.kind && x.value == claim.value))
+                    .then(|| cand_id(cj))
                 }),
             };
             owner.map(|o| (i, key.0, key.1, o))
@@ -324,34 +328,48 @@ pub fn scan(
                     let owner = match file_claimed.get(&e_l) {
                         Some(o) => Some(o.clone()),
                         None => candidates.iter().enumerate().find_map(|(j, cj)| {
-                            (j != i).then(|| {
-                                cj.2.contributions.iter().any(|x| {
-                                    if x.kind != "fileDecoration" {
-                                        return false;
-                                    }
-                                    let xs: Vec<String> = x
-                                        .name
-                                        .trim_start_matches("ext:")
-                                        .split('|')
-                                        .map(|s| s.to_ascii_lowercase().trim_start_matches('.').to_string())
-                                        .collect();
-                                    xs.contains(&e_l)
+                            (j != i)
+                                .then(|| {
+                                    cj.2.contributions
+                                        .iter()
+                                        .any(|x| {
+                                            if x.kind != "fileDecoration" {
+                                                return false;
+                                            }
+                                            let xs: Vec<String> = x
+                                                .name
+                                                .trim_start_matches("ext:")
+                                                .split('|')
+                                                .map(|s| {
+                                                    s.to_ascii_lowercase()
+                                                        .trim_start_matches('.')
+                                                        .to_string()
+                                                })
+                                                .collect();
+                                            xs.contains(&e_l)
+                                        })
+                                        .then(|| cand_id(cj))
                                 })
-                                .then(|| cand_id(cj))
-                            })
-                            .flatten()
+                                .flatten()
                         }),
                     };
                     if let Some(owner) = owner {
                         file_conflicts.push((i, e_l, owner));
                     } else {
-                        file_claimed.entry(e_l).or_insert_with(|| cand_id(&candidates[i]));
+                        file_claimed
+                            .entry(e_l)
+                            .or_insert_with(|| cand_id(&candidates[i]));
                     }
                 }
             }
         }
         for (i, ext, owner) in file_conflicts {
-            if candidates[i].2.errors.iter().any(|e| e.rule == "renderer-match-conflict") {
+            if candidates[i]
+                .2
+                .errors
+                .iter()
+                .any(|e| e.rule == "renderer-match-conflict")
+            {
                 continue;
             }
             let self_id = cand_id(&candidates[i]);
@@ -609,7 +627,10 @@ mod b4_tests {
         write_plugin(dir.path(), "a", "rend-p", "0.2.0", Some("gantt"));
         let second = scan(dir.path(), &[], &reg, &creds());
         assert_eq!(second.items.len(), 1);
-        assert_eq!(second.items[0].status, "update", "自撞豁免：仍是普通更新候选");
+        assert_eq!(
+            second.items[0].status, "update",
+            "自撞豁免：仍是普通更新候选"
+        );
         assert!(
             !second.items[0]
                 .report

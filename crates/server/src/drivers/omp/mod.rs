@@ -1159,7 +1159,11 @@ mod tests {
         )
         .unwrap();
         // 对照：有用户消息的正常转录
-        write_fixture(&slug.join("20261003T000000Z_real-1.jsonl"), "real-1", "/tmp");
+        write_fixture(
+            &slug.join("20261003T000000Z_real-1.jsonl"),
+            "real-1",
+            "/tmp",
+        );
 
         let registry = Arc::new(AcpRegistry::new());
         let router = Arc::new(AcpSendRouter::new(

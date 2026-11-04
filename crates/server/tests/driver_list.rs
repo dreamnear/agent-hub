@@ -47,7 +47,11 @@ async fn merges_jobs_detail_and_tokens() {
     // Completed 桶（对齐 CLI 2.1.314 全量库存）；done ≠ 退出——活 done 会话
     // 映射 Other 照常显示（误判修复回归锚点，勿动）
     let list = driver.list(false).await.unwrap();
-    assert_eq!(list.len(), 5, "默认面全量 5 条（daemon 已死的 exited 在列）");
+    assert_eq!(
+        list.len(),
+        5,
+        "默认面全量 5 条（daemon 已死的 exited 在列）"
+    );
     let dead = list.iter().find(|a| a.id == "c9d0e1f2").unwrap();
     assert_eq!(
         dead.group,

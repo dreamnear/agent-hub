@@ -25,8 +25,7 @@ pub const OBSERVER_HOOKS: [&str; 5] = [
 
 /// 拦截档钩子名（ADR-0014 第 1 条：v1 明确不开——不实现、不进方法表，
 /// manifest 任何字段出现即审计失败；三前置条件全部成立前不得开放）。
-pub const INTERCEPT_HOOK_NAMES: [&str; 3] =
-    ["beforeMessageSend", "onToolCall", "afterToolResult"];
+pub const INTERCEPT_HOOK_NAMES: [&str; 3] = ["beforeMessageSend", "onToolCall", "afterToolResult"];
 
 /// 贡献物类型（v1 十类全集，ADR-0011；B4 review-1 M23：hooks/themeTokens/
 /// fileDecorations/services 补齐进 api-schema contributions 面）。
@@ -45,8 +44,13 @@ pub const CONTRIBUTION_TYPES: [&str; 10] = [
 
 /// 内置渲染引擎清单（ADR-0012 拍板 1：首批 = mermaid / plantuml-server / image /
 /// html-sanitized + plugin-iframe 档；加法承诺，katex 随后续批次）。
-pub const RENDER_ENGINES: [&str; 5] =
-    ["mermaid", "plantuml-server", "image", "html-sanitized", "plugin-iframe"];
+pub const RENDER_ENGINES: [&str; 5] = [
+    "mermaid",
+    "plantuml-server",
+    "image",
+    "html-sanitized",
+    "plugin-iframe",
+];
 
 /// 服务地址类渲染引擎（ADR-0012 拍板 4）：`config` 只允许引用服务配置名
 /// （`{"service":"…"}`），**禁内嵌 URL**（内容外泄面红线）。
@@ -59,10 +63,53 @@ pub const BUILTIN_RENDER_FENCES: [&str; 2] = ["plantuml", "mermaid"];
 /// 内置 ext 占用（ADR-0012 拍板 3：docs 预览内置 kind 的扩展名——与
 /// `api/docs.rs::kind_of` 的 ext 表对应；插件渲染器不得抢内置格式）。
 pub const BUILTIN_RENDER_EXTS: [&str; 47] = [
-    "md", "markdown", "html", "htm", "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif",
-    "pdf", "txt", "log", "json", "toml", "yaml", "yml", "ini", "cfg", "conf", "csv", "xml", "sh",
-    "bash", "zsh", "py", "rb", "rs", "go", "java", "js", "jsx", "ts", "tsx", "c", "cc", "cpp",
-    "h", "css", "scss", "sql", "proto", "lock", "gitignore", "mmd",
+    "md",
+    "markdown",
+    "html",
+    "htm",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "webp",
+    "svg",
+    "bmp",
+    "avif",
+    "pdf",
+    "txt",
+    "log",
+    "json",
+    "toml",
+    "yaml",
+    "yml",
+    "ini",
+    "cfg",
+    "conf",
+    "csv",
+    "xml",
+    "sh",
+    "bash",
+    "zsh",
+    "py",
+    "rb",
+    "rs",
+    "go",
+    "java",
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "c",
+    "cc",
+    "cpp",
+    "h",
+    "css",
+    "scss",
+    "sql",
+    "proto",
+    "lock",
+    "gitignore",
+    "mmd",
 ];
 
 /// `permissions.data` 固定域枚举（ADR-0007 第 2 条）。
@@ -105,8 +152,13 @@ pub fn high_risk_label(item: &str) -> &'static str {
 }
 
 /// postMessage 消息类型（ADR-0004 第 5 条 + ADR-0012 §12.2 渲染器契约，固定集合）。
-pub const HOST_TO_VIEW_MESSAGES: [&str; 5] =
-    ["hub:init", "hub:theme", "hub:rpc-result", "hub:rpc-error", "render"];
+pub const HOST_TO_VIEW_MESSAGES: [&str; 5] = [
+    "hub:init",
+    "hub:theme",
+    "hub:rpc-result",
+    "hub:rpc-error",
+    "render",
+];
 pub const VIEW_TO_HOST_MESSAGES: [&str; 4] = ["hub:ready", "hub:rpc", "hub:notify", "rendered"];
 
 /// 一个 RPC 方法的定义：签名、绑定权限、B1 是否已注册。

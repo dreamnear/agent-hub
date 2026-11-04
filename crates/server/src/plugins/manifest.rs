@@ -93,7 +93,7 @@ pub struct HubCompat {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")] // manifest 契约键即 camelCase（themeTokens/fileDecorations）；
-// 缺失时多词字段被顶层 flatten 吞进 extra、声明静默失效（B3 批 2 修复轮 F-8 根因）
+                                   // 缺失时多词字段被顶层 flatten 吞进 extra、声明静默失效（B3 批 2 修复轮 F-8 根因）
 pub struct Contributes {
     #[serde(default)]
     pub tools: Vec<ToolDecl>,
@@ -275,7 +275,7 @@ pub struct ViewDecl {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")] // manifest 契约键即 camelCase（highRisk）；缺失时 high_risk 以
-// snake 键解析，manifest 的 "highRisk" 声明被静默丢弃（B2 预览反馈轮修正）
+                                   // snake 键解析，manifest 的 "highRisk" 声明被静默丢弃（B2 预览反馈轮修正）
 pub struct Permissions {
     /// `"<METHOD> <path-pattern>"`，单段 `*`（v1 预留，见 ADR-0003 拍板结论 5）
     #[serde(default)]
@@ -659,7 +659,10 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
             errors.push(ManifestIssue::new(
                 field("id"),
                 "renderer-id-namespace",
-                format!("渲染器 id 必须为 plug_{}_<rid> 形态（当前 {:?}）", manifest.id, r.id),
+                format!(
+                    "渲染器 id 必须为 plug_{}_<rid> 形态（当前 {:?}）",
+                    manifest.id, r.id
+                ),
             ));
         }
         // match 非空 + 项形态 + 内置占用（跨插件冲突由扫描汇总层判）
@@ -798,7 +801,8 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
             ));
         }
         let builtins = crate::plugins::theme_tokens::builtin_tokens();
-        let mut ov: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+        let mut ov: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new();
         for (token, pair) in &tt.tokens {
             let field = format!("contributes.themeTokens.tokens[{token:?}]");
             // token 名形态
@@ -852,7 +856,10 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
             .collect::<Vec<_>>()
             .join(" ")
             .to_ascii_lowercase();
-        if ["token", "key", "password"].iter().any(|k| value_blob.contains(k)) {
+        if ["token", "key", "password"]
+            .iter()
+            .any(|k| value_blob.contains(k))
+        {
             warnings.push(ManifestIssue::new(
                 "contributes.themeTokens",
                 "sensitive-value-hint",
@@ -865,7 +872,11 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
     for (i, d) in manifest.contributes.file_decorations.iter().enumerate() {
         let field = |suffix: &str| format!("contributes.fileDecorations[{i}].{suffix}");
         if d.id.trim().is_empty() {
-            errors.push(ManifestIssue::new(field("id"), "decoration-id", "装饰 id 不能为空"));
+            errors.push(ManifestIssue::new(
+                field("id"),
+                "decoration-id",
+                "装饰 id 不能为空",
+            ));
         }
         if d.match_rule.ext.is_empty() {
             errors.push(ManifestIssue::new(
@@ -941,14 +952,17 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
                     }
                     // 3:1 非文字标准（与各态 --c-bg 比较）
                     for side in ["light", "dark"] {
-                        let fg = obj
-                            .get(side)
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("");
+                        let fg = obj.get(side).and_then(|x| x.as_str()).unwrap_or("");
                         let bg = if side == "light" {
-                            builtins.get("--c-bg").map(|b| b.light.as_str()).unwrap_or("#ffffff")
+                            builtins
+                                .get("--c-bg")
+                                .map(|b| b.light.as_str())
+                                .unwrap_or("#ffffff")
                         } else {
-                            builtins.get("--c-bg").map(|b| b.dark.as_str()).unwrap_or("#171717")
+                            builtins
+                                .get("--c-bg")
+                                .map(|b| b.dark.as_str())
+                                .unwrap_or("#171717")
                         };
                         if let Some(r) = crate::plugins::theme_tokens::contrast_ratio(fg, bg) {
                             if r < 3.0 {
@@ -1037,7 +1051,11 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
         }
     }
     if !manifest.contributes.hooks.is_empty()
-        && !manifest.permissions.data.iter().any(|d| d == "hooks:observe")
+        && !manifest
+            .permissions
+            .data
+            .iter()
+            .any(|d| d == "hooks:observe")
     {
         warnings.push(ManifestIssue::new(
             "permissions.data",
@@ -1216,12 +1234,10 @@ pub fn parse(raw: &str) -> Result<ParsedManifest, Vec<ManifestIssue>> {
 fn json_contains_intercept_name(v: &Value) -> bool {
     match v {
         Value::String(s) => api_surface::INTERCEPT_HOOK_NAMES.contains(&s.as_str()),
-        Value::Object(map) => map
-            .iter()
-            .any(|(k, val)| {
-                api_surface::INTERCEPT_HOOK_NAMES.contains(&k.as_str())
-                    || json_contains_intercept_name(val)
-            }),
+        Value::Object(map) => map.iter().any(|(k, val)| {
+            api_surface::INTERCEPT_HOOK_NAMES.contains(&k.as_str())
+                || json_contains_intercept_name(val)
+        }),
         Value::Array(items) => items.iter().any(json_contains_intercept_name),
         _ => false,
     }
@@ -1331,7 +1347,10 @@ mod tests {
             r#"[{"id":"other_plugin_gantt","match":{"fence":["gantt"]},"engine":"mermaid"}]"#,
         );
         let errs = parse(&raw).expect_err("must fail");
-        assert!(errs.iter().any(|e| e.rule == "renderer-id-namespace"), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.rule == "renderer-id-namespace"),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -1340,7 +1359,10 @@ mod tests {
             r#"[{"id":"plug_demo-plugin_p","match":{"fence":["plantuml"]},"engine":"html-sanitized"}]"#,
         );
         let errs = parse(&raw).expect_err("must fail");
-        assert!(errs.iter().any(|e| e.rule == "renderer-match-builtin"), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.rule == "renderer-match-builtin"),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -1349,7 +1371,10 @@ mod tests {
             r#"[{"id":"plug_demo-plugin_x","match":{"ext":["md"]},"engine":"html-sanitized"}]"#,
         );
         let errs = parse(&raw).expect_err("must fail");
-        assert!(errs.iter().any(|e| e.rule == "renderer-match-builtin"), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.rule == "renderer-match-builtin"),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -1359,7 +1384,10 @@ mod tests {
             r#"[{"id":"plug_demo-plugin_pu","match":{"ext":["puml"]},"engine":"plantuml-server"}]"#,
         );
         let errs = parse(&raw).expect_err("must fail");
-        assert!(errs.iter().any(|e| e.rule == "renderer-config-required"), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.rule == "renderer-config-required"),
+            "{errs:?}"
+        );
         // 内嵌 URL：审计失败（内容外泄面红线）
         let raw = with_renderers(
             r#"[{"id":"plug_demo-plugin_pu","match":{"ext":["puml"]},"engine":"plantuml-server","config":{"service":"https://evil.example.com"}}]"#,
@@ -1383,7 +1411,10 @@ mod tests {
             r#"[{"id":"plug_demo-plugin_if","match":{"ext":["dot"]},"engine":"plugin-iframe"}]"#,
         );
         let errs = parse(&raw).expect_err("must fail");
-        assert!(errs.iter().any(|e| e.rule == "renderer-entry-required"), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.rule == "renderer-entry-required"),
+            "{errs:?}"
+        );
         let raw = with_renderers(
             r#"[{"id":"plug_demo-plugin_if","match":{"ext":["dot"]},"engine":"plugin-iframe","entry":"render/index.html"}]"#,
         );
@@ -1407,7 +1438,11 @@ mod tests {
         // 声明静默失效（批 2 修复轮根因）——camel 键必须解析进结构体
         let raw = with_theme(r##"{"tokens":{"--c-accent":{"light":"#0a7a5c","dark":"#7ee2b8"}}}"##);
         let p = parse(&raw).expect("themeTokens key must parse");
-        let tt = p.manifest.contributes.theme_tokens.expect("theme_tokens Some");
+        let tt = p
+            .manifest
+            .contributes
+            .theme_tokens
+            .expect("theme_tokens Some");
         assert!(tt.tokens.contains_key("--c-accent"));
     }
 
@@ -1417,7 +1452,10 @@ mod tests {
         let raw = base();
         let raw2 = raw.replace("\"risk\": \"read\"", "\"risk\": \"high\"");
         let errs = parse(&raw2).expect_err("must fail");
-        assert!(errs.iter().any(|e| e.rule == "high-tool-undeclared"), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.rule == "high-tool-undeclared"),
+            "{errs:?}"
+        );
         // 声明齐全 → 通过
         let raw3 = raw2.replace("\"highRisk\": []", "\"highRisk\": [\"exfiltrate-data\"]");
         let p = parse(&raw3).expect("declared high tool passes");
@@ -1580,7 +1618,9 @@ mod tests {
             p.warnings
         );
         assert!(
-            !p.warnings.iter().any(|w| w.rule == "hooks-observe-domain-missing"),
+            !p.warnings
+                .iter()
+                .any(|w| w.rule == "hooks-observe-domain-missing"),
             "已声明 hooks:observe 不应告警"
         );
     }
@@ -1626,4 +1666,3 @@ mod tests {
         );
     }
 }
-

@@ -264,7 +264,10 @@ async fn mux_proxy_end_to_end() {
 
     // 节点离线 → 代理 503（对齐隧道离线语义）；deadline 留负载余量（#30）
     pump.abort();
-    wait_for("节点摘表", 10, || !gateway.node_conns.is_online(node_id)).await;
+    wait_for("节点摘表", 10, || {
+        !gateway.node_conns.is_online(node_id)
+    })
+    .await;
     let (status, body) = api_oneshot(
         &gateway,
         "GET",

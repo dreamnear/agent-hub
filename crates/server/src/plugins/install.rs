@@ -59,7 +59,10 @@ fn redact_url_credentials(s: &str) -> String {
             .map(|p| p + 1)
             .unwrap_or(0);
         let prefix = &rest[scheme_start..pos];
-        if prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        if prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
             let after = &rest[pos + 3..];
             if let Some(at) = after.find('@') {
                 let host_start = after[..at].find('/').unwrap_or(at);
@@ -191,7 +194,14 @@ pub async fn git_install(
     let work = std::env::temp_dir().join(format!("hub-plugin-install-{}", uuid::Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&work);
     // 失败/ panic 两路都清理临时目录（首个人站行为的卫生纪律）
-    let result = git_install_inner(manager, &url, git_ref.clone(), req.sub_path.as_deref(), &work).await;
+    let result = git_install_inner(
+        manager,
+        &url,
+        git_ref.clone(),
+        req.sub_path.as_deref(),
+        &work,
+    )
+    .await;
     let _ = std::fs::remove_dir_all(&work);
     result
 }
@@ -205,7 +215,11 @@ async fn git_install_inner(
 ) -> Result<GitInstallOutcome, String> {
     match git_ref.as_deref() {
         Some(r) if is_commit_sha(r) => {
-            run_git(&["clone", "--quiet", url, work.to_string_lossy().as_ref()], None).await?;
+            run_git(
+                &["clone", "--quiet", url, work.to_string_lossy().as_ref()],
+                None,
+            )
+            .await?;
             run_git(&["checkout", "--quiet", r], Some(work)).await?;
         }
         Some(r) => {
@@ -227,7 +241,14 @@ async fn git_install_inner(
         }
         None => {
             run_git(
-                &["clone", "--quiet", "--depth", "1", url, work.to_string_lossy().as_ref()],
+                &[
+                    "clone",
+                    "--quiet",
+                    "--depth",
+                    "1",
+                    url,
+                    work.to_string_lossy().as_ref(),
+                ],
                 None,
             )
             .await?;
@@ -252,8 +273,7 @@ async fn git_install_inner(
     let already = current_hash == report.content_hash && live.join("plugin.json").is_file();
     if !already {
         std::fs::remove_dir_all(&live).map_err(|e| format!("旧目录清理失败：{e}"))?;
-        super::copy_dir_recursive(&plugin_root, &live)
-            .map_err(|e| format!("落盘失败：{e}"))?;
+        super::copy_dir_recursive(&plugin_root, &live).map_err(|e| format!("落盘失败：{e}"))?;
     }
     manager.scan_now();
     let status = if !report.errors.is_empty() {
@@ -356,7 +376,10 @@ pub async fn fetch_market_source(
     let as_dir_json = Path::new(source).join("marketplace.json");
     let as_file = Path::new(source);
     if as_file.is_file() {
-        return parse_market_source(manager, &std::fs::read_to_string(as_file).map_err(|e| e.to_string())?);
+        return parse_market_source(
+            manager,
+            &std::fs::read_to_string(as_file).map_err(|e| e.to_string())?,
+        );
     }
     if as_dir_json.is_file() {
         return parse_market_source(
@@ -383,8 +406,9 @@ pub async fn fetch_market_source(
         )
         .await?;
         let index_file = work.join("marketplace.json");
-        let raw = std::fs::read_to_string(&index_file)
-            .map_err(|_| "仓库根缺 marketplace.json（索引源必须是含索引的仓库或本地文件）".to_string())?;
+        let raw = std::fs::read_to_string(&index_file).map_err(|_| {
+            "仓库根缺 marketplace.json（索引源必须是含索引的仓库或本地文件）".to_string()
+        })?;
         parse_market_source(manager, &raw)
     }
     .await;
@@ -396,8 +420,8 @@ fn parse_market_source(
     manager: &Arc<PluginManager>,
     raw: &str,
 ) -> Result<(Option<String>, Vec<MarketEntry>), String> {
-    let index: MarketIndex = serde_json::from_str(raw)
-        .map_err(|e| format!("marketplace.json 解析失败：{e}"))?;
+    let index: MarketIndex =
+        serde_json::from_str(raw).map_err(|e| format!("marketplace.json 解析失败：{e}"))?;
     // id 合法性预检（与 manifest id 规则一致；不合法条目被丢弃 + warn）
     let mut entries = Vec::new();
     for e in index.plugins {
@@ -446,10 +470,19 @@ mod tests {
     fn git_source_validation() {
         assert!(valid_git_source("https://example.com/r.git").is_ok());
         assert!(valid_git_source("/tmp/local-repo").is_ok());
-        assert!(valid_git_source("http://example.com/r.git").is_err(), "明文 http 拒绝");
-        assert!(valid_git_source("git@github.com:a/b.git").is_err(), "ssh 不进 v1");
+        assert!(
+            valid_git_source("http://example.com/r.git").is_err(),
+            "明文 http 拒绝"
+        );
+        assert!(
+            valid_git_source("git@github.com:a/b.git").is_err(),
+            "ssh 不进 v1"
+        );
         assert!(valid_git_source("ssh://git@host/r").is_err());
-        assert!(valid_git_source("relative/path").is_err(), "相对路径无法定位");
+        assert!(
+            valid_git_source("relative/path").is_err(),
+            "相对路径无法定位"
+        );
     }
 
     #[test]
@@ -499,7 +532,11 @@ mod tests {
                 .current_dir(cwd)
                 .output()
                 .unwrap();
-            assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         run(&["init", "-q"], repo.path());
         let plugin_dir = repo.path().join("my-plugin");
@@ -513,7 +550,18 @@ mod tests {
         .unwrap();
         std::fs::write(plugin_dir.join("backend/main.js"), "// demo\n").unwrap();
         run(&["add", "."], repo.path());
-        run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init"], repo.path());
+        run(
+            &[
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "init",
+            ],
+            repo.path(),
+        );
         // 走 valid 校验 + 定位逻辑（不 spawn 完整 manager——网络路径单测覆盖解析层，
         // 全链路集成在 plugin_api 的 update/git 测试面）
         let (url, git_ref) = split_git_ref(&format!("{}#master", repo.path().display()));
