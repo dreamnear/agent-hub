@@ -45,6 +45,10 @@ async fn main() -> anyhow::Result<()> {
         );
         std::process::exit(1);
     }
+    // #72 验收 2 后半：历史 uploads 目录并入新目录（历史转录旧图引用按文件名经
+    // /api/images/{filename} 取数，字节必须在目标目录；失败 WARN 不阻塞——缺图
+    // 回退 pill，非数据零丢失红线级）。
+    server::api::upload::migrate_legacy_uploads();
     // node 形态分支（gateway-node P1 任务 2/3）：--node + --gateway/env 进入节点模式
     let args = NodeArgs::parse(std::env::args().skip(1));
     let mut cfg = Config::load();
