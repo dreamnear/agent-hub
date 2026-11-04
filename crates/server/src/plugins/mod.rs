@@ -15,11 +15,11 @@ pub mod manifest;
 pub mod mcp_config;
 pub mod mcp_proxy;
 pub mod permissions;
-pub mod theme_tokens;
 pub mod registry;
 pub mod rpc;
 pub mod scanner;
 pub mod supervisor;
+pub mod theme_tokens;
 pub mod view_ticket;
 
 use std::collections::HashMap;
@@ -333,8 +333,7 @@ pub type IdleProbeProvider = Arc<
 
 /// 会话清单提供方（B4 `hub.sessions.list` 只读投影）：drivers 全量聚合。
 pub type SessionsProvider = Arc<
-    dyn Fn()
-        -> std::pin::Pin<
+    dyn Fn() -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Vec<crate::models::AgentSummary>> + Send>,
         > + Send
         + Sync,
@@ -464,7 +463,10 @@ impl PluginManager {
                     tracing::debug!(from = prev, to = now, "onIdle 探针计数变化");
                 }
                 if detector.feed(now) {
-                    tracing::info!("onIdle：忙→闲确认（连续 {} 次空观测）", IdleFlipDetector::CONFIRM_ZEROS);
+                    tracing::info!(
+                        "onIdle：忙→闲确认（连续 {} 次空观测）",
+                        IdleFlipDetector::CONFIRM_ZEROS
+                    );
                     bus.dispatch("onIdle", json!({ "idle": true, "runningCount": 0 }));
                 }
                 prev = now;
@@ -542,11 +544,7 @@ impl PluginManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let tasks = self
-            .tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let sessions = self
             .sessions
             .lock()
@@ -670,7 +668,6 @@ impl PluginManager {
                 }
             }
         });
-
     }
 
     /// 后台监视一周期（纯逻辑可测）：死进程 → 崩溃记录 + 退避重试；空闲 → 回收。
@@ -882,28 +879,37 @@ impl PluginManager {
                     entry: r.entry.clone(),
                 })
                 .collect(),
-            theme_tokens: m.contributes.theme_tokens.as_ref().map(|tt| ThemeTokensView {
-                tokens: tt
-                    .tokens
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.clone(),
-                            ThemeTokenEntryView {
-                                light: v.light.clone(),
-                                dark: v.dark.clone(),
-                            },
-                        )
-                    })
-                    .collect(),
-            }),
+            theme_tokens: m
+                .contributes
+                .theme_tokens
+                .as_ref()
+                .map(|tt| ThemeTokensView {
+                    tokens: tt
+                        .tokens
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                ThemeTokenEntryView {
+                                    light: v.light.clone(),
+                                    dark: v.dark.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                }),
             file_decorations: m
                 .contributes
                 .file_decorations
                 .iter()
                 .map(|d| FileDecorationView {
                     id: d.id.clone(),
-                    matchExt: d.match_rule.ext.iter().map(|e| e.to_ascii_lowercase().trim_start_matches('.').to_string()).collect(),
+                    matchExt: d
+                        .match_rule
+                        .ext
+                        .iter()
+                        .map(|e| e.to_ascii_lowercase().trim_start_matches('.').to_string())
+                        .collect(),
                     icon: d.icon.clone(),
                     color: d.color.clone(),
                 })
@@ -922,7 +928,8 @@ impl PluginManager {
             hook_stats: if m.contributes.hooks.is_empty() {
                 None
             } else {
-                self.hooks.stats_for(&p.entry.id, m.contributes.hooks.clone())
+                self.hooks
+                    .stats_for(&p.entry.id, m.contributes.hooks.clone())
             },
             backend: BackendInfo {
                 running: running.is_some(),
@@ -1051,7 +1058,11 @@ impl PluginManager {
         // B4 治理（需求功能点 6）：按保留策略清理审计产物（每插件保留 N 份）
         match audit::prune_artifacts(&self.paths.audit_dir, self.paths.audit_keep) {
             Ok(removed) if removed > 0 => {
-                tracing::info!(removed, keep = self.paths.audit_keep, "审计产物按保留策略清理");
+                tracing::info!(
+                    removed,
+                    keep = self.paths.audit_keep,
+                    "审计产物按保留策略清理"
+                );
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "审计产物清理失败"),
@@ -1082,7 +1093,11 @@ impl PluginManager {
                 source_kind: p.entry.source.kind.clone(),
                 status: "update".into(),
                 installed_content_hash: Some(p.entry.content_hash.clone()),
-                update_diff: Some(scanner::compute_update_diff(&p, &report, pending.old_version_available)),
+                update_diff: Some(scanner::compute_update_diff(
+                    &p,
+                    &report,
+                    pending.old_version_available,
+                )),
                 report,
             });
         }
@@ -2180,9 +2195,9 @@ impl HubCallHandler for HubRpcHandler {
                     let tm = tasks.clone().ok_or_else(|| {
                         RpcError::PluginError("tasks 未装配（hub 内部状态）".into())
                     })?;
-                    let mut spec = tm.get(id).ok_or_else(|| {
-                        RpcError::PluginError(format!("任务 {id} 不存在"))
-                    })?;
+                    let mut spec = tm
+                        .get(id)
+                        .ok_or_else(|| RpcError::PluginError(format!("任务 {id} 不存在")))?;
                     spec.enabled = !spec.enabled;
                     let enabled = spec.enabled;
                     tm.upsert(spec)
@@ -2233,9 +2248,9 @@ impl HubCallHandler for HubRpcHandler {
                     let provider = messages.clone().ok_or_else(|| {
                         RpcError::PluginError("messages 投影未装配（hub 内部状态）".into())
                     })?;
-                    let msgs = provider(session_id, limit).await.map_err(|e| {
-                        RpcError::PluginError(credentials.scrub(&e))
-                    })?;
+                    let msgs = provider(session_id, limit)
+                        .await
+                        .map_err(|e| RpcError::PluginError(credentials.scrub(&e)))?;
                     let items: Vec<Value> = msgs
                         .iter()
                         .map(|m| {
@@ -2495,8 +2510,8 @@ mod tests {
     fn hook_observer_template_passes_audit() {
         // 模板即样例即测试（ADR-0015）：hook-observer 模板占位替换后必须过
         // 静态审计（零 errors）且贡献物清单含 hook 类
-        let template = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../plugins/templates/hook-observer");
+        let template =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/templates/hook-observer");
         assert!(template.join("plugin.json").is_file());
         let tmp = tempfile::tempdir().unwrap();
         copy_dir_recursive(&template, tmp.path()).unwrap();
@@ -2536,7 +2551,7 @@ mod tests {
         assert!(!d.feed(1));
         assert!(!d.feed(0)); // 单次降级
         assert!(!d.feed(1)); // 忙重置去抖
-        // 3) 忙 → 连续 CONFIRM_ZEROS 次空：第 3 次翻转，之后重置
+                             // 3) 忙 → 连续 CONFIRM_ZEROS 次空：第 3 次翻转，之后重置
         assert!(!d.feed(1));
         assert!(!d.feed(0));
         assert!(!d.feed(0), "2/3 次空仍不翻");

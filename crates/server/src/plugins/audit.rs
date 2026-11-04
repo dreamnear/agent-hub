@@ -647,9 +647,7 @@ fn group_artifacts(
         let stem = name.trim_end_matches(".json");
         // 末段 16 hex hash 归 id；不合规形态归 "unknown" 组（保守保留原策略可清理）
         let id = match stem.rsplit_once('-') {
-            Some((id, hash))
-                if hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()) =>
-            {
+            Some((id, hash)) if hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()) => {
                 id.to_string()
             }
             _ => "unknown".to_string(),
@@ -658,7 +656,10 @@ fn group_artifacts(
             .metadata()
             .and_then(|m| m.modified())
             .unwrap_or(std::time::UNIX_EPOCH);
-        groups.entry(id).or_default().push(ArtifactFile { path, modified });
+        groups
+            .entry(id)
+            .or_default()
+            .push(ArtifactFile { path, modified });
     }
     Ok(groups)
 }
@@ -973,14 +974,26 @@ mod tests {
                 .set_modified(old)
                 .unwrap();
         };
-        write_at("demo-aaaaaaaaaaaaaaaa.json", std::time::Duration::from_secs(300));
-        write_at("demo-bbbbbbbbbbbbbbbb.json", std::time::Duration::from_secs(100));
-        write_at("other-cccccccccccccccc.json", std::time::Duration::from_secs(50));
+        write_at(
+            "demo-aaaaaaaaaaaaaaaa.json",
+            std::time::Duration::from_secs(300),
+        );
+        write_at(
+            "demo-bbbbbbbbbbbbbbbb.json",
+            std::time::Duration::from_secs(100),
+        );
+        write_at(
+            "other-cccccccccccccccc.json",
+            std::time::Duration::from_secs(50),
+        );
         let removed = prune_artifacts(a, 1).unwrap();
         assert_eq!(removed, 1);
         assert!(!a.join("demo-aaaaaaaaaaaaaaaa.json").exists(), "旧的被清");
         assert!(a.join("demo-bbbbbbbbbbbbbbbb.json").exists(), "新的保留");
-        assert!(a.join("other-cccccccccccccccc.json").exists(), "另一插件不受影响");
+        assert!(
+            a.join("other-cccccccccccccccc.json").exists(),
+            "另一插件不受影响"
+        );
         // keep=0 = 关闭清理
         let removed = prune_artifacts(a, 0).unwrap();
         assert_eq!(removed, 0);

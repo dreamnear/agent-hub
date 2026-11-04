@@ -721,8 +721,7 @@ async fn bundled_example_plugin_full_chain_with_node_backend() {
         "gitlab_pat"
     );
     assert_eq!(
-        plugin["permissions"]["highRisk"][0],
-        "对外传输数据",
+        plugin["permissions"]["highRisk"][0], "对外传输数据",
         "高危写工具须在 permissions.highRisk 声明（审计一致性；视图层已转展示名）"
     );
     let raw = plugin.to_string();
@@ -1148,7 +1147,11 @@ fn upgrade_plugin_dir(dir: &tempfile::TempDir, id: &str, tag: &str) -> String {
     )
     .unwrap();
     // 重写任一非 manifest 文件保证 hash 变化确定
-    std::fs::write(p.join("view/app.js"), format!("document.title='{}';\n", tag)).unwrap();
+    std::fs::write(
+        p.join("view/app.js"),
+        format!("document.title='{}';\n", tag),
+    )
+    .unwrap();
     server::plugins::audit::content_hash(&p)
 }
 
@@ -1197,15 +1200,19 @@ async fn update_flow_stages_diff_apply_and_keep_old() {
 
     // 2) 未确认期间保持旧版可用：目录内容已恢复 0.1.0，注册表 hash 不变
     assert_eq!(
-        state.plugins.list()[0].content_hash, old_hash,
+        state.plugins.list()[0].content_hash,
+        old_hash,
         "待确认期间注册表保持旧版"
     );
     let restored = server::plugins::audit::content_hash(&dir.path().join("plugins/demo-plugin"));
     assert_eq!(restored, old_hash, "目录内容应恢复旧版（保持旧版可用）");
-    let new_copy = dir
-        .path()
-        .join("plugins/.versions/demo-plugin")
-        .join(new_hash.trim_start_matches("sha256:").chars().take(16).collect::<String>());
+    let new_copy = dir.path().join("plugins/.versions/demo-plugin").join(
+        new_hash
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(16)
+            .collect::<String>(),
+    );
     assert!(new_copy.join("plugin.json").is_file(), "新版副本已入库");
     // PluginView 不直接暴露 pending（待确认态经 discovered 面呈递）
     let reg = server::plugins::registry::Registry::open(dir.path().join("plugins.json"));
@@ -1234,17 +1241,16 @@ async fn update_flow_stages_diff_apply_and_keep_old() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        records["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|r| {
-                r["kind"] == "update"
-                    && r["message"].as_str().unwrap_or("").contains("已应用")
-                    && r["message"].as_str().unwrap_or("").contains("0.1.0 → 0.2.0")
-            }),
-            "MINOR①：from-version 应为旧版 0.1.0：{records}"
-        );
+        records["records"].as_array().unwrap().iter().any(|r| {
+            r["kind"] == "update"
+                && r["message"].as_str().unwrap_or("").contains("已应用")
+                && r["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("0.1.0 → 0.2.0")
+        }),
+        "MINOR①：from-version 应为旧版 0.1.0：{records}"
+    );
 
     // 4) 再来一轮更新 → 保持旧版：pending 清除、新版副本删除、留痕
     let v3_hash = upgrade_plugin_dir(&dir, "demo-plugin", "v3");
@@ -1267,11 +1273,14 @@ async fn update_flow_stages_diff_apply_and_keep_old() {
         None,
     )
     .await;
-    assert!(records["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["kind"] == "update" && r["message"].as_str().unwrap_or("").contains("保持旧版")));
+    assert!(
+        records["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "update"
+                && r["message"].as_str().unwrap_or("").contains("保持旧版"))
+    );
 }
 
 #[tokio::test]
@@ -1380,7 +1389,11 @@ fn make_plugin_repo(dir: &tempfile::TempDir) -> String {
             "backend":{"command":"node","args":["backend/main.js"]}}"#,
     )
     .unwrap();
-    std::fs::write(repo.join("plugins/git-market-demo/backend/main.js"), "// demo\n").unwrap();
+    std::fs::write(
+        repo.join("plugins/git-market-demo/backend/main.js"),
+        "// demo\n",
+    )
+    .unwrap();
     let run = |args: &[&str]| {
         let out = std::process::Command::new("git")
             .args(args)
@@ -1395,7 +1408,15 @@ fn make_plugin_repo(dir: &tempfile::TempDir) -> String {
     };
     run(&["init", "-q", "-b", "main"]);
     run(&["add", "."]);
-    run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init"]);
+    run(&[
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
     let repo_url = repo.to_string_lossy().into_owned();
     let index = format!(
         r#"{{"name":"demo-index","plugins":[{{"id":"git-market-demo","name":"GitDemo","description":"fixture","repoUrl":"{}#main","subPath":"plugins/git-market-demo","tags":["demo"]}}]}}"#,
@@ -1403,7 +1424,15 @@ fn make_plugin_repo(dir: &tempfile::TempDir) -> String {
     );
     std::fs::write(repo.join("marketplace.json"), index).unwrap();
     run(&["add", "."]);
-    run(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "index"]);
+    run(&[
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qm",
+        "index",
+    ]);
     repo_url
 }
 
@@ -1426,7 +1455,10 @@ async fn git_install_and_market_end_to_end() {
     let (status, body, _) = req(a.clone(), "GET", "/api/plugins/market", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let entries = body["entries"].as_array().unwrap();
-    assert!(entries.iter().any(|e| e["id"] == "git-market-demo"), "{body}");
+    assert!(
+        entries.iter().any(|e| e["id"] == "git-market-demo"),
+        "{body}"
+    );
 
     // 2) 从索引触发安装 → 落盘 + 扫描面出现 new 候选 → 走既有确认流安装
     let (status, install_text) = req_text(
@@ -1455,7 +1487,9 @@ async fn git_install_and_market_end_to_end() {
         a.clone(),
         "POST",
         "/api/plugins/install-git",
-        Some(json!({ "repoUrl": format!("{repo_url}#main"), "subPath": "plugins/git-market-demo" })),
+        Some(
+            json!({ "repoUrl": format!("{repo_url}#main"), "subPath": "plugins/git-market-demo" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{git_text}");
@@ -1487,7 +1521,6 @@ async fn git_install_and_market_end_to_end() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
-
 
 // ===== B4 修复轮（tester-report-1）=====
 
@@ -1550,10 +1583,9 @@ async fn uninstall_purge_suppresses_rediscovery_until_content_changes() {
 
     // 目录内容变化（新版）→ 清理登记失效，恢复「新发现」
     let p = dir.path().join("plugins/demo-plugin");
-    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap().replace(
-        "\"version\": \"0.1.0\"",
-        "\"version\": \"0.9.0\"",
-    );
+    let manifest = std::fs::read_to_string(p.join("plugin.json"))
+        .unwrap()
+        .replace("\"version\": \"0.1.0\"", "\"version\": \"0.9.0\"");
     std::fs::write(p.join("plugin.json"), manifest).unwrap();
     let (status, body, _) = req(a.clone(), "POST", "/api/plugins/scan", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1578,10 +1610,9 @@ async fn update_apply_body_without_redundant_id_is_accepted() {
     write_plugin(&dir, "demo-plugin");
     install_demo(a.clone(), "demo-plugin").await;
     let p = dir.path().join("plugins/demo-plugin");
-    let manifest = std::fs::read_to_string(p.join("plugin.json")).unwrap().replace(
-        "\"version\": \"0.1.0\"",
-        "\"version\": \"0.2.0\"",
-    );
+    let manifest = std::fs::read_to_string(p.join("plugin.json"))
+        .unwrap()
+        .replace("\"version\": \"0.1.0\"", "\"version\": \"0.2.0\"");
     std::fs::write(p.join("plugin.json"), manifest).unwrap();
     let new_hash = server::plugins::audit::content_hash(&p);
     req(a.clone(), "POST", "/api/plugins/scan", None).await;
@@ -1621,11 +1652,10 @@ async fn on_idle_flip_dispatches_via_probe_backfill() {
             "backend":{"command":"no-such-backend-bin-xyz","args":[]}}"#,
     )
     .unwrap();
-    let manifest = server::plugins::manifest::parse(
-        &std::fs::read_to_string(p.join("plugin.json")).unwrap(),
-    )
-    .unwrap()
-    .manifest;
+    let manifest =
+        server::plugins::manifest::parse(&std::fs::read_to_string(p.join("plugin.json")).unwrap())
+            .unwrap()
+            .manifest;
     manager
         .registry
         .insert_installed(
@@ -1662,7 +1692,9 @@ async fn on_idle_flip_dispatches_via_probe_backfill() {
     running.store(0, Ordering::SeqCst);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        let stats = manager.hooks.stats_for("idle-observer", vec!["onIdle".into()]);
+        let stats = manager
+            .hooks
+            .stats_for("idle-observer", vec!["onIdle".into()]);
         if stats.is_some_and(|s| s.dropped >= 1) {
             break;
         }
@@ -1681,7 +1713,9 @@ async fn on_idle_flip_dispatches_via_probe_backfill() {
 #[tokio::test]
 async fn running_count_survives_single_driver_error() {
     use anyhow::Result;
-    use server::drivers::{AgentCatalog, AgentDriver, DriverRegistry, SessionControl, SessionHistory, StartSpec};
+    use server::drivers::{
+        AgentCatalog, AgentDriver, DriverRegistry, SessionControl, SessionHistory, StartSpec,
+    };
     use server::models::{AgentSummary, ChatMessage, Group};
     use std::sync::Arc;
 
@@ -1708,7 +1742,10 @@ async fn running_count_survives_single_driver_error() {
     }
 
     impl AgentCatalog for FakeDriver {
-        fn list<'a>(&'a self, _all: bool) -> futures::future::BoxFuture<'a, Result<Vec<AgentSummary>>> {
+        fn list<'a>(
+            &'a self,
+            _all: bool,
+        ) -> futures::future::BoxFuture<'a, Result<Vec<AgentSummary>>> {
             if self.fail {
                 Box::pin(async { Err(anyhow::anyhow!("fake dsh auth failure")) })
             } else {
@@ -1716,10 +1753,16 @@ async fn running_count_survives_single_driver_error() {
                 Box::pin(async { Ok(vec![s]) })
             }
         }
-        fn get<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Option<AgentSummary>>> {
+        fn get<'a>(
+            &'a self,
+            _id: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Option<AgentSummary>>> {
             Box::pin(async { Ok(None) })
         }
-        fn start<'a>(&'a self, _spec: &'a StartSpec) -> futures::future::BoxFuture<'a, Result<String>> {
+        fn start<'a>(
+            &'a self,
+            _spec: &'a StartSpec,
+        ) -> futures::future::BoxFuture<'a, Result<String>> {
             Box::pin(async { Err(server::drivers::unsupported("fake", "start")) })
         }
         fn stop<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
@@ -1737,14 +1780,22 @@ async fn running_count_survives_single_driver_error() {
     }
 
     impl SessionControl for FakeDriver {
-        fn send<'a>(&'a self, _id: &'a str, _text: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+        fn send<'a>(
+            &'a self,
+            _id: &'a str,
+            _text: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<()>> {
             Box::pin(async { Err(server::drivers::unsupported("fake", "send")) })
         }
         fn cancel<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
             Box::pin(async { Err(server::drivers::unsupported("fake", "cancel")) })
         }
-        fn is_finished(&self, _id: &str) -> bool { false }
-        fn release(&self, _id: &str) -> Result<()> { Ok(()) }
+        fn is_finished(&self, _id: &str) -> bool {
+            false
+        }
+        fn release(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
         fn answer_permission(&self, _id: &str, _perm: &str, _opt: Option<&str>) -> Result<bool> {
             Err(server::drivers::unsupported("fake", "answer_permission"))
         }
@@ -1756,16 +1807,23 @@ async fn running_count_survives_single_driver_error() {
             _id: &'a str,
             _limit: usize,
             _before: Option<usize>,
-        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>> {
+        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>>
+        {
             Box::pin(async { Ok(None) })
         }
-        fn full_history<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Vec<ChatMessage>>> {
+        fn full_history<'a>(
+            &'a self,
+            _id: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Vec<ChatMessage>>> {
             Box::pin(async { Ok(Vec::new()) })
         }
         fn is_active<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<bool>> {
             Box::pin(async { Ok(false) })
         }
-        fn subagents<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Vec<server::drivers::SubagentEntry>>> {
+        fn subagents<'a>(
+            &'a self,
+            _id: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Vec<server::drivers::SubagentEntry>>> {
             Box::pin(async { Ok(Vec::new()) })
         }
         fn subagent_page<'a>(
@@ -1774,13 +1832,21 @@ async fn running_count_survives_single_driver_error() {
             _sub: &'a str,
             _limit: usize,
             _before: Option<usize>,
-        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>> {
+        ) -> futures::future::BoxFuture<'a, Result<Option<server::drivers::events::MessagePage>>>
+        {
             Box::pin(async { Ok(None) })
         }
-        fn tasks<'a>(&'a self, _id: &'a str) -> futures::future::BoxFuture<'a, Result<Option<Vec<server::drivers::TaskEntry>>>> {
+        fn tasks<'a>(
+            &'a self,
+            _id: &'a str,
+        ) -> futures::future::BoxFuture<'a, Result<Option<Vec<server::drivers::TaskEntry>>>>
+        {
             Box::pin(async { Ok(None) })
         }
-        fn ensure_chat_room(&self, _session_id: &str) -> tokio::sync::broadcast::Sender<server::drivers::events::ChatEvent> {
+        fn ensure_chat_room(
+            &self,
+            _session_id: &str,
+        ) -> tokio::sync::broadcast::Sender<server::drivers::events::ChatEvent> {
             let (tx, _) = tokio::sync::broadcast::channel(1);
             tx
         }
@@ -1802,8 +1868,14 @@ async fn running_count_survives_single_driver_error() {
     }
 
     let mut reg = DriverRegistry::new();
-    reg.register(Arc::new(FakeDriver { name: "dsh", fail: true }));
-    reg.register(Arc::new(FakeDriver { name: "claude", fail: false }));
+    reg.register(Arc::new(FakeDriver {
+        name: "dsh",
+        fail: true,
+    }));
+    reg.register(Arc::new(FakeDriver {
+        name: "claude",
+        fail: false,
+    }));
     let count = reg.running_count().await;
     assert_eq!(count, 1, "dsh Err 不得抹零 claude 的 working 计数");
 }

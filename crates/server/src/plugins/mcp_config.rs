@@ -156,13 +156,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mcp_dir = dir.path().join("plugin_mcp");
         let hub = Path::new("/tmp/hub-bin");
-        let placeholder = write_config_sync(&mcp_dir, hub, "http://127.0.0.1:7909", "hub-abc")
-            .unwrap();
+        let placeholder =
+            write_config_sync(&mcp_dir, hub, "http://127.0.0.1:7909", "hub-abc").unwrap();
         write_config_at_sync(&placeholder, hub, "http://127.0.0.1:7909", "real-sess-1").unwrap();
         assert!(placeholder.is_file(), "占位文件必须原地保留（不删另写）");
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(&placeholder).unwrap()).unwrap();
-        assert_eq!(v["mcpServers"]["hub-plugins"]["args"][2], json!("real-sess-1"));
+        assert_eq!(
+            v["mcpServers"]["hub-plugins"]["args"][2],
+            json!("real-sess-1")
+        );
         // 原子无残留 tmp
         assert!(!mcp_dir.join(".hub-abc.json.tmp").exists());
     }

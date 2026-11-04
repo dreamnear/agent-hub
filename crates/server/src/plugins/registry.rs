@@ -448,12 +448,18 @@ impl Registry {
     pub fn is_discovery_dismissed(&self, id: &str, content_hash: &str) -> bool {
         let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let persisted = self.load_persisted_locked(&guard);
-        persisted.dismissed.iter().any(|d| d.id == id && d.content_hash == content_hash)
+        persisted
+            .dismissed
+            .iter()
+            .any(|d| d.id == id && d.content_hash == content_hash)
     }
 
     /// 读持久文件里的 dismissed 段（inner 锁内调用；文件是唯一持久位，
     /// 内存表不缓存——扫描频率低，逐次读文件足够）。
-    fn load_persisted_locked(&self, _guard: &BTreeMap<String, InstalledPlugin>) -> PersistedRegistry {
+    fn load_persisted_locked(
+        &self,
+        _guard: &BTreeMap<String, InstalledPlugin>,
+    ) -> PersistedRegistry {
         std::fs::read_to_string(&self.file)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())

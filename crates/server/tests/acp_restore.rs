@@ -321,11 +321,7 @@ fn write_omp_transcript(sessions_dir: &Path, sid: &str, with_message: bool) {
     let body = format!(
         "{{\"type\":\"title\",\"v\":1,\"title\":\"\",\"pad\":\"    \"}}\n{{\"type\":\"session\",\"id\":\"{sid}\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-10-03T00:00:00Z\"}}\n{message}\n",
     );
-    std::fs::write(
-        slug.join(format!("20261003T000000Z_{sid}.jsonl")),
-        body,
-    )
-    .unwrap();
+    std::fs::write(slug.join(format!("20261003T000000Z_{sid}.jsonl")), body).unwrap();
 }
 
 /// #45 占位剪除：omp 驱动条目 + 零消息转录 → 恢复期剪除（不 spawn 驱动进程 =

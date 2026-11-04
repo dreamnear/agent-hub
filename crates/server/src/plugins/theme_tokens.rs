@@ -40,10 +40,20 @@ pub fn builtin_token_values(css: &str) -> HashMap<String, BuiltinValue> {
         }
         for line in chunk.lines() {
             let line = line.trim();
-            let Some(rest) = line.strip_prefix("--c-") else { continue };
-            let Some((name, value)) = rest.split_once(':') else { continue };
+            let Some(rest) = line.strip_prefix("--c-") else {
+                continue;
+            };
+            let Some((name, value)) = rest.split_once(':') else {
+                continue;
+            };
             let name = name.trim().to_string();
-            let value = value.split("/*").next().unwrap_or("").trim().trim_end_matches(';').trim();
+            let value = value
+                .split("/*")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_end_matches(';')
+                .trim();
             if value.starts_with("var(") || value.is_empty() {
                 continue; // 引用链：覆盖无意义（生效值随引用目标）
             }
@@ -223,7 +233,13 @@ fn check_overrides_inner(
         if let Some((l, d)) = overrides.get(token) {
             return Some(if dark { d.clone() } else { l.clone() });
         }
-        builtins.get(token).map(|b| if dark { b.dark.clone() } else { b.light.clone() })
+        builtins.get(token).map(|b| {
+            if dark {
+                b.dark.clone()
+            } else {
+                b.light.clone()
+            }
+        })
     };
     for (text_tok, bg_tok) in SEMANTIC_PAIRS {
         if !full {
@@ -262,7 +278,10 @@ mod tests {
         // 表内的对必须全部「内置已达标」（配对表只收录实际用于文字场景且
         // App.css 既定达标的组合）；本测试先行失败即表或 App.css 回归
         let builtins = builtin_tokens();
-        assert!(builtins.contains_key("--c-text"), "App.css 解析应有 --c-text");
+        assert!(
+            builtins.contains_key("--c-text"),
+            "App.css 解析应有 --c-text"
+        );
         let fails = check_full(&builtins);
         assert!(fails.is_empty(), "内置主题不应有不达标对: {fails:?}");
     }
@@ -278,7 +297,9 @@ mod tests {
         );
         let fails = check_overrides(&ov, &builtins);
         assert!(
-            fails.iter().any(|f| f.text_token == "--c-text" && f.bg_token == "--c-bg"),
+            fails
+                .iter()
+                .any(|f| f.text_token == "--c-text" && f.bg_token == "--c-bg"),
             "{fails:?}"
         );
     }
@@ -314,7 +335,10 @@ mod tests {
         assert_eq!(bg.light, "#ffffff");
         assert_eq!(bg.dark, "#171717");
         // var() 引用链不进白名单
-        assert!(!builtins.contains_key("--c-code"), "var() 引用 token 应跳过");
+        assert!(
+            !builtins.contains_key("--c-code"),
+            "var() 引用 token 应跳过"
+        );
         // rgba() 复合值不进白名单
         assert!(!builtins.contains_key("--c-scrim"));
     }
@@ -328,4 +352,3 @@ mod tests {
         assert!(contrast_ratio("nope", "#ffffff").is_none());
     }
 }
-

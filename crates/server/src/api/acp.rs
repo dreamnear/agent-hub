@@ -119,8 +119,8 @@ pub async fn restore_persisted_sessions(state: SharedState) {
     tracing::info!(count = entries.len(), "开始恢复 ACP 会话");
     let mut kept = Vec::new();
     for entry in entries {
-        let omp_placeholder = entry.agent == state.omp.acp_agent_name()
-            && !state.omp.session_has_messages(&entry.id);
+        let omp_placeholder =
+            entry.agent == state.omp.acp_agent_name() && !state.omp.session_has_messages(&entry.id);
         if omp_placeholder {
             tracing::info!(id = %entry.id, "omp 零消息占位条目剪除（不恢复驱动进程）");
             continue;

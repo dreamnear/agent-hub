@@ -314,12 +314,7 @@ impl DriverRegistry {
                         .collect();
                     let c = v
                         .iter()
-                        .filter(|a| {
-                            matches!(
-                                a.group,
-                                Group::Working | Group::NeedsInput
-                            )
-                        })
+                        .filter(|a| matches!(a.group, Group::Working | Group::NeedsInput))
                         .count();
                     n += c;
                     tracing::debug!(

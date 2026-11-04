@@ -92,7 +92,10 @@ impl PluginQueue {
     }
 
     fn count_delivered(&self) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).delivered += 1;
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .delivered += 1;
     }
 
     fn count_dropped(&self) {
@@ -127,10 +130,7 @@ impl HooksBus {
 
     /// 装配接线（PluginManager::new 调用）：回指弱引用。
     pub fn bind(&self, manager: &Arc<super::PluginManager>) {
-        *self
-            .manager
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(manager);
+        *self.manager.lock().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(manager);
     }
 
     /// 发射一条观察档通知（fire-and-forget；同步返回前只做入队，投递异步进行）。
@@ -297,7 +297,9 @@ async fn deliver_one(
         queue.count_dropped();
         return;
     }
-    channel.notify(&hook_method(&n.hook), n.params.clone()).await;
+    channel
+        .notify(&hook_method(&n.hook), n.params.clone())
+        .await;
     queue.count_delivered();
     tracing::debug!(plugin = %plugin_id, hook = %n.hook, "钩子通知已投递");
 }
@@ -316,19 +318,13 @@ pub fn set_global(bus: Arc<HooksBus>) {
 
 /// 进程级门面读取（装配自检/测试锚点用；Some = 发射点可达）。
 pub fn global_bus() -> Option<Arc<HooksBus>> {
-    GLOBAL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+    GLOBAL.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// 发射点统一入口（ADR-0014 §3 埋点纪律：不散落直调 supervisor/rpc）。
 /// 总线未装配或无订阅者时短路，事件源零感知。
 pub fn global_dispatch(hook: &str, params: Value) {
-    let bus = GLOBAL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    let bus = GLOBAL.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(bus) = bus {
         bus.dispatch(hook, params);
     }
@@ -354,7 +350,12 @@ pub fn dispatch_message_append(session_id: &str, seq: u64, kind: &str, text: Opt
 }
 
 /// `onSessionCreate` 发射：会话创建完成（spawn/接管成功后）。
-pub fn dispatch_session_created(session_id: &str, driver: &str, cwd: Option<&str>, name: Option<&str>) {
+pub fn dispatch_session_created(
+    session_id: &str,
+    driver: &str,
+    cwd: Option<&str>,
+    name: Option<&str>,
+) {
     global_dispatch(
         "onSessionCreate",
         json!({
