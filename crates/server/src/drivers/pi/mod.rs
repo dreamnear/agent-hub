@@ -500,7 +500,7 @@ const VERSION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 #[derive(Clone)]
 pub struct PiDriver {
     inner: Arc<PiInner>,
-    /// P3 设置文件：`~/.claude-view/pi_settings.json`
+    /// P3 设置文件：`~/.agent-hub/pi_settings.json`
     pub settings_file: PathBuf,
     /// P8 extension 注入文件（hub 生成写入，spawn 时 -e 加载）
     pub extension_file: PathBuf,

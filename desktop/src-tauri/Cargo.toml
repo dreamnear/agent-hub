@@ -1,5 +1,5 @@
 [package]
-name = "claude-view-desktop"
+name = "agent-hub-desktop"
 version = "0.1.0"
 edition = "2021"
 description = "Claude View 桌面壳（Tauri 2 sidecar）"

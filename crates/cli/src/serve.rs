@@ -1,5 +1,5 @@
 //! `ah serve`：hub 守护形态（生命周期铁律：serve 只负责拉起与探活，绝不托管会话状态——
-//! 归 hub 管不归 hub 有）。pid 记录落 `~/.claude-view/ah.pid`（env AH_PID_FILE 覆盖）。
+//! 归 hub 管不归 hub 有）。pid 记录落 `~/.agent-hub/ah.pid`（env AH_PID_FILE 覆盖）。
 
 use std::fs;
 use std::os::unix::process::CommandExt;
@@ -18,30 +18,53 @@ pub struct PidRecord {
     pub url: String,
 }
 
-/// pid 文件路径：env `AH_PID_FILE` > `~/.claude-view/ah.pid`。
+/// pid 文件路径：env `AH_PID_FILE` > `~/.agent-hub/ah.pid`。
 pub fn pid_file() -> PathBuf {
     std::env::var("AH_PID_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             format!(
-                "{}/.claude-view/ah.pid",
+                "{}/.agent-hub/ah.pid",
                 std::env::var("HOME").unwrap_or_else(|_| ".".into())
             )
             .into()
         })
 }
 
-/// server 日志：env `AH_SERVER_LOG` > `~/.claude-view/ah-server.log`。
+/// server 日志：env `AH_SERVER_LOG` > `~/.agent-hub/ah-server.log`。
 fn server_log() -> PathBuf {
     std::env::var("AH_SERVER_LOG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             format!(
-                "{}/.claude-view/ah-server.log",
+                "{}/.agent-hub/ah-server.log",
                 std::env::var("HOME").unwrap_or_else(|_| ".".into())
             )
             .into()
         })
+}
+
+/// #72 品牌迁移：数据目录一次性更名（旧在/新不在才迁，同卷原子 rename，幂等）。
+/// 与 server platform::migrate_legacy_data_dir 同源逻辑（cli 不依赖 server crate
+/// 故就地实现；`.claude-view` 字面量为迁移源常量，grep 白名单内）。**必须在 spawn
+/// server 与写 pid/log 前执行**——否则 cli 先建 `~/.agent-hub` 落 pid，server 侧
+/// 迁移判「新已存在」跳过 → 旧数据（token/任务/插件状态）永不迁移，静默空目录起
+/// = 数据隐身（第一红线）。失败即中止 start（不静默继续）。
+pub fn migrate_legacy_data_dir() -> anyhow::Result<bool> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let legacy = PathBuf::from(format!("{home}/.claude-view"));
+    let target = PathBuf::from(format!("{home}/.agent-hub"));
+    if !legacy.exists() || target.exists() {
+        return Ok(false);
+    }
+    fs::rename(&legacy, &target).with_context(|| {
+        format!(
+            "数据目录迁移失败: {} → {}",
+            legacy.display(),
+            target.display()
+        )
+    })?;
+    Ok(true)
 }
 
 /// server bin 解析：`--bin` > env `AH_SERVER_BIN` > 与 ah 同目录的 `server`
@@ -108,8 +131,15 @@ pub async fn start(bin: Option<&str>, url: &str, hub: &Hub) -> anyhow::Result<St
     if hub.healthy().await {
         return Ok(format!("hub 已在运行于 {url}，无需拉起"));
     }
+    // #72 数据目录迁移先于一切落盘动作（理由见 migrate_legacy_data_dir 文档）
+    migrate_legacy_data_dir()?;
     let bin_path = resolve_server_bin(bin)?;
     let log = server_log();
+    // 新装机器（无迁移遗留）首次 start：数据目录尚不存在，pid/log 落盘前补建
+    if let Some(parent) = log.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("建数据目录失败: {}", parent.display()))?;
+    }
     // server 读 env 装配（AGENT_HUB_BIND 等），继承 ah 进程环境即可定向到目标端口
     let pid = spawn_detached(&bin_path, &[], &log)?;
     fs::write(

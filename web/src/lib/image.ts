@@ -14,12 +14,13 @@ export interface ImageRefSegment {
 /// 图片引用形态（r72b 扩 CLI 形态，三选一交替、先到先得）：
 /// 1. `[Image: source: <绝对路径>.<ext>]`：jsonl 里 CLI 记录的 TUI 粘贴图形态
 ///    （整串消费只捕路径，不留 "[Image: source: ]" 残壳）；
-/// 2. uploads 裸路径：网页上传链路（@ 可选，r72 语义不变）；
+/// 2. uploads 裸路径：网页上传链路（@ 可选，r72 语义不变）；目录名新旧双兼容
+///    （#72 品牌迁移：历史转录里 `claude-view-uploads` 旧引用必须继续渲染）；
 /// 3. `/tmp[/private]/claude-tmp/...` 裸路径：CLI TUI 粘贴图临时落盘形态
 ///    （macOS 实际形态带 /private 前缀）。
 /// `[Image #22]` 无路径占位不匹配（无 src 可取，保持纯文本不渲染）。
 const IMAGE_REF_RE =
-  /\[Image: source: (\/[^\s"\]]+\.(?:png|jpe?g|webp|gif))\]|@?(\/[^\s"]*claude-view-uploads\/[^\s"]+\.(?:png|jpe?g|webp|gif))\b|(\/(?:private\/)?tmp\/claude-tmp\/[^\s"\]]+\.(?:png|jpe?g|webp|gif))\b/gi;
+  /\[Image: source: (\/[^\s"\]]+\.(?:png|jpe?g|webp|gif))\]|@?(\/[^\s"]*(?:claude-view|agent-hub)-uploads\/[^\s"]+\.(?:png|jpe?g|webp|gif))\b|(\/(?:private\/)?tmp\/claude-tmp\/[^\s"\]]+\.(?:png|jpe?g|webp|gif))\b/gi;
 
 /// 把消息文本按上传图片引用切段：image 段带 [Image #n]（n 为该消息内出现顺序），
 /// 其余为原样 text 段。无匹配时返回单段原文。
@@ -43,7 +44,8 @@ export function splitImageRefs(text: string): ImageRefSegment[] {
 /// /api/images/by-path（后端目录前缀白名单把关）。提取失败（白名单外路径）返回
 /// null，渲染层回落占位 pill。
 export function imageUrlOf(path: string): string | null {
-  const m = /claude-view-uploads\/([^/\\\s]+\.(?:png|jpe?g|webp|gif))/i.exec(path);
+  // 新旧双兼容（#72）：历史转录的 claude-view-uploads 引用与新 agent-hub-uploads 同解析
+  const m = /(?:claude-view|agent-hub)-uploads\/([^/\\\s]+\.(?:png|jpe?g|webp|gif))/i.exec(path);
   if (m) return `/api/images/${encodeURIComponent(m[1])}${resourceTokenQuery()}`;
   if (/^\/(?:private\/)?tmp\/claude-tmp\/.+\.(?:png|jpe?g|webp|gif)$/i.test(path)) {
     const params = new URLSearchParams({ path });

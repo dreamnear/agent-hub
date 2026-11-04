@@ -53,11 +53,11 @@ cargo run --release
 | `CLAUDE_BIN` | `claude` |
 | `JOBS_DIR` | `~/.claude/jobs` |
 | `POLL_SECS` | `10` |
-| `PROJECTS_FILE` | `~/.claude-view/projects.json` |
+| `PROJECTS_FILE` | `~/.agent-hub/projects.json` |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude` |
 | `AGENT_HUB_ALLOW_LAN` | unset (localhost only, auth-free; `1`/`true` binds `0.0.0.0` and enforces token) |
-| `AGENT_HUB_TOKEN` | unset (with `ALLOW_LAN`, generated on first start and persisted to `~/.claude-view/token`) |
-| `AGENT_HUB_TOKEN_FILE` | `~/.claude-view/token` |
+| `AGENT_HUB_TOKEN` | unset (with `ALLOW_LAN`, generated on first start and persisted to `~/.agent-hub/token`) |
+| `AGENT_HUB_TOKEN_FILE` | `~/.agent-hub/token` |
 
 **LAN access**: start with `AGENT_HUB_ALLOW_LAN=1`, open `http://<host-ip>:7800` on the same WiFi, enter the token (local clients can read it at `/api/auth/token`; the page can generate a QR code that carries `?token=` for one-tap sign-in). Loopback access is always auth-free.
 

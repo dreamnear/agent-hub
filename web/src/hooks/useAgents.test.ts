@@ -179,9 +179,9 @@ describe('filterAgents', () => {
     expect(g.map((a) => a.id)).toEqual(['wt']);
   });
 
-  it('keeps sessions in subdirectories of a checked root (r51 claude-view 场景)', () => {
+  it('keeps sessions in subdirectories of a checked root (r51 fixture 场景)', () => {
     const g = filterAgents(
-      [withCwd('sub', '/Users/kevin/Works/personal/projects/claude-view')],
+      [withCwd('sub', '/Users/kevin/Works/personal/projects/legacy-app')],
       new Set(['/Users/kevin/Works/personal']),
       ['/Users/kevin/Works/personal'],
     );
@@ -198,11 +198,11 @@ describe('filterAgents', () => {
       kind: 'opencode',
       cwd,
     });
-    const anchors = ['/Users/kevin/Works/personal/projects/claude-view'];
+    const anchors = ['/Users/kevin/Works/personal/projects/legacy-app'];
     const checked = new Set(anchors);
     const g = filterAgents(
       [
-        oc('oc-in-proj', '/Users/kevin/Works/personal/projects/claude-view', 'completed'),
+        oc('oc-in-proj', '/Users/kevin/Works/personal/projects/legacy-app', 'completed'),
         oc('oc-stray', '/private/tmp/scratch', 'completed'),
         oc('oc-home', '/Users/kevin/dev/games/hyper3D_1', 'completed'),
         oc('oc-working-stray', '/private/tmp/scratch', 'working'),
@@ -233,16 +233,16 @@ describe('filterAgents', () => {
   });
 
   it('personal family: root/submodule/middle-layer cwd all fold into the personal anchor (r53 personal 族)', () => {
-    // 族锚取最短前缀（最外层）：personal 主仓、其下 submodule（src/claude-view）、
+    // 族锚取最短前缀（最外层）：personal 主仓、其下 submodule（src/legacy-app）、
     // 未注册中间层 cwd 三者同族——勾任一节点（含 submodule 节点）全族显示
     const anchors = [
       '/Users/kevin/Works/personal',
-      '/Users/kevin/Works/personal/projects/claude-view/src/claude-view',
+      '/Users/kevin/Works/personal/projects/legacy-app/src/legacy-app',
     ];
     const sessions = [
-      withCwd('middle', '/Users/kevin/Works/personal/projects/claude-view'),
+      withCwd('middle', '/Users/kevin/Works/personal/projects/legacy-app'),
       withCwd('personal-root', '/Users/kevin/Works/personal'),
-      withCwd('sub-inner', '/Users/kevin/Works/personal/projects/claude-view/src/claude-view/pkg'),
+      withCwd('sub-inner', '/Users/kevin/Works/personal/projects/legacy-app/src/legacy-app/pkg'),
       withCwd('far', '/proj/other'),
     ];
     const byPersonalRoot = filterAgents(sessions, new Set([anchors[0]]), anchors);

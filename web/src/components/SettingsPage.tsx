@@ -82,7 +82,7 @@ function SettingsAbout(): ReactElement {
     <section className="set-group">
       <div className="set-row">
         <span className="set-label">{t('settings.about.product')}</span>
-        <span className="set-value">agent-hub（claude-view）</span>
+        <span className="set-value">agent-hub</span>
       </div>
       <div className="set-row">
         <span className="set-label">{t('settings.about.version')}</span>

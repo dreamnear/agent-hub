@@ -1,20 +1,16 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-/// config.toml 路径：env `AGENT_HUB_CONFIG` 覆盖，默认 `~/.claude-view/config.toml`。
+/// config.toml 路径：env `AGENT_HUB_CONFIG` 覆盖，默认 `~/.agent-hub/config.toml`。
 /// 写侧（harness 加入配置）用它定位；读侧各段仍走自己的 `load()`。
 pub fn config_path() -> PathBuf {
     std::env::var("AGENT_HUB_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            format!(
-                "{}/.claude-view/config.toml",
-                crate::platform::home_dir_str()
-            )
-            .into()
+            format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
         })
 }
 
-/// chat 分页配置（P6 B14）：`~/.claude-view/config.toml` 的 `[chat]` 段；
+/// chat 分页配置（P6 B14）：`~/.agent-hub/config.toml` 的 `[chat]` 段；
 /// 文件缺失/解析失败回退默认（20/100）。page_size 限 20-30，buffer_max 不低于 page_size。
 #[derive(Debug, Clone)]
 pub struct ChatConfig {
@@ -36,11 +32,7 @@ impl ChatConfig {
         let path = std::env::var("AGENT_HUB_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                format!(
-                    "{}/.claude-view/config.toml",
-                    crate::platform::home_dir_str()
-                )
-                .into()
+                format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
             });
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
@@ -101,11 +93,7 @@ impl PiConfig {
         let path = std::env::var("AGENT_HUB_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                format!(
-                    "{}/.claude-view/config.toml",
-                    crate::platform::home_dir_str()
-                )
-                .into()
+                format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
             });
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return cfg;
@@ -199,11 +187,7 @@ impl DshConfig {
         let path = std::env::var("AGENT_HUB_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                format!(
-                    "{}/.claude-view/config.toml",
-                    crate::platform::home_dir_str()
-                )
-                .into()
+                format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
             });
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
@@ -277,11 +261,7 @@ impl OmpConfig {
         let path = std::env::var("AGENT_HUB_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                format!(
-                    "{}/.claude-view/config.toml",
-                    crate::platform::home_dir_str()
-                )
-                .into()
+                format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
             });
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
@@ -310,11 +290,7 @@ impl OpencodeConfig {
         let path = std::env::var("AGENT_HUB_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                format!(
-                    "{}/.claude-view/config.toml",
-                    crate::platform::home_dir_str()
-                )
-                .into()
+                format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
             });
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
@@ -372,11 +348,7 @@ impl AcpConfig {
         let path = std::env::var("AGENT_HUB_CONFIG")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                format!(
-                    "{}/.claude-view/config.toml",
-                    crate::platform::home_dir_str()
-                )
-                .into()
+                format!("{}/.agent-hub/config.toml", crate::platform::home_dir_str()).into()
             });
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
@@ -424,7 +396,7 @@ pub struct Config {
     pub claude_bin: PathBuf,
     pub jobs_dir: PathBuf,
     pub poll_secs: u64,
-    /// 工程列表持久化文件：`~/.claude-view/projects.json`，测试通过 `PROJECTS_FILE` 覆盖
+    /// 工程列表持久化文件：`~/.agent-hub/projects.json`，测试通过 `PROJECTS_FILE` 覆盖
     pub projects_file: PathBuf,
     /// `~/.claude` 根（会话 jsonl 定位 `<root>/projects/<slug>/<id>.jsonl`），env `CLAUDE_PROJECTS_DIR` 覆盖
     pub claude_root: PathBuf,
@@ -432,7 +404,7 @@ pub struct Config {
     pub allow_lan: bool,
     /// 认证 token；env `AGENT_HUB_TOKEN` 覆盖，未设则首启随机生成并持久化到 token_file
     pub token: Option<String>,
-    /// token 持久化文件，env `AGENT_HUB_TOKEN_FILE` 覆盖；默认 `~/.claude-view/token`
+    /// token 持久化文件，env `AGENT_HUB_TOKEN_FILE` 覆盖；默认 `~/.agent-hub/token`
     pub token_file: PathBuf,
     /// agents 配置目录（P3 配置管理器），env `AGENT_HUB_AGENTS_DIR` 覆盖；默认 `~/.claude/agents`
     pub agents_dir: PathBuf,
@@ -440,64 +412,64 @@ pub struct Config {
     pub chat: ChatConfig,
     /// ACP agent 清单（acp-omp 批1）
     pub acp: AcpConfig,
-    /// ACP 会话持久化文件（批3 任务13）：`~/.claude-view/acp_sessions.json`，
+    /// ACP 会话持久化文件（批3 任务13）：`~/.agent-hub/acp_sessions.json`，
     /// env `ACP_SESSIONS_FILE` 覆盖；惯例同 projects_file
     pub acp_sessions_file: PathBuf,
-    /// 工程便签持久化（agent-hub-notes）：`~/.claude-view/notes.json`，env `NOTES_FILE`
+    /// 工程便签持久化（agent-hub-notes）：`~/.agent-hub/notes.json`，env `NOTES_FILE`
     /// 覆盖；惯例同 projects_file，落盘强制 0600（内容可能含账密）
     pub notes_file: PathBuf,
     /// 打开本地目录的命令（P6 B3）；env `AGENT_HUB_DIR_OPENER` 覆盖，默认 macOS `open`
     pub dir_opener: String,
-    /// 多实例配置持久化（agent-hub-multi-instance 批1 任务2）：`~/.claude-view/instances.json`，
+    /// 多实例配置持久化（agent-hub-multi-instance 批1 任务2）：`~/.agent-hub/instances.json`，
     /// env `INSTANCES_FILE` 覆盖；惯例同 notes.json，落盘强制 0600（含远程实例 token/密码）
     pub instances_file: PathBuf,
-    /// node 形态身份文件（gateway-node P1 任务2）：`~/.claude-view/node.json`，
+    /// node 形态身份文件（gateway-node P1 任务2）：`~/.agent-hub/node.json`，
     /// env `AGENT_HUB_NODE_FILE` 覆盖；惯例同 instances.json（0600，含 node token）
     pub node_file: PathBuf,
-    /// 节点注册表（gateway-node P1 任务4）：`~/.claude-view/nodes.json`，
+    /// 节点注册表（gateway-node P1 任务4）：`~/.agent-hub/nodes.json`，
     /// env `AGENT_HUB_NODES_FILE` 覆盖；惯例同 instances.json（0600，只含 token 哈希）
     pub nodes_file: PathBuf,
     /// opencode 驱动配置（agent-hub-opencode-driver，attach-service 首发）
     pub opencode: OpencodeConfig,
-    /// opencode serve 运行态落盘文件：`~/.claude-view/opencode_serve.json`，
+    /// opencode serve 运行态落盘文件：`~/.agent-hub/opencode_serve.json`，
     /// env `OPENCODE_SERVE_FILE` 覆盖（端口/pid 记录，hub 重启后重新发现）
     pub opencode_serve_file: PathBuf,
     /// dsh 驱动配置（agent-hub-dsh-driver，attach-service 第二实现）
     pub dsh: DshConfig,
     /// omp 文件事实源驱动配置（agent-hub-omp-session-host 阶段 A）
     pub omp: OmpConfig,
-    /// dsh serve 运行态落盘文件：`~/.claude-view/dsh_serve.json`，env `DSH_SERVE_FILE` 覆盖
+    /// dsh serve 运行态落盘文件：`~/.agent-hub/dsh_serve.json`，env `DSH_SERVE_FILE` 覆盖
     pub dsh_serve_file: PathBuf,
-    /// 定时任务持久化目录（agent-hub-daemon-capabilities）：`~/.claude-view/tasks`
+    /// 定时任务持久化目录（agent-hub-daemon-capabilities）：`~/.agent-hub/tasks`
     /// （tasks.json + runs/<taskId>.jsonl），env `AGENT_HUB_TASKS_DIR` 覆盖；惯例同 projects_file
     pub tasks_dir: PathBuf,
-    /// interactive「从列表移除」忽略清单文件（R8）：`~/.claude-view/ignored_interactive.json`，
+    /// interactive「从列表移除」忽略清单文件（R8）：`~/.agent-hub/ignored_interactive.json`，
     /// env `AGENT_HUB_IGNORED_INTERACTIVE_FILE` 覆盖；惯例同 notes_file
     pub ignored_interactive_file: PathBuf,
     /// pi 驱动配置（agent-hub-pi-hub-agent）
     pub pi: PiConfig,
-    /// P3 pi 助手设置持久化：`~/.claude-view/pi_settings.json`，
+    /// P3 pi 助手设置持久化：`~/.agent-hub/pi_settings.json`，
     /// env `PI_SETTINGS_FILE` 覆盖（provider/model，设置页读写）
     pub pi_settings_file: PathBuf,
-    /// P8 extension 注入文件：`~/.claude-view/pi/hub-assistant.ts`（hub 生成写入，
+    /// P8 extension 注入文件：`~/.agent-hub/pi/hub-assistant.ts`（hub 生成写入，
     /// spawn 时 `-e` 加载）；env `PI_EXTENSION_FILE` 覆盖
     pub pi_extension_file: PathBuf,
-    /// pi 会话存储目录（`--session-dir`）：`~/.claude-view/pi/sessions`，
+    /// pi 会话存储目录（`--session-dir`）：`~/.agent-hub/pi/sessions`，
     /// env `PI_SESSION_DIR` 覆盖
     pub pi_session_dir: PathBuf,
-    /// 插件根目录（ADR-0001 第 4/5 条 drop-in 位）：`~/.claude-view/plugins`，
+    /// 插件根目录（ADR-0001 第 4/5 条 drop-in 位）：`~/.agent-hub/plugins`，
     /// env `AGENT_HUB_PLUGINS_DIR` 覆盖；只扫一层深、不跟随符号链接
     pub plugins_dir: PathBuf,
-    /// 插件注册表持久态：`~/.claude-view/plugins.json`，env `AGENT_HUB_PLUGINS_FILE`
+    /// 插件注册表持久态：`~/.agent-hub/plugins.json`，env `AGENT_HUB_PLUGINS_FILE`
     /// 覆盖；落盘强制 0600（含权限面 hash 与故障摘要）
     pub plugin_state_file: PathBuf,
-    /// 插件凭据代持文件（ADR-0007 第 4 条）：`~/.claude-view/plugin_credentials.json`，
+    /// 插件凭据代持文件（ADR-0007 第 4 条）：`~/.agent-hub/plugin_credentials.json`，
     /// env `AGENT_HUB_PLUGIN_CREDENTIALS_FILE` 覆盖；0600，值零回显
     pub plugin_credentials_file: PathBuf,
-    /// 插件审计留档目录：`~/.claude-view/plugin_audit/<id>-<hash>.json`，
+    /// 插件审计留档目录：`~/.agent-hub/plugin_audit/<id>-<hash>.json`，
     /// env `AGENT_HUB_PLUGIN_AUDIT_DIR` 覆盖
     pub plugin_audit_dir: PathBuf,
-    /// 插件自持数据目录：`~/.claude-view/plugin_data/<id>/`，
+    /// 插件自持数据目录：`~/.agent-hub/plugin_data/<id>/`，
     /// env `AGENT_HUB_PLUGIN_DATA_DIR` 覆盖（卸载默认保留，ADR-0007 拍板结论 5）
     pub plugin_data_dir: PathBuf,
     /// 周期扫描间隔秒数（ADR-0002 第 2 条）：`[plugins] scan_interval_secs`，
@@ -506,7 +478,7 @@ pub struct Config {
     /// transient 插件目录（ADR-0001 第 4 条）：`--plugin-dir` 可重复或 env
     /// `AGENT_HUB_PLUGIN_DIR`（多值 `:` 分隔）；不写注册表持久层
     pub plugin_transient_dirs: Vec<PathBuf>,
-    /// MCP 聚合代理会话级 config 目录（B2）：`~/.claude-view/plugin_mcp`，
+    /// MCP 聚合代理会话级 config 目录（B2）：`~/.agent-hub/plugin_mcp`，
     /// env `AGENT_HUB_PLUGIN_MCP_DIR` 覆盖；每会话一 JSON（不写 `~/.claude`）
     pub plugin_mcp_dir: PathBuf,
     /// 钩子通知队列上限（B4 ADR-0014 拍板结论 3）：`[plugins] hook_queue_cap`，
@@ -515,7 +487,7 @@ pub struct Config {
     /// 审计产物每插件保留份数（B4 治理）：`[plugins] audit_keep`，
     /// env `AGENT_HUB_PLUGIN_AUDIT_KEEP` 覆盖；默认 10，0 = 关闭清理
     pub plugin_audit_keep: usize,
-    /// 索引市场源清单（B4 ADR-0008 §3）：`~/.claude-view/plugin_marketplaces.json`，
+    /// 索引市场源清单（B4 ADR-0008 §3）：`~/.agent-hub/plugin_marketplaces.json`，
     /// env `AGENT_HUB_PLUGIN_MARKET_FILE` 覆盖；0600（用户显式添加的索引源 URL）
     pub plugin_market_file: PathBuf,
 }
@@ -541,7 +513,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/projects.json",
+                        "{}/.agent-hub/projects.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -556,16 +528,12 @@ impl Config {
             node_file: std::env::var("AGENT_HUB_NODE_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!("{}/.claude-view/node.json", crate::platform::home_dir_str()).into()
+                    format!("{}/.agent-hub/node.json", crate::platform::home_dir_str()).into()
                 }),
             nodes_file: std::env::var("AGENT_HUB_NODES_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!(
-                        "{}/.claude-view/nodes.json",
-                        crate::platform::home_dir_str()
-                    )
-                    .into()
+                    format!("{}/.agent-hub/nodes.json", crate::platform::home_dir_str()).into()
                 }),
             token: std::env::var("AGENT_HUB_TOKEN").ok(),
             agents_dir: std::env::var("AGENT_HUB_AGENTS_DIR")
@@ -576,7 +544,7 @@ impl Config {
             token_file: std::env::var("AGENT_HUB_TOKEN_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!("{}/.claude-view/token", crate::platform::home_dir_str()).into()
+                    format!("{}/.agent-hub/token", crate::platform::home_dir_str()).into()
                 }),
             chat: ChatConfig::load(),
             acp: AcpConfig::load(),
@@ -584,7 +552,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/acp_sessions.json",
+                        "{}/.agent-hub/acp_sessions.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -592,11 +560,7 @@ impl Config {
             notes_file: std::env::var("NOTES_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!(
-                        "{}/.claude-view/notes.json",
-                        crate::platform::home_dir_str()
-                    )
-                    .into()
+                    format!("{}/.agent-hub/notes.json", crate::platform::home_dir_str()).into()
                 }),
             // interactive「从列表移除」忽略清单（R8）：按 sessionId 持久过滤
             // 前台会话条目；底层进程消失后条目自然死亡，清单懒清理（惯例同 notes）
@@ -604,7 +568,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/ignored_interactive.json",
+                        "{}/.agent-hub/ignored_interactive.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -614,7 +578,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/instances.json",
+                        "{}/.agent-hub/instances.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -624,7 +588,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/opencode_serve.json",
+                        "{}/.agent-hub/opencode_serve.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -635,7 +599,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/dsh_serve.json",
+                        "{}/.agent-hub/dsh_serve.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -643,14 +607,14 @@ impl Config {
             tasks_dir: std::env::var("AGENT_HUB_TASKS_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!("{}/.claude-view/tasks", crate::platform::home_dir_str()).into()
+                    format!("{}/.agent-hub/tasks", crate::platform::home_dir_str()).into()
                 }),
             pi: PiConfig::load(),
             pi_settings_file: std::env::var("PI_SETTINGS_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/pi_settings.json",
+                        "{}/.agent-hub/pi_settings.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -659,7 +623,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/pi/hub-assistant.ts",
+                        "{}/.agent-hub/pi/hub-assistant.ts",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -667,22 +631,18 @@ impl Config {
             pi_session_dir: std::env::var("PI_SESSION_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!(
-                        "{}/.claude-view/pi/sessions",
-                        crate::platform::home_dir_str()
-                    )
-                    .into()
+                    format!("{}/.agent-hub/pi/sessions", crate::platform::home_dir_str()).into()
                 }),
             plugins_dir: std::env::var("AGENT_HUB_PLUGINS_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!("{}/.claude-view/plugins", crate::platform::home_dir_str()).into()
+                    format!("{}/.agent-hub/plugins", crate::platform::home_dir_str()).into()
                 }),
             plugin_state_file: std::env::var("AGENT_HUB_PLUGINS_FILE")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/plugins.json",
+                        "{}/.agent-hub/plugins.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -691,7 +651,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/plugin_credentials.json",
+                        "{}/.agent-hub/plugin_credentials.json",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -700,7 +660,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/plugin_audit",
+                        "{}/.agent-hub/plugin_audit",
                         crate::platform::home_dir_str()
                     )
                     .into()
@@ -708,11 +668,7 @@ impl Config {
             plugin_data_dir: std::env::var("AGENT_HUB_PLUGIN_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!(
-                        "{}/.claude-view/plugin_data",
-                        crate::platform::home_dir_str()
-                    )
-                    .into()
+                    format!("{}/.agent-hub/plugin_data", crate::platform::home_dir_str()).into()
                 }),
             plugin_scan_secs: PluginScanConfig::load(),
             plugin_transient_dirs: std::env::var("AGENT_HUB_PLUGIN_DIR")
@@ -727,11 +683,7 @@ impl Config {
             plugin_mcp_dir: std::env::var("AGENT_HUB_PLUGIN_MCP_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
-                    format!(
-                        "{}/.claude-view/plugin_mcp",
-                        crate::platform::home_dir_str()
-                    )
-                    .into()
+                    format!("{}/.agent-hub/plugin_mcp", crate::platform::home_dir_str()).into()
                 }),
             plugin_hook_queue_cap: PluginHookQueueCapConfig::load(),
             plugin_audit_keep: PluginAuditKeepConfig::load(),
@@ -739,7 +691,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {
                     format!(
-                        "{}/.claude-view/plugin_marketplaces.json",
+                        "{}/.agent-hub/plugin_marketplaces.json",
                         crate::platform::home_dir_str()
                     )
                     .into()

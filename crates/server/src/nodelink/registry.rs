@@ -1,6 +1,6 @@
 //! 节点注册表 + enrollment 状态机（agent-hub-gateway-node-p1 任务 4）。
 //!
-//! - **nodes.json**（`~/.claude-view/nodes.json`，env `AGENT_HUB_NODES_FILE` 覆盖；
+//! - **nodes.json**（`~/.agent-hub/nodes.json`，env `AGENT_HUB_NODES_FILE` 覆盖；
 //!   0600 原子落盘）：节点身份与状态（pending/approved/rejected）+ token 哈希
 //!   （sha256，**零明文**——明文只在签发响应与握手瞬间存在）。网关重启凭它重建
 //!   （N4 网关半边）。

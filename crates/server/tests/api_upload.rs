@@ -190,7 +190,7 @@ async fn get_image_missing_file_is_404_without_path_leak() {
         .unwrap();
     let text = String::from_utf8(bytes.to_vec()).unwrap();
     // 5xx/4xx 均不透出服务端绝对路径
-    assert!(!text.contains("claude-view-uploads"), "body: {text}");
+    assert!(!text.contains("agent-hub-uploads"), "body: {text}");
     assert!(!text.contains("tmp"), "body: {text}");
 }
 
@@ -277,7 +277,7 @@ async fn get_by_path_serves_claude_tmp_image() {
 async fn get_by_path_serves_uploads_image_too() {
     // uploads 根同在 by-path 白名单：两条路由殊途同归（前端双形态渲染走同一端点族）
     let (_dir, name, app) = upload_one_png().await;
-    let uploads = std::env::temp_dir().join("claude-view-uploads").join(&name);
+    let uploads = std::env::temp_dir().join("agent-hub-uploads").join(&name);
     let (status, bytes, _) = get_by_path(&app, &uploads.display().to_string()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(bytes, PNG_MAGIC);
@@ -291,7 +291,7 @@ async fn get_by_path_rejects_traversal_and_prefix_confusion() {
     // 穿越目标真实存在（防「不存在也 404」假阳性）
     let secret = std::env::temp_dir().join(format!("hub-r72b-secret-{}.png", std::process::id()));
     std::fs::write(&secret, PNG_MAGIC).unwrap();
-    let uploads_root = std::env::temp_dir().join("claude-view-uploads");
+    let uploads_root = std::env::temp_dir().join("agent-hub-uploads");
     let escape = uploads_root.join("..").join(secret.file_name().unwrap());
     let evil_root = std::path::Path::new("/tmp/claude-tmp-evil");
     std::fs::create_dir_all(evil_root).unwrap();
@@ -303,7 +303,7 @@ async fn get_by_path_rejects_traversal_and_prefix_confusion() {
     let (status, body, _) = get_by_path(&app, "/etc/passwd").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        !String::from_utf8_lossy(&body).contains("claude-view-uploads")
+        !String::from_utf8_lossy(&body).contains("agent-hub-uploads")
             && !String::from_utf8_lossy(&body).contains("var/folders"),
         "body: {}",
         String::from_utf8_lossy(&body)

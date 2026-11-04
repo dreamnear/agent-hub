@@ -58,7 +58,7 @@ export default function TokenGate({ onUnlocked }: { onUnlocked: () => void }): R
       <div className="token-card">
         <h2>{t('gate.title')}</h2>
         <p className="token-hint">
-          {t('gate.hint1')} <code>~/.claude-view/token</code>
+          {t('gate.hint1')} <code>~/.agent-hub/token</code>
           {t('gate.hint2')}
         </p>
         <input

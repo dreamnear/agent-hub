@@ -27,5 +27,5 @@ jobs:
         # desktop 壳（tauri）依赖 gtk/webkit 系统库，不属 CI 门禁域（自有发布路径），exclude 之
         run: |
           cargo fmt --check
-          cargo clippy --workspace --exclude claude-view-desktop -- -D warnings
-          cargo test --workspace --exclude claude-view-desktop
+          cargo clippy --workspace --exclude agent-hub-desktop -- -D warnings
+          cargo test --workspace --exclude agent-hub-desktop

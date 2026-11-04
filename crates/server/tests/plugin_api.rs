@@ -967,7 +967,7 @@ async fn projects_effective_unions_registry_and_agent_cwds() {
         dir.path().join("projects.json"),
         serde_json::to_string_pretty(&[
             "/Users/me/Works/lizu/dev-guide".to_string(),
-            "/Users/me/Works/agent-hub-mng/src/claude-view".to_string(),
+            "/Users/me/Works/agent-hub-mng/src/agent-hub".to_string(),
         ])
         .unwrap(),
     )
@@ -986,7 +986,7 @@ async fn projects_effective_unions_registry_and_agent_cwds() {
             Box::pin(async move {
                 vec![
                     cwd.to_string_lossy().into_owned(),
-                    "/Users/me/Works/agent-hub-mng/src/claude-view".into(),
+                    "/Users/me/Works/agent-hub-mng/src/agent-hub".into(),
                 ]
             })
         })

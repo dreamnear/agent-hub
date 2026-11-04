@@ -97,7 +97,7 @@ fn test_app(mode: &str, log: Option<&Path>) -> (axum::Router, Arc<AppState>, tem
         agents: vec![fake_agent(mode, log)],
     };
     cfg.chat = ChatConfig::default();
-    // ocr-review 高：隔离落盘——Config::load() 默认指向真实 ~/.claude-view/acp_sessions.json，
+    // ocr-review 高：隔离落盘——Config::load() 默认指向真实 ~/.agent-hub/acp_sessions.json，
     // 不指回 tempdir 的话测试会整文件覆写用户真实持久化会话
     cfg.acp_sessions_file = dir.path().join("acp_sessions.json");
     let state = Arc::new(AppState::from_config(cfg));

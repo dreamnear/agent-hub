@@ -34,6 +34,17 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "server=debug,tower_http=info".into()),
         )
         .init();
+    // #72 品牌迁移：数据目录一次性更名（LEGACY_DATA_DIR_NAME → DATA_DIR_NAME，同卷原子
+    // rename，幂等）。必须先于一切路径消费（config/node/tasks/plugins）——失败即
+    // 中止：静默以空目录起 = token/任务/插件状态/凭据全部隐身，数据零丢失第一红线。
+    if let Err(e) = server::platform::migrate_legacy_data_dir() {
+        eprintln!(
+            "数据目录迁移失败（{} → {}）：{e}\n请人工检查目录归属/权限后重试；服务拒绝以空数据目录启动。",
+            server::platform::LEGACY_DATA_DIR_NAME,
+            server::platform::DATA_DIR_NAME
+        );
+        std::process::exit(1);
+    }
     // node 形态分支（gateway-node P1 任务 2/3）：--node + --gateway/env 进入节点模式
     let args = NodeArgs::parse(std::env::args().skip(1));
     let mut cfg = Config::load();

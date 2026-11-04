@@ -67,7 +67,7 @@ fn test_app(dir: &tempfile::TempDir) -> axum::Router {
     cfg.claude_bin = fake_bin();
     cfg.jobs_dir = dir.path().join("jobs");
     cfg.claude_root = dir.path().to_path_buf();
-    // 固定 chat 分页默认值：防开发机真实 ~/.claude-view/config.toml 影响断言
+    // 固定 chat 分页默认值：防开发机真实 ~/.agent-hub/config.toml 影响断言
     cfg.chat = server::config::ChatConfig::default();
     router(Arc::new(AppState::from_config(cfg)))
 }

@@ -4,7 +4,7 @@
 //! /api/instances 存在性），一往返拿全 OS/架构/安装态。安装计划只生成命令清单，
 //! install-plan 与 install-manual（direct）共用同一处定义，防两处漂移。
 //! D3 执行：confirm + planHash/实例绑定校验通过才经同一 SSH 通道逐条执行，
-//! 成功后回读远端 `~/.claude-view/token` 落进实例配置（不回读实例无法转可用）。
+//! 成功后回读远端 `~/.agent-hub/token` 落进实例配置（不回读实例无法转可用）。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,7 +20,7 @@ use crate::ssh_cmd;
 /// `--with-systemd` 注册并启动 systemd 单元——不自造远端安装逻辑）
 pub const INSTALL_SH_URL: &str =
     "https://raw.githubusercontent.com/dreamnear/agent-hub/main/deploy/install.sh";
-/// 二进制分发前缀（install.sh 的 RELEASE_BASE_URL）；资产名 claude-view-server-{os}-{arch}
+/// 二进制分发前缀（install.sh 的 RELEASE_BASE_URL）；资产名 agent-hub-server-{os}-{arch}
 pub const RELEASE_BASE_URL: &str =
     "https://github.com/dreamnear/agent-hub/releases/latest/download";
 /// 计划清单未指定端口时的兜底（server 默认 bind 127.0.0.1:7800）
@@ -249,8 +249,8 @@ pub fn build_plan(instance_id: &str, remote_port: Option<u16>) -> InstallPlan {
 /// 单条远端命令执行总超时（安装可能耗时数分钟；两条命令各 300s 兜底）
 pub const EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// token 回读命令（server 默认 token 落 `~/.claude-view/token`，config.rs 同源）
-const TOKEN_CMD: &str = "cat ~/.claude-view/token";
+/// token 回读命令（server 默认 token 落 `~/.agent-hub/token`，config.rs 同源）
+const TOKEN_CMD: &str = "cat ~/.agent-hub/token";
 
 /// 一次远端命令执行结果。测试经 `execute` 的 runner 参数注入 mock，不出网。
 pub struct ExecOutput {
@@ -456,7 +456,7 @@ where
             if token.is_empty() {
                 outcome.ok = false;
                 outcome.error = Some(
-                    "安装完成但 token 回读为空：远端 ~/.claude-view/token 不存在或为空，\
+                    "安装完成但 token 回读为空：远端 ~/.agent-hub/token 不存在或为空，\
                      请确认 systemd 服务已启动"
                         .into(),
                 );

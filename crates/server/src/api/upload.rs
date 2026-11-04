@@ -26,10 +26,10 @@ const ALLOWED_EXT: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 
 /// 上传根目录（上传与受限读取共用同一落盘位置）
 fn upload_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join("claude-view-uploads")
+    std::env::temp_dir().join("agent-hub-uploads")
 }
 
-/// POST /api/upload → { "path": "/tmp/claude-view-uploads/<uuid>.<ext>" }
+/// POST /api/upload → { "path": "/tmp/agent-hub-uploads/<uuid>.<ext>" }
 pub async fn upload(
     State(_state): State<SharedState>,
     Json(body): Json<UploadBody>,
