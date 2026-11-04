@@ -4,6 +4,37 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.9.7] - 2026-11-04
+
+本批：品牌清扫（#69 后续）——用户可见面 claude-view → agent-hub（补录条目；本版本 tag 打时漏配条目，此处补记）。
+
+### Changed — 品牌清扫
+
+- 浏览器标签页标题（index.html）、README/README.zh-CN 首行、CLAUDE.md 首行、desktop/README 产物引用 → agent-hub
+- 功能标识有意保留：`~/.claude-view` 数据目录、uploads 目录/正则、远端安装资产名、Cargo 包名、仓路径（下一批 v0.9.8 全量迁移）
+
+## [0.9.8] - 2026-11-04
+
+本批：claude-view 品牌全量清退 + 数据目录迁移（#72）。
+
+### Changed — 数据目录 `~/.claude-view` → `~/.agent-hub`（#72）
+
+- 启动期一次性原子 rename 迁移（幂等：旧在+新无才迁；INFO 留痕；**失败拒绝以空目录静默启动**）
+- 空目标预建竞态防御（install.sh 预建空目录场景由首启 rename 替换，+单测锚）；env 覆盖路径全套同步改名
+- prod 实测：20 项数据（DEC日清任务/70 条 runs/token/节点/插件状态/凭据）原子迁移零丢失，二次启动幂等
+
+### Changed — 品牌清退其余面（#72）
+
+- uploads 临时目录 → `agent-hub-uploads`；/api/images **双目录读**——历史转录中旧路径的 13/13 张真实图片实测全 200（hash 一致）
+- 远端安装资产 → `agent-hub-server-{os}-{arch}`；install.sh + systemd 单元同步改名；重装含旧数据流实测迁移正确
+- desktop Cargo 包 → `agent-hub-desktop`；示例插件凭据路径残留清退
+- 全仓 grep 白名单外零 `claude-view`（白名单 = CHANGELOG 历史 / 档案报告 / image.ts 旧路径兼容正则 / state 归档）
+
+### 工单索引
+
+- 本批：#72（3 轮测试：r1 4P/1F → r2 7P → r3 7P；reviewer r1 2 BLOCKER → r2 0/0/0）
+- 门禁：cargo 646/0 · desktop 16/0 · vitest 684/684 · fmt/clippy 0 · bundle 236,046B
+
 ## [0.9.6] - 2026-11-04
 
 本批：聊天视图滞后修复（#63）——两个独立的帧丢失点。
