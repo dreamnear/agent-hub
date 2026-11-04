@@ -133,6 +133,10 @@ export function useSession(
     let closed = false;
     // queue-stale-banner Q2：断连过的连接，重连成功后做一次末页对账
     let reconnecting = false;
+    // #63：最近一帧的 seq（tail 每条消息会话内递增）。空洞 = 广播 Lagged 静默
+    // 丢帧（慢客户端积压超过房间容量被跳过）——连接期唯一自愈点是立即对账末页，
+    // 补齐锚点之后的缺失行（含滞后整轮）；不依赖重连才触发。
+    let lastSeq: number | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     // 断连窗口对账：盲续连从当前尾部起推增量，窗口内落盘的行（含队列消息被
@@ -175,6 +179,48 @@ export function useSession(
       })();
     };
 
+    // #63 seq 空洞修复：滞后段在 gap 帧之前，锚追加式 reconcile（对账锚=缓存
+    // 尾帧）补不到它——需按「gap 前边界」切分缓存，用末页快照 splice 进缺失段。
+    // boundary = gap 帧入缓存前的长度；kept 尾帧在快照中定位锚（键含 ts/toolUseId
+    // 近唯一），锚后整段替换；快照晚到的在途帧按键去重后保留。锚不在快照窗内
+    // （丢段过大）保持现状不劣化（等重连对账/刷新兜底）。
+    const repairFrom = (boundary: number): void => {
+      void (async () => {
+        try {
+          const snap =
+            source === 'acp'
+              ? await instApi.acpMessages(agentId as string)
+              : subagentId
+                ? await instApi.subagentMessagesPage(agentId, subagentId, undefined, driver)
+                : await instApi.messagesPage(agentId, undefined, driver);
+          if (closed) return;
+          qc.setQueryData<MessagePage>(queryKey, (prev = EMPTY_PAGE) => {
+            const keyOf = (m: ChatMessage): string =>
+              `${m.kind}:${m.rawType ?? ''}:${m.toolUseId ?? ''}:${m.ts ?? ''}:${m.text ?? ''}`;
+            const kept = prev.messages.slice(0, boundary);
+            if (kept.length === 0) return { ...prev, messages: snap.messages };
+            const last = keyOf(kept[kept.length - 1] as ChatMessage);
+            let anchor = -1;
+            for (let i = snap.messages.length - 1; i >= 0; i--) {
+              if (keyOf(snap.messages[i] as ChatMessage) === last) {
+                anchor = i;
+                break;
+              }
+            }
+            if (anchor < 0) return prev;
+            const spliced = [...kept, ...snap.messages.slice(anchor + 1)];
+            const splicedKeys = new Set(spliced.map(keyOf));
+            const extra = prev.messages
+              .slice(boundary)
+              .filter((m) => !splicedKeys.has(keyOf(m as ChatMessage)));
+            return { ...prev, messages: [...spliced, ...extra] };
+          });
+        } catch {
+          // 对账失败不致命：下一帧/重连对账兜底
+        }
+      })();
+    };
+
     const connect = (): void => {
       if (closed) return;
       const wasReconnect = reconnecting;
@@ -192,6 +238,12 @@ export function useSession(
       ws.onmessage = (m): void => {
         try {
           const ev = JSON.parse(m.data as string) as ChatEvent;
+          // seq 空洞（非首帧且不连续）= Lagged 丢帧 → 按 gap 前边界 splice 补缺失段
+          if (lastSeq != null && ev.seq !== lastSeq + 1) {
+            const boundary = qc.getQueryData<MessagePage>(queryKey)?.messages.length ?? 0;
+            repairFrom(boundary);
+          }
+          lastSeq = ev.seq;
           qc.setQueryData<MessagePage>(
             queryKey,
             (prev = EMPTY_PAGE) => ({ ...prev, messages: [...prev.messages, ev.message] }),

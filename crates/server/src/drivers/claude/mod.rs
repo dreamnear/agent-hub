@@ -698,7 +698,11 @@ impl SessionHistory for ClaudeDriver {
             match rooms.entry(session_id.to_string()) {
                 std::collections::hash_map::Entry::Occupied(e) => (e.get().clone(), false),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let (tx, _) = broadcast::channel(64);
+                    // #63：容量 64 → 1024——tail 每 500ms 突发整轮新行（一个内容块 =
+                    // 一条 ChatEvent，大轮轻松破 64），慢客户端（frp/移动端）阻塞
+                    // WS 转发者几秒即 Lagged 静默丢帧；前端有 seq 空洞对账兜底，
+                    // 但不把它变成常态路径。
+                    let (tx, _) = broadcast::channel(1024);
                     e.insert(tx.clone());
                     (tx, true)
                 }
@@ -726,7 +730,8 @@ impl SessionHistory for ClaudeDriver {
             match rooms.entry(room) {
                 std::collections::hash_map::Entry::Occupied(e) => (e.get().clone(), false),
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    let (tx, _) = broadcast::channel(64);
+                    // #63：同 ensure_chat_room（1024，防突发 Lagged 丢帧）
+                    let (tx, _) = broadcast::channel(1024);
                     e.insert(tx.clone());
                     (tx, true)
                 }
