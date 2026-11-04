@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude View",
+  "productName": "agent-hub",
   "version": "0.1.0",
-  "identifier": "app.claude-view.desktop",
+  "identifier": "app.agent-hub.desktop",
   "build": {
     "frontendDist": "http://127.0.0.1:7801"
   },
@@ -14,8 +14,15 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/icon.icns"],
-    "externalBin": ["binaries/server"]
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/icon.icns"
+    ],
+    "externalBin": [
+      "binaries/server"
+    ]
   }
 }
