@@ -576,7 +576,7 @@ pub fn prune_artifacts(audit_dir: &Path, keep_per_plugin: usize) -> std::io::Res
             continue;
         }
         // mtime 新者优先（新审计对当前版本更有追溯价值）
-        files.sort_by(|a, b| b.modified.cmp(&a.modified));
+        files.sort_by_key(|f| std::cmp::Reverse(f.modified));
         for f in files.into_iter().skip(keep_per_plugin) {
             if std::fs::remove_file(&f.path).is_ok() {
                 removed += 1;

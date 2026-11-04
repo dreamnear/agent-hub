@@ -88,6 +88,7 @@ impl ClaudeDriver {
         )
     }
 
+    #[allow(clippy::too_many_arguments)] // 构造参数 = 数据目录与注入面集合，各字段独立来源（main.rs 装配），拆结构体徒增一层
     pub fn new_with_mcp(
         bin: PathBuf,
         jobs_dir: PathBuf,

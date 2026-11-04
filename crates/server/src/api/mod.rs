@@ -109,7 +109,7 @@ impl AppState {
             format!("http://127.0.0.1:{}", cfg.bind_addr.port()),
         );
         // 定时任务目录先取（Self 字面量里 cfg 会被 move）
-        let tasks_dir = cfg.tasks_dir.clone();
+        let _tasks_dir = cfg.tasks_dir.clone();
         // 节点注册表文件先取（同上；gateway-node P1 任务4）
         let nodes_file = cfg.nodes_file.clone();
         let acp_router = Arc::new(crate::drivers::acp::AcpSendRouter::new(

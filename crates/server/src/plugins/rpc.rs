@@ -150,11 +150,15 @@ pub fn encode_frame(v: &Value) -> String {
     s
 }
 
+/// 挂起请求表类型别名（clippy type_complexity：Arc<StdMutex<HashMap<..>>> 三层嵌套）。
+type PendingMap = HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>;
+
 /// 活着的 stdio 通道。
 pub struct RpcChannel {
     plugin_id: String,
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>>>,
+    /// 挂起请求表（按请求 id 回填结果）。
+    pending: Arc<StdMutex<PendingMap>>,
     next_id: AtomicU64,
     alive: Arc<AtomicBool>,
     last_activity: Arc<StdMutex<std::time::Instant>>,
@@ -180,8 +184,7 @@ impl RpcChannel {
         scrub: Arc<dyn Fn(String) -> String + Send + Sync>,
     ) -> Arc<Self> {
         let stdin = Arc::new(Mutex::new(stdin));
-        let pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>>> =
-            Arc::new(StdMutex::new(HashMap::new()));
+        let pending: Arc<StdMutex<PendingMap>> = Arc::new(StdMutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
         let last_activity = Arc::new(StdMutex::new(std::time::Instant::now()));
 

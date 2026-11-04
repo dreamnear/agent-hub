@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::audit::{self, AuditReport};
 use super::PluginManager;

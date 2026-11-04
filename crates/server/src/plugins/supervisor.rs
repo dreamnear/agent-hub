@@ -144,6 +144,7 @@ impl Supervisor {
     }
 
     /// 转发 `tool.invoke` 到插件 backend（普通调用；权限判定在调用方已完成）。
+    #[allow(clippy::too_many_arguments)] // 调用九要素来自 rpc 层装配现场（插件/凭据/闸门/调用三元组），打包进结构体不减少信息量
     pub async fn invoke_tool(
         &self,
         plugin: &InstalledPlugin,
