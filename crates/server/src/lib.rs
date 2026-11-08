@@ -17,6 +17,7 @@ pub mod ssh_cmd;
 pub mod static_assets;
 pub mod tasks;
 pub mod tunnel;
+pub mod watch;
 
 use std::sync::Arc;
 
