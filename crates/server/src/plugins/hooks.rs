@@ -308,6 +308,23 @@ async fn deliver_one(
 
 static GLOBAL: StdMutex<Option<Arc<HooksBus>>> = StdMutex::new(None);
 
+/// hub 内部观察者（watcher 唯一注册方，ADR-0017 决策 1）。收到的是**未最小化**
+/// 的全量 params——最小化是插件隐私边界，hub 自用消费者不受该约束；它与插件
+/// 投递路径完全分离，插件既看不到也影响不到它。
+pub type InternalObserver = Arc<dyn Fn(&str, &Value) + Send + Sync>;
+
+static INTERNAL_OBSERVER: StdMutex<Option<InternalObserver>> = StdMutex::new(None);
+
+/// 装配接线：watcher 注册进程内观察者（重复调用覆盖前值；首装配后生效）。
+pub fn set_internal_observer(obs: InternalObserver) {
+    *INTERNAL_OBSERVER.lock().unwrap_or_else(|e| e.into_inner()) = Some(obs);
+}
+
+#[cfg(test)]
+fn clear_internal_observer() {
+    *INTERNAL_OBSERVER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// 装配接线：hub 启动序列把 PluginManager 的总线挂为进程级门面
 /// （drivers 无 AppState 句柄，经本门面 fire-and-forget）。
 pub fn set_global(bus: Arc<HooksBus>) {
@@ -323,7 +340,19 @@ pub fn global_bus() -> Option<Arc<HooksBus>> {
 
 /// 发射点统一入口（ADR-0014 §3 埋点纪律：不散落直调 supervisor/rpc）。
 /// 总线未装配或无订阅者时短路，事件源零感知。
+///
+/// 顺序：hub 内部观察者（同步、全量 params）→ 插件投递（逐字不动）。
+/// 观察者 panic 经 `catch_unwind` 隔离——观察档发射点不得因消费者异常而中断。
 pub fn global_dispatch(hook: &str, params: Value) {
+    let observer = INTERNAL_OBSERVER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(obs) = observer {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| obs(hook, &params))).is_err() {
+            tracing::warn!(hook = %hook, "内部观察者 panic（已隔离，插件投递不受影响）");
+        }
+    }
     let bus = GLOBAL.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(bus) = bus {
         bus.dispatch(hook, params);
@@ -442,5 +471,53 @@ mod tests {
         for name in api_surface::INTERCEPT_HOOK_NAMES {
             assert!(!OBSERVER_HOOKS.contains(&name));
         }
+    }
+
+    // —— hub 内部观察者（ADR-0017 决策 1）——
+
+    /// 观察者槽是进程级全局量：本组用例串行执行，Drop 时清槽防串扰。
+    static OBSERVER_LOCK: StdMutex<()> = StdMutex::new(());
+
+    struct ObserverGuard;
+
+    impl Drop for ObserverGuard {
+        fn drop(&mut self) {
+            clear_internal_observer();
+        }
+    }
+
+    #[test]
+    fn internal_observer_receives_full_unminimized_params() {
+        let _lock = OBSERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ObserverGuard;
+        let seen: Arc<StdMutex<Option<(String, Value)>>> = Arc::new(StdMutex::new(None));
+        let sink = seen.clone();
+        set_internal_observer(Arc::new(move |hook, params| {
+            if hook == "onMessageAppend" {
+                *sink.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((hook.to_string(), params.clone()));
+            }
+        }));
+        dispatch_message_append("sess-1", 7, "assistant", Some("ERROR 需要你确认"));
+        let (hook, params) = seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("内部观察者应收到 onMessageAppend");
+        assert_eq!(hook, "onMessageAppend");
+        assert_eq!(params["sessionId"], "sess-1");
+        assert_eq!(params["seq"], 7);
+        assert_eq!(params["kind"], "assistant");
+        // 全量正文：插件侧 2000 字符截断 + scrub 不适用于 hub 内部消费者
+        assert_eq!(params["text"], "ERROR 需要你确认");
+    }
+
+    #[test]
+    fn internal_observer_panic_is_isolated() {
+        let _lock = OBSERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ObserverGuard;
+        set_internal_observer(Arc::new(|_, _| panic!("observer boom")));
+        // 观察者 panic 被 catch_unwind 隔离：发射点（驱动）不受影响
+        global_dispatch("onIdle", json!({}));
     }
 }

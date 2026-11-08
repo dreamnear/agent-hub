@@ -7,4 +7,5 @@
 //! - [`rules`]：`watcher.json` schema、加载与逐条降级、作用域/内容匹配、渲染
 //! - [`engine`]：会话状态表、冷却/去重/限流、触发→注入编排
 
+pub mod engine;
 pub mod rules;
