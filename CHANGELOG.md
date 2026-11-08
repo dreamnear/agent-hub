@@ -4,6 +4,19 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.10.0] - 2026-11-08
+
+本批：事件驱动会话监听/提醒机制（agent-hub-mng#33）——hub 内置 watcher。
+
+### Added — watcher：事件订阅 + 规则触达
+
+- 新增 `watch` 模块（crates/server/src/watch）：订阅会话事件流（复用 hooks 观察档旁挂内部观察者，插件投递路径零变更）+ 状态巡检补缺（contextTokens / 无输出看门狗），命中规则即向 hub-assistant 会话注入一条提醒（复用 pi followUp 排队语义，忙时不丢）
+- 四类规则：`needs_input` 状态翻转 / `message` 新 assistant 消息命中关键词·正则 / `no_output` working 超阈值无新输出（疑似卡死）/ `context_tokens` 超阈值；规则可限定作用域（会话/cwd）与冷却
+- 防噪：per-rule 冷却 + (规则,会话,状态) 去重键 + 全局滚动窗口限流（默认 10/300s）；状态型按穿越点触发（首次观测只建基线）
+- 配置 `~/.agent-hub/watcher.json`（env `AGENT_HUB_WATCHER_FILE`），重启生效；顶层配置坏 = 整体禁用零注入，单条规则坏 = 跳过该条，均只告警
+- 消息类规则依赖会话房间在位：对作用域内会话幂等开房补口（`maxWatchedSessions` 默认 20 封顶）；`context_tokens` 仅 claude 驱动有值
+- 红线：插件 hooks 保持 observer-only（ADR-0014 面 diff 为零）、插件 RPC 面零新增、(pi, hub-assistant) 自环双路排除、消息正文仅进程内匹配不落盘不进日志
+
 ## [0.9.7] - 2026-11-04
 
 本批：品牌清扫（#69 后续）——用户可见面 claude-view → agent-hub（补录条目；本版本 tag 打时漏配条目，此处补记）。
