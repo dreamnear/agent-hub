@@ -40,6 +40,9 @@ tower = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # nodelink 凭据哈希（gateway-node P1 任务 1）：node token / enrollment code 只存哈希
 sha2 = "0.10"
+# watcher hook（ADR-0017 §8）：消息规则的正则匹配。线性时间引擎（无回溯爆炸），
+# 且已在 Cargo.lock 内（1.13.1 传递依赖），提为直接依赖零新增版本面
+regex = "1"
 
 [dev-dependencies]
 tower = "0.5"

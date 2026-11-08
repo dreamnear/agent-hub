@@ -490,6 +490,9 @@ pub struct Config {
     /// 索引市场源清单（B4 ADR-0008 §3）：`~/.agent-hub/plugin_marketplaces.json`，
     /// env `AGENT_HUB_PLUGIN_MARKET_FILE` 覆盖；0600（用户显式添加的索引源 URL）
     pub plugin_market_file: PathBuf,
+    /// watcher 规则配置（ADR-0017 §6）：`~/.agent-hub/watcher.json`，
+    /// env `AGENT_HUB_WATCHER_FILE` 覆盖；惯例同 tasks_dir
+    pub watch_file: PathBuf,
 }
 
 impl Config {
@@ -692,6 +695,15 @@ impl Config {
                 .unwrap_or_else(|_| {
                     format!(
                         "{}/.agent-hub/plugin_marketplaces.json",
+                        crate::platform::home_dir_str()
+                    )
+                    .into()
+                }),
+            watch_file: std::env::var("AGENT_HUB_WATCHER_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    format!(
+                        "{}/.agent-hub/watcher.json",
                         crate::platform::home_dir_str()
                     )
                     .into()

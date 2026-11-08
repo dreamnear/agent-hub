@@ -178,6 +178,9 @@ fn spawn_host_backends(state: &Arc<AppState>, cfg: &Config) {
     // dsh mux WS 泵（agent-hub-dsh-driver）：事件 → chat 房间增量 + 审批弹卡 + Tick；
     // 同上，serve 未拉起时自行等待
     state.dsh.spawn_event_pump();
+    // watcher hook（ADR-0017）：hub 内置消费者——hooks 观察档事件 + 状态巡检 →
+    // 规则命中即向 hub 助手注入提醒。配置缺失/坏 → 零注入（内部自守卫幂等）
+    server::watch::spawn(state);
 }
 
 /// axum 服务启动 + 停机隧道回收（两形态共用）。
