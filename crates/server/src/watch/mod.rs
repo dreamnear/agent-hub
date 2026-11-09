@@ -20,7 +20,7 @@ use crate::api::AppState;
 use crate::drivers::pi::ASSISTANT_ID;
 use crate::plugins::hooks;
 
-use engine::Engine;
+use engine::{Engine, InjectText};
 
 /// 防重入守卫：hub / node 两形态共用启动序列，`spawn` 全进程只生效一次。
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -94,7 +94,7 @@ async fn tick(state: &Arc<AppState>, engine: &Arc<StdMutex<Engine>>) {
             ),
         }
     }
-    dispatch_injects(state, outcome.texts);
+    dispatch_injects(state, engine, outcome.texts);
 }
 
 /// hooks 内部观察者回调（同步、微秒级；注入动作异步 spawn）。
@@ -114,7 +114,7 @@ fn on_hook_event(
             };
             let text = params.get("text").and_then(Value::as_str).unwrap_or("");
             let texts = lock(engine).on_message(label, kind, text, Instant::now());
-            dispatch_injects(state, texts);
+            dispatch_injects(state, engine, texts);
         }
         "onSessionClose" => {
             let Some(label) = params.get("sessionId").and_then(Value::as_str) else {
@@ -126,44 +126,95 @@ fn on_hook_event(
     }
 }
 
-fn dispatch_injects(state: &Arc<AppState>, texts: Vec<String>) {
+fn dispatch_injects(state: &Arc<AppState>, engine: &Arc<StdMutex<Engine>>, texts: Vec<InjectText>) {
     if texts.is_empty() {
         return;
     }
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        tracing::debug!("hub-watcher: 无 tokio 运行时，提醒丢弃");
+        // 无 tokio 上下文（纯单测/异常路径）：显式可观测，不再静默丢弃（#77）
+        for t in &texts {
+            lock(engine).note_inject_failed();
+            tracing::warn!(
+                rule = %t.rule,
+                session = %t.session,
+                "hub-watcher: 无 tokio 运行时，提醒丢弃"
+            );
+        }
         return;
     };
-    for text in texts {
+    for t in texts {
         let state = state.clone();
-        handle.spawn(async move { inject(&state, text).await });
+        let engine = engine.clone();
+        handle.spawn(async move { inject(&state, &engine, t).await });
     }
 }
 
 /// 触达：复用既有会话注入路径（pi `prompt_cmd` 恒定 followUp → 忙时入队、空闲
-/// 后处理，不丢）。未运行 → `ensure_started` 一次后重试一次；仍失败只 warn +
-/// 计数（at-most-once，不重试、不落盘）。
-async fn inject(state: &Arc<AppState>, text: String) {
+/// 后处理，不丢）。未运行 → `ensure_started` 一次后重试一次；仍失败 warn +
+/// `inject_failed` 计数（at-most-once，不重试、不落盘）。
+/// 计数口径（#77）：`fired` 在触发闸门放行时即记账（先于投递），投递失败只
+/// 回写 `inject_failed`，不与 `dropped`（限流丢弃）混淆。
+async fn inject(state: &Arc<AppState>, engine: &Arc<StdMutex<Engine>>, t: InjectText) {
     let Ok(pi) = state.drivers.get("pi") else {
-        tracing::warn!("hub-watcher: pi 驱动未注册，提醒丢弃");
+        lock(engine).note_inject_failed();
+        tracing::warn!(
+            rule = %t.rule,
+            session = %t.session,
+            "hub-watcher: pi 驱动未注册，提醒丢弃"
+        );
         return;
     };
-    match pi.send(ASSISTANT_ID, &text).await {
-        Ok(()) => tracing::info!(length = text.chars().count(), "hub-watcher: 提醒已投递"),
+    match pi.send(ASSISTANT_ID, &t.text).await {
+        Ok(()) => tracing::info!(
+            rule = %t.rule,
+            session = %t.session,
+            length = t.text.chars().count(),
+            "hub-watcher: 提醒已投递"
+        ),
         Err(e) if pi.is_finished(ASSISTANT_ID) => {
-            tracing::info!(error = %e, "hub-watcher: Hub 助手未运行，尝试拉起一次");
+            tracing::info!(
+                rule = %t.rule,
+                session = %t.session,
+                error = %e,
+                "hub-watcher: Hub 助手未运行，尝试拉起一次"
+            );
             match state.pi.ensure_started().await {
-                Ok(_) => match pi.send(ASSISTANT_ID, &text).await {
-                    Ok(()) => tracing::info!("hub-watcher: 拉起后提醒已投递"),
-                    Err(e2) => tracing::warn!(
-                        error = %e2,
-                        "hub-watcher: 拉起后注入仍失败，丢弃（at-most-once）"
+                Ok(_) => match pi.send(ASSISTANT_ID, &t.text).await {
+                    Ok(()) => tracing::info!(
+                        rule = %t.rule,
+                        session = %t.session,
+                        "hub-watcher: 拉起后提醒已投递"
                     ),
+                    Err(e2) => {
+                        lock(engine).note_inject_failed();
+                        tracing::warn!(
+                            rule = %t.rule,
+                            session = %t.session,
+                            error = %e2,
+                            "hub-watcher: 拉起后注入仍失败，丢弃（at-most-once）"
+                        );
+                    }
                 },
-                Err(e2) => tracing::warn!(error = %e2, "hub-watcher: Hub 助手拉起失败，丢弃提醒"),
+                Err(e2) => {
+                    lock(engine).note_inject_failed();
+                    tracing::warn!(
+                        rule = %t.rule,
+                        session = %t.session,
+                        error = %e2,
+                        "hub-watcher: Hub 助手拉起失败，丢弃提醒"
+                    );
+                }
             }
         }
-        Err(e) => tracing::warn!(error = %e, "hub-watcher: 注入失败，丢弃（at-most-once）"),
+        Err(e) => {
+            lock(engine).note_inject_failed();
+            tracing::warn!(
+                rule = %t.rule,
+                session = %t.session,
+                error = %e,
+                "hub-watcher: 注入失败，丢弃（at-most-once）"
+            );
+        }
     }
 }
 

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi, beforeEach, beforeAll } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, waitFor, configure } from '@testing-library/react';
 import { DeclarativeIframeRenderer } from './iframeRenderer';
 import { plugins } from '../plugins';
+
+// flake 加固（#77）：构建机高负载下默认 1s waitFor 超时抖动，本文件放宽到 5s
+configure({ asyncUtilTimeout: 5_000 });
 
 // plugins 客户端 mock：票据失败路径（回退语义）与成功路径（iframe 呈送）
 vi.mock('../plugins', async (importOriginal) => {
