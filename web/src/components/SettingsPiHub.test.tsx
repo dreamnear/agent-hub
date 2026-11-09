@@ -2,8 +2,11 @@
 // Hub 助手设置分区（agent-hub-pi-hub-agent P3/P5）：回填/编辑/保存调用/重启调用。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, configure } from '@testing-library/react';
 import SettingsPiHub from './SettingsPiHub';
+
+// flake 加固（#77）：构建机高负载下默认 1s waitFor 超时抖动，本文件放宽到 5s
+configure({ asyncUtilTimeout: 5_000 });
 
 const getPiSettingsMock = vi.fn();
 const getPiVersionMock = vi.fn();

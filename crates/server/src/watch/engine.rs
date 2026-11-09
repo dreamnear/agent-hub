@@ -17,6 +17,8 @@ use super::rules::{
 
 /// 冷却/去重表规模上限（超出按最旧淘汰，防长跑泄漏）。
 const MAX_TRACKED_KEYS: usize = 4096;
+/// 冷启动消息缓冲上限（防 ghost 事件——助手自环等永不入索引的 label——挤占）。
+const MAX_PENDING_MSGS: usize = 64;
 /// 会话缺席多少个巡检 tick 后删除基线（≈5min @5s；只删基线，不触发）。
 const ABSENT_TICKS_TO_REMOVE: u32 = 60;
 /// 提醒前缀（便于助手识别自动化提醒）。
@@ -63,7 +65,7 @@ impl SessionState {
 #[derive(Debug, Default)]
 pub struct SnapshotOutcome {
     pub rooms: Vec<RoomPlan>,
-    pub texts: Vec<String>,
+    pub texts: Vec<InjectText>,
 }
 
 /// 需为消息类规则建立会话房间的会话（`ensure_chat_room` 由调用方执行）。
@@ -73,6 +75,15 @@ pub struct RoomPlan {
     /// 房间键（`session_id`，缺失时退回 agent id）
     pub room_key: String,
     pub session_key: String,
+}
+
+/// 一条待投递提醒：触发元数据（rule/session）+ 渲染正文（含前缀，已截断）。
+/// 投递侧（`super` 的 dispatch/inject）按 rule/session 归因日志与失败计数。
+#[derive(Debug, Clone)]
+pub struct InjectText {
+    pub rule: String,
+    pub session: String,
+    pub text: String,
 }
 
 /// 一条待注入的触发意图（规则 + 会话 + 渲染上下文，已脱离借用）。
@@ -128,9 +139,13 @@ pub struct Engine {
     rooms_opened: HashSet<String>,
     /// 超出开房上限只 warn 一次
     limit_warned: bool,
+    /// 冷启动缓冲：会话被巡检观测前到达的消息事件（#77 防首 tick 窗口漏报）。
+    /// 每次 `on_snapshot` 末尾回放一次；仍解析不到即弃（ghost/已关会话不常驻）。
+    pending: VecDeque<(String, String, String)>, // (label, kind, text)
     fired: u64,
     suppressed: u64,
     dropped: u64,
+    inject_failed: u64,
 }
 
 impl Engine {
@@ -143,9 +158,11 @@ impl Engine {
             index: HashMap::new(),
             rooms_opened: HashSet::new(),
             limit_warned: false,
+            pending: VecDeque::new(),
             fired: 0,
             suppressed: 0,
             dropped: 0,
+            inject_failed: 0,
         }
     }
 
@@ -153,9 +170,21 @@ impl Engine {
         self.cfg.state_poll_secs
     }
 
-    /// (已注入, 冷却抑制, 限流丢弃) 累计计数（可观测性）。
-    pub fn counters(&self) -> (u64, u64, u64) {
-        (self.fired, self.suppressed, self.dropped)
+    /// (已记账触发, 冷却抑制, 限流丢弃, 投递失败) 累计计数（可观测性）。
+    /// fired = 触发闸门放行即记账（先于投递）；投递失败只体现在 inject_failed，
+    /// 与 dropped（限流丢弃）口径互不混淆（#77）。
+    pub fn counters(&self) -> (u64, u64, u64, u64) {
+        (
+            self.fired,
+            self.suppressed,
+            self.dropped,
+            self.inject_failed,
+        )
+    }
+
+    /// 投递侧回写：提醒已过闸门但投递失败（含无运行时/驱动缺失路径）。
+    pub fn note_inject_failed(&mut self) {
+        self.inject_failed += 1;
     }
 
     /// 巡检快照：开房计划 → 会话态 diff → 四类条件穿越 → 防噪 → 文案。
@@ -318,26 +347,60 @@ impl Engine {
             self.forget_session(&key);
         }
 
+        // 冷启动回放（#77）：首 tick 前缓冲的消息事件此时索引已就绪，补判一次。
+        // 仍解析不到即弃（回放只此一次）：ghost（助手自环）/已关会话不该常驻缓冲。
+        for (label, kind, text) in std::mem::take(&mut self.pending) {
+            let Some(key) = self.index.get(&label).cloned() else {
+                continue;
+            };
+            if let Some(texts) = self.evaluate_message(&key, &kind, &text, now) {
+                out.texts.extend(texts);
+            }
+        }
+
         out
     }
 
     /// 消息事件（内部观察者回调路径）：解析会话 → 更新活跃 → `message` 规则。
-    pub fn on_message(&mut self, label: &str, kind: &str, text: &str, now: Instant) -> Vec<String> {
+    /// label 未入索引 = 会话尚未被巡检观测（#77 冷启动窗口）→ 缓冲，待下一
+    /// tick `on_snapshot` 末尾回放补判，而非丢弃事件。
+    pub fn on_message(
+        &mut self,
+        label: &str,
+        kind: &str,
+        text: &str,
+        now: Instant,
+    ) -> Vec<InjectText> {
         let Some(key) = self.index.get(label).cloned() else {
-            // 解析不到 = 该事件只可能来自未巡检到的会话：不建态、不触发
+            self.pending
+                .push_back((label.to_string(), kind.to_string(), text.to_string()));
+            while self.pending.len() > MAX_PENDING_MSGS {
+                self.pending.pop_front();
+            }
             return Vec::new();
         };
-        let Some(st) = self.sessions.get_mut(&key) else {
-            return Vec::new();
-        };
+        self.evaluate_message(&key, kind, text, now)
+            .unwrap_or_default()
+    }
+
+    /// 已解析 label 的共用路径：活跃复位 → 自环/interactive 守卫 → 规则匹配 → 触发。
+    /// `None` = 会话态缺失（索引残留/已清理），调用方决定缓冲或丢弃。
+    fn evaluate_message(
+        &mut self,
+        key: &str,
+        kind: &str,
+        text: &str,
+        now: Instant,
+    ) -> Option<Vec<InjectText>> {
+        let st = self.sessions.get_mut(key)?;
         // 任意 kind 都算活跃（no_output 复位）
         st.last_activity = Some(now);
         st.last_seen = now;
         if st.driver == "pi" && st.agent_id == ASSISTANT_ID {
-            return Vec::new();
+            return Some(Vec::new());
         }
         if st.kind.as_deref() == Some("interactive") {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let (driver, id, session_id, name, cwd) = (
             st.driver.clone(),
@@ -372,12 +435,14 @@ impl Engine {
                 continue;
             };
             let state_key = hit.state_key();
-            intents.push(Intent::new(idx, &key, state_key, Some(hit), &meta));
+            intents.push(Intent::new(idx, key, state_key, Some(hit), &meta));
         }
-        intents
-            .into_iter()
-            .filter_map(|intent| self.fire(intent, now))
-            .collect()
+        Some(
+            intents
+                .into_iter()
+                .filter_map(|intent| self.fire(intent, now))
+                .collect(),
+        )
     }
 
     /// 会话关闭：清理会话态、索引、开房标记与该会话的全部冷却条目。
@@ -389,7 +454,9 @@ impl Engine {
     }
 
     /// 触发闸门：冷却/同态去重 → 全局限流 → 记账 → 渲染文案。
-    fn fire(&mut self, intent: Intent, now: Instant) -> Option<String> {
+    /// 记账语义（#77）：`fired` 在闸门放行时即累加（先于投递）；投递成败由
+    /// 投递侧另行回写 `inject_failed`，不与 `dropped`（限流丢弃）混淆。
+    fn fire(&mut self, intent: Intent, now: Instant) -> Option<InjectText> {
         let rule = self.cfg.rules.get(intent.rule_idx)?;
         let common = rule.common();
         let dedup_key = (
@@ -432,6 +499,9 @@ impl Engine {
         self.last_fired.insert(dedup_key, now);
         self.rate.push_back(now);
         self.fired += 1;
+        // 取舍（review-1 MINOR）：超限按最旧 Instant 淘汰，理论上可能挤掉活跃
+        // 会话的冷却键（该会话冷却提前失效一次）。单机规模远不可达 4096 键，
+        // 先声明取舍；未来需要时再改为「先保活跃会话键、后按时间」。
         if self.last_fired.len() > MAX_TRACKED_KEYS {
             if let Some(oldest) = self
                 .last_fired
@@ -466,12 +536,14 @@ impl Engine {
             length = body.chars().count(),
             "hub-watcher: 规则命中，注入提醒"
         );
-        Some(
-            format!("{PREFIX}{body}")
+        Some(InjectText {
+            rule: common.id.clone(),
+            session: intent.session_key,
+            text: format!("{PREFIX}{body}")
                 .chars()
                 .take(MAX_TEXT_CHARS)
                 .collect(),
-        )
+        })
     }
 
     /// 开房计划：消息类规则作用域内的会话，按上限与确定性顺序挑出。
@@ -609,8 +681,12 @@ mod tests {
             t0 + Duration::from_secs(5),
         );
         assert_eq!(out.texts.len(), 1);
-        assert!(out.texts[0].starts_with(PREFIX), "{}", out.texts[0]);
-        assert!(out.texts[0].contains("等待你的输入"));
+        assert!(
+            out.texts[0].text.starts_with(PREFIX),
+            "{}",
+            out.texts[0].text
+        );
+        assert!(out.texts[0].text.contains("等待你的输入"));
         let out = e.on_snapshot(
             &[agent("claude", "a", Group::NeedsInput, None)],
             t0 + Duration::from_secs(10),
@@ -654,7 +730,7 @@ mod tests {
             t0 + Duration::from_secs(2),
         );
         assert!(sup.is_empty(), "冷却期内不重复");
-        assert_eq!(e.counters(), (1, 1, 0));
+        assert_eq!(e.counters(), (1, 1, 0, 0));
         let later = e.on_message(
             "sess-a",
             "assistant",
@@ -716,7 +792,7 @@ mod tests {
         assert!(e
             .on_message("sess-a", "assistant", "x", t0 + Duration::from_secs(3))
             .is_empty());
-        let (fired, _, dropped) = e.counters();
+        let (fired, _, dropped, _) = e.counters();
         assert_eq!((fired, dropped), (2, 1), "第 3 条被全局限流丢弃");
         // 窗口滑动后可再触发
         assert_eq!(
@@ -766,7 +842,7 @@ mod tests {
             .is_empty());
         let out = e.on_snapshot(&[agent("claude", "a", Group::Working, None)], secs(61));
         assert_eq!(out.texts.len(), 1, "静默跨过 60s 阈值");
-        assert!(out.texts[0].contains("无新输出"));
+        assert!(out.texts[0].text.contains("无新输出"));
         assert!(
             e.on_snapshot(&[agent("claude", "a", Group::Working, None)], secs(70))
                 .texts
@@ -836,7 +912,7 @@ mod tests {
         e.on_snapshot(&[agent("claude", "a", Group::Working, Some(50))], t0);
         let out = e.on_snapshot(&[agent("claude", "a", Group::Working, Some(120))], secs(5));
         assert_eq!(out.texts.len(), 1);
-        assert!(out.texts[0].contains("120"), "{}", out.texts[0]);
+        assert!(out.texts[0].text.contains("120"), "{}", out.texts[0].text);
         assert!(
             e.on_snapshot(&[agent("claude", "a", Group::Working, Some(130))], secs(10))
                 .texts
@@ -936,6 +1012,58 @@ mod tests {
         let t0 = Instant::now();
         assert!(e.on_message("ghost", "assistant", "x", t0).is_empty());
         assert!(e.sessions.is_empty(), "解析不到 label 不建态");
+    }
+
+    #[test]
+    fn cold_start_message_replays_once_snapshot_indexes_session() {
+        let mut e = engine(
+            r#"{"version":1,"rules":[{"id":"m","on":"message","keywords":["x"],"cooldownSecs":0}]}"#,
+        );
+        let t0 = Instant::now();
+        // 首 tick 前消息先到（#77 冷启动窗口）：缓冲不触发、不建态
+        assert!(e.on_message("sess-a", "assistant", "x", t0).is_empty());
+        assert!(e.sessions.is_empty());
+        assert_eq!(e.pending.len(), 1);
+        // 首次巡检建基线 + 末尾回放补判 → 命中
+        let out = e.on_snapshot(
+            &[agent("claude", "a", Group::Working, None)],
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(out.texts.len(), 1, "缓冲消息在首 tick 后补判");
+        assert_eq!(out.texts[0].rule, "m");
+        assert_eq!(out.texts[0].session, "claude:a");
+        assert!(e.pending.is_empty(), "回放消费缓冲");
+        // ghost 事件（永不入索引）回放一次仍解析不到 → 即弃不常驻
+        assert!(e
+            .on_message("ghost", "assistant", "x", t0 + Duration::from_secs(2))
+            .is_empty());
+        let out = e.on_snapshot(
+            &[agent("claude", "a", Group::Working, None)],
+            t0 + Duration::from_secs(3),
+        );
+        assert!(out.texts.is_empty());
+        assert!(e.pending.is_empty(), "ghost 回放后即弃");
+    }
+
+    #[test]
+    fn pending_buffer_evicts_oldest_beyond_cap() {
+        let mut e = engine(
+            r#"{"version":1,"rules":[{"id":"m","on":"message","keywords":["x"],"cooldownSecs":0}]}"#,
+        );
+        let t0 = Instant::now();
+        for i in 0..MAX_PENDING_MSGS {
+            e.on_message(&format!("ghost-{i}"), "assistant", "x", t0);
+        }
+        e.on_message("kept", "assistant", "x", t0);
+        assert_eq!(e.pending.len(), MAX_PENDING_MSGS, "超限只淘汰到上限");
+        assert_eq!(e.pending.front().unwrap().0, "ghost-1", "淘汰最旧缓冲事件");
+    }
+
+    #[test]
+    fn inject_failed_counts_separately() {
+        let mut e = engine(r#"{"version":1,"rules":[{"id":"ni","on":"needs_input"}]}"#);
+        e.note_inject_failed();
+        assert_eq!(e.counters(), (0, 0, 0, 1));
     }
 
     #[test]
