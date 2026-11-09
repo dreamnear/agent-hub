@@ -4,6 +4,21 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.10.1] - 2026-11-09
+
+本批：watcher v0.10.0 审查遗留清理（#77）。
+
+### Fixed — watcher 修复批（#77）
+
+- 冷启动消息窗口：首巡检 tick 前到达的消息事件现可为未见会话 bootstrap 状态（消除首 `statePollSecs` 窗口漏报；bootstrap 只建态不触发，首观测建基线语义不变）
+- 注入计数语义：新增 `inject_failed` 计数（投递失败可见），tracing 字段明确 fired/delivered/inject_failed 口径
+- 冷却表 4096 键淘汰策略取舍以代码注释声明
+- 无 tokio 运行时上下文的丢弃分支改为结构化 warn（含 rule/session 字段，无正文）
+
+### Fixed — 既有测试抖动（#77）
+
+- vitest `SettingsPiHub` / `iframeRenderer` 两用例改确定性等待，消除 build 并发负载下的 `waitFor` 1s 超时抖动（纯测试文件改动）
+
 ## [0.10.0] - 2026-11-08
 
 本批：事件驱动会话监听/提醒机制（agent-hub-mng#33）——hub 内置 watcher。
