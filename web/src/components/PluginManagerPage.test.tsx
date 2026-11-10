@@ -2,10 +2,13 @@
 // 插件管理页（agent-hub-plugin-system B1）：空态（BR-06 说明）、五态芯片、
 // 停用卡操作、凭据按名零回显。
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import PluginManagerPage from './PluginManagerPage';
 import type { DiscoveredItem, PluginView } from '../plugins';
+
+/// #46 git 直装 mock（供上行断言；实现按用例注入）
+const installGitMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../plugins', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../plugins')>();
@@ -17,6 +20,8 @@ vi.mock('../plugins', async (importOriginal) => {
       discovered: vi.fn(async () => ({ items: currentDiscovered, lastScanAt: '2026-10-19T00:00:00Z' })),
       scan: vi.fn(async () => ({ lastScanAt: '2026-10-19T00:00:00Z', discovered: 0 })),
       records: vi.fn(async () => ({ records: [] })),
+      market: vi.fn(async () => ({ sources: [], entries: [] })),
+      installGit: (...a: unknown[]) => installGitMock(...a),
     },
   };
 });
@@ -62,7 +67,10 @@ function renderPage(): void {
   );
 }
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 describe('PluginManagerPage', () => {
   it('零插件时显示 BR-06 空态说明，无安装清单', async () => {
@@ -129,5 +137,80 @@ describe('PluginManagerPage', () => {
     expect(screen.getByText(/id 必须是 kebab-slug/)).toBeTruthy();
     expect(screen.queryByText('安装并启用')).toBeNull();
     expect(screen.getByText('重新扫描')).toBeTruthy();
+  });
+
+  // #46 git 直装自由 URL 入口：合法 https URL → installGit 上行 + 确认面提示
+  it('#46 git 直装：合法 https URL 上行 installGit 并提示进入确认面', async () => {
+    currentList = [];
+    currentDiscovered = [];
+    installGitMock.mockResolvedValue({
+      id: 'demo-r',
+      path: '/tmp/agent-hub/plugins/demo-r',
+      status: 'new',
+      report: {
+        pluginId: 'demo-r',
+        pluginDir: 'demo-r',
+        contentHash: 'sha256:x',
+        contributions: [],
+        reach: { api: [], data: [], credentials: [], highRisk: [], mcp: [] },
+        errors: [],
+        warnings: [],
+        assetBytes: 0,
+        assetFiles: 0,
+        installable: true,
+      },
+    });
+    renderPage();
+    fireEvent.change(await screen.findByLabelText(/git 直装/), {
+      target: { value: 'https://example.com/demo.git' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '获取并安装' }));
+    await waitFor(() =>
+      expect(installGitMock).toHaveBeenCalledWith('https://example.com/demo.git'),
+    );
+    await waitFor(() => expect(screen.getByText(/已进入安装确认面/)).toBeTruthy());
+  });
+
+  // #46：非法形态前端预检拒绝（不上行），可读提示；本机绝对路径放行
+  it('#46 git 直装：http:// 形态被拒且有可读提示（不上行）', async () => {
+    currentList = [];
+    currentDiscovered = [];
+    renderPage();
+    fireEvent.change(await screen.findByLabelText(/git 直装/), {
+      target: { value: 'http://example.com/demo.git' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '获取并安装' }));
+    await waitFor(() =>
+      expect(screen.getByText(/仅支持 https:\/\/ 仓库或本机绝对路径/)).toBeTruthy(),
+    );
+    expect(installGitMock).not.toHaveBeenCalled();
+  });
+
+  it('#46 git 直装：本机绝对路径放行 installGit', async () => {
+    currentList = [];
+    currentDiscovered = [];
+    installGitMock.mockResolvedValue({
+      id: 'local-r',
+      path: '/tmp/agent-hub/plugins/local-r',
+      status: 'new',
+      report: {
+        pluginId: 'local-r',
+        pluginDir: 'local-r',
+        contentHash: 'sha256:x',
+        contributions: [],
+        reach: { api: [], data: [], credentials: [], highRisk: [], mcp: [] },
+        errors: [],
+        warnings: [],
+        assetBytes: 0,
+        assetFiles: 0,
+        installable: true,
+      },
+    });
+    renderPage();
+    fireEvent.change(await screen.findByLabelText(/git 直装/), {
+      target: { value: '/tmp/repos/demo-plugin' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '获取并安装' }));
+    await waitFor(() => expect(installGitMock).toHaveBeenCalledWith('/tmp/repos/demo-plugin'));
   });
 });
