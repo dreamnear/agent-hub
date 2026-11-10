@@ -414,6 +414,9 @@ pub fn hook_now() -> String {
 }
 
 #[cfg(test)]
+pub(crate) use tests::observer_test_lock;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::plugins::api_surface;
@@ -477,6 +480,12 @@ mod tests {
 
     /// 观察者槽是进程级全局量：本组用例串行执行，Drop 时清槽防串扰。
     static OBSERVER_LOCK: StdMutex<()> = StdMutex::new(());
+
+    /// 跨模块用例（claude #47 等）经此取同一把串行锁——两处用例共用全局槽，
+    /// 并行互踩会互相污染断言（经模块外 `pub(crate) use` 再导出）。
+    pub(crate) fn observer_test_lock() -> &'static StdMutex<()> {
+        &OBSERVER_LOCK
+    }
 
     struct ObserverGuard;
 

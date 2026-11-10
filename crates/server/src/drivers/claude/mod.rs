@@ -60,6 +60,11 @@ pub struct ClaudeDriver {
     /// 保留）——stop/remove 按此回收文件。hub 重启丢映射 → plugin_mcp 目录残留
     /// 死文件（无害：config 只在 mcp-proxy 拉起时读一次），治理归 B4。
     pub mcp_config_paths: Arc<std::sync::Mutex<HashMap<String, PathBuf>>>,
+    /// attach（interactive）会话已见账本（#47）：list 轮询点对 interactive 行
+    /// 对账——新现 → onSessionCreate，消失 → onSessionClose（形态照 opencode
+    /// reconcile_session_hooks）。**bg 行不进账本**：其 create/close 由
+    /// start/stop/remove 派发点独占，账本收录即双发（#47 去重判据）。
+    pub seen_interactive: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl ClaudeDriver {
@@ -112,6 +117,7 @@ impl ClaudeDriver {
             rooms,
             interrupted_at: Arc::new(std::sync::Mutex::new(HashMap::new())),
             mcp_config_paths: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            seen_interactive: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -229,9 +235,46 @@ impl ClaudeDriver {
             });
         }
         self.apply_interrupt_overrides(&mut out).await;
+        // #47 hooks 观察档（ADR-0014 矩阵 claude attach 行补档）：interactive
+        // 会话发现/消失对账。list 是 attach 会话唯一的 hub 侧窗口（无 start/stop
+        // 生命周期派发点）；bg 行不参与（其派发点已覆盖，账本收录即双发）。
+        let interactive: Vec<AgentSummary> = out
+            .iter()
+            .filter(|a| a.kind.as_deref() == Some("interactive"))
+            .cloned()
+            .collect();
+        self.reconcile_interactive_hooks(&interactive);
         // #60 completed-group：旧「Completed 不进默认侧栏」retain 过滤废除（对齐
         // CLI 2.1.314 全量库存视图）；all=true（历史面板 opt-in）语义不变。
         Ok(out)
+    }
+
+    /// attach 会话 create/close 对账（#47，形态照 opencode reconcile_session_hooks）：
+    /// 与已见账本 diff，新现/消失各发恰一次；fail-soft（账本锁异常直接跳过——
+    /// hooks 尽力告知，不影响清单主链路）。账本 id = list 合成 id（`itv-<sid12>`，
+    /// 与 onMessageAppend 的 claude 行 id 空间一致）。hub 重启账本清零，活 attach
+    /// 会话重发现即重发 create（与 opencode/dsh 重发现语义一致）。CLI 清单抖动
+    /// （短暂缺席）会触发 close→create 翻转，与 opencode 同语义可接受。
+    fn reconcile_interactive_hooks(&self, rows: &[AgentSummary]) {
+        let Ok(mut seen) = self.seen_interactive.lock() else {
+            return;
+        };
+        let current: std::collections::HashSet<String> =
+            rows.iter().map(|a| a.id.clone()).collect();
+        for a in rows {
+            if seen.insert(a.id.clone()) {
+                crate::plugins::hooks::dispatch_session_created(
+                    &a.id,
+                    "claude",
+                    a.cwd.as_deref(),
+                    a.name.as_deref(),
+                );
+            }
+        }
+        for gone in seen.difference(&current).cloned().collect::<Vec<_>>() {
+            seen.remove(&gone);
+            crate::plugins::hooks::dispatch_session_closed(&gone, "claude", Some("vanished"));
+        }
     }
 
     /// list 后应用中断标记（r69 状态机，自 AppState::apply_interrupt_overrides 逐行
@@ -902,4 +945,103 @@ fn loopback_default() -> String {
         .and_then(|raw| raw.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()))
         .unwrap_or(7800);
     format!("http://127.0.0.1:{port}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #47 attach 会话 hooks 对账（list 轮询点账本）：新现 create 恰一次 →
+    /// 重复轮询零重发 → 消失 close 恰一次；bg 行不经账本（start/stop/remove
+    /// 派发点独占——账本收录即双发，#47 去重判据）。观察者槽进程级共享，
+    /// 与 hooks.rs 用例共用串行锁。
+    #[tokio::test]
+    // 观察者槽串行锁必须横跨整个测试体（被测 list 的 await 期间其他线程的
+    // hooks.rs 捕获型用例会覆写全局观察者槽）——持 std 锁过 await 是本锁的
+    // 存在目的，非缺陷
+    #[allow(clippy::await_holding_lock)]
+    async fn list_reconciles_interactive_hooks_once() {
+        let _lock = crate::plugins::hooks::observer_test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct ResetObserver;
+        impl Drop for ResetObserver {
+            fn drop(&mut self) {
+                crate::plugins::hooks::set_internal_observer(Arc::new(|_, _| {}));
+            }
+        }
+        let _reset = ResetObserver;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-claude-itv.sh");
+        let rows = |interactive: bool| {
+            format!(
+                "#!/bin/bash\ncat <<'JSON'\n[{}{}]\nJSON\n",
+                r#"{"id":"bgjob1","kind":"background","state":"running","cwd":"/repo/a","name":"bg-one"}"#,
+                if interactive {
+                    r#",{"id":"","kind":"interactive","sessionId":"4a8b3c8d-aaaa","cwd":"/tmp/p","name":null,"state":"running"}"#
+                } else {
+                    ""
+                }
+            )
+        };
+        let write_rows = |v: bool| {
+            std::fs::write(&script, rows(v)).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+        write_rows(true);
+        let driver = ClaudeDriver::new(
+            script.clone(),
+            dir.path().join("jobs"),
+            dir.path().join("projects"),
+            dir.path().join("ignored.json"),
+            Arc::new(RwLock::new(HashMap::new())),
+        );
+        let seen: Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        // 按本测 sessionId 过滤：全量套件并行跑时其他驱动的 dispatch 也走同一
+        // 进程级观察者（不取串行锁、无从互斥），按 id 收窄使捕获不受并行污染
+        crate::plugins::hooks::set_internal_observer(Arc::new(move |hook, params| {
+            if hook != "onSessionCreate" && hook != "onSessionClose" {
+                return;
+            }
+            if params.get("sessionId").and_then(|v| v.as_str()) != Some("itv-4a8b3c8d-aaa") {
+                return;
+            }
+            sink.lock()
+                .unwrap()
+                .push((hook.to_string(), params.clone()));
+        }));
+
+        // 轮 1：attach 行新现 → create 恰一次（itv- 合成 id）；bg 行零 hooks
+        //（断言一律快照后进行——`let x = &seen.lock()…[0]` 的引用绑定会把
+        // MutexGuard 寿命延长到作用域结束，下一轮 seen.lock() 即自死锁）
+        let out = AgentCatalog::list(&driver, true).await.unwrap();
+        assert_eq!(out.len(), 2);
+        let snaps = seen.lock().unwrap().clone();
+        assert_eq!(snaps.len(), 1, "仅 attach 行派发 create");
+        assert_eq!(snaps[0].0, "onSessionCreate");
+        assert_eq!(snaps[0].1["sessionId"], "itv-4a8b3c8d-aaa");
+        assert_eq!(snaps[0].1["driver"], "claude");
+        assert_eq!(snaps[0].1["cwd"], "/tmp/p");
+
+        // 轮 2：重复轮询不重发
+        AgentCatalog::list(&driver, true).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1, "账本去重：不得重发 create");
+
+        // 轮 3：attach 行消失 → close 恰一次（bg 行仍在且零 hooks）
+        write_rows(false);
+        let out = AgentCatalog::list(&driver, true).await.unwrap();
+        assert_eq!(out.len(), 1);
+        let snaps = seen.lock().unwrap().clone();
+        assert_eq!(snaps.len(), 2);
+        assert_eq!(snaps[1].0, "onSessionClose");
+        assert_eq!(snaps[1].1["sessionId"], "itv-4a8b3c8d-aaa");
+        assert_eq!(snaps[1].1["reason"], "vanished");
+    }
 }
