@@ -39,6 +39,20 @@ export type SessionAction =
   | 'sessions'
   | 'unlist';
 
+/// #54 per-driver Stop/Respawn 能力表（审计后显式化，替代旧宽义 isClaude）：
+/// 后端 stop 实装面 = claude（CLI stop）/ pi（助手停止）/ opencode（abort）/
+/// dsh（session.cancel）；acp 的 agents REST stop 面 404（契约保持）；omp 文件行
+/// cancel 恒不支持（文件会话无运行中轮次）。respawn 仅 claude 实装。未知驱动
+/// fail-closed（不显示点了必败的按钮）。菜单形状断言锚：AgentList.test.tsx。
+const ROW_CAPABILITIES: Record<string, { stop: boolean; respawn: boolean }> = {
+  claude: { stop: true, respawn: true },
+  pi: { stop: true, respawn: false },
+  opencode: { stop: true, respawn: false },
+  dsh: { stop: true, respawn: false },
+  acp: { stop: false, respawn: false },
+  omp: { stop: false, respawn: false },
+};
+
 export default function AgentRow({
   agent,
   onSelect,
@@ -75,12 +89,11 @@ export default function AgentRow({
     .filter(Boolean)
     .join(' · ');
   const interactive = agent.kind === 'interactive';
-  // ocr-review 中：Logs/Stop/Respawn 是 claude 专属端点（/api/agents/claude/...），
-  // ACP 行隐藏（中断在 AgentList.handleAction 分流 cancelAcpSession）。
-  // 命名按字面：isClaudeDriver 才是 claude 驱动；isClaude 是「非 acp」的旧宽义，
-  // 仅 Logs/Stop/Respawn 沿用（review-1 MINOR 1：移除项曾因宽义误显于 omp/pi/
-  // opencode/dsh 行——后端均 unsupported，点击必报错）
-  const isClaude = agent.driver !== 'acp';
+  // Stop/Respawn 走 #54 能力表（与后端实装面逐字对应，见 ROW_CAPABILITIES 注）；
+  // interactive 行无进程句柄维持隐藏（R8），不放假按钮
+  const caps = ROW_CAPABILITIES[agent.driver] ?? { stop: false, respawn: false };
+  const canStop = !interactive && caps.stop;
+  const canRespawn = !interactive && caps.respawn;
   const isClaudeDriver = agent.driver === 'claude';
   // #45 移除通道：acp 注册表行补「移除」项（/api/agents/acp/{id}/rm 已实装，
   // 删除注册表条目 + 同步清 acp_sessions.json 持久化）——重启复活的占位行用户
@@ -199,12 +212,14 @@ export default function AgentRow({
                     {t('row.interrupt')}
                   </button>
                 ) : null}
-                {/* 分组分隔 + 危险操作底部（Stop/Respawn/Remove 全桌聚焦改动避误触；Stop/
-                    Respawn claude 专属，Remove claude + acp（#45，review-1 MINOR 1 收紧）；
-                    interactive 的 unlist 同属危险区，故 claude 行恒有分隔线；其余驱动
-                    危险区为空不显示分隔线（防悬空） */}
-                {isClaudeDriver || canRemove ? <div className="agent-row-menu-sep" role="separator" /> : null}
-                {!interactive && isClaude ? (
+                {/* 分组分隔 + 危险操作底部（Stop/Respawn/Remove 全桌聚焦改动避误触；
+                    Stop/Respawn 按 #54 能力表显隐（respawn 仅 claude 实装），Remove
+                    claude + acp（#45，review-1 MINOR 1 收紧）；分隔线跟随危险区实际
+                    内容——区空不显示（防悬空），区非空（含 pi/opencode/dsh 的 Stop）恒有 */}
+                {canStop || canRespawn || canRemove || (interactive && isClaudeDriver) ? (
+                  <div className="agent-row-menu-sep" role="separator" />
+                ) : null}
+                {canStop ? (
                   <button
                     type="button"
                     role="menuitem"
@@ -214,7 +229,7 @@ export default function AgentRow({
                     Stop
                   </button>
                 ) : null}
-                {!interactive && isClaude ? (
+                {canRespawn ? (
                   <button
                     type="button"
                     role="menuitem"
@@ -231,7 +246,7 @@ export default function AgentRow({
                 ) : null}
                 {/* R8：interactive 行的「从列表移除」——仅隐藏条目不动进程（Stop/
                     Respawn 等无进程句柄维持隐藏，不放假按钮） */}
-                {interactive && isClaude ? (
+                {interactive && isClaudeDriver ? (
                   <button type="button" role="menuitem" className="agent-row-menu-danger" onClick={() => run('unlist')}>
                     {t('row.unlist')}
                   </button>
