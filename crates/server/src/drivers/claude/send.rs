@@ -62,8 +62,12 @@ const CLEAR_INPUT: &[u8] = b"\x03";
 /// Ctrl-C 后 settle：等 TUI 清空重绘
 const INJECT_CLEAR_SETTLE_MS: u64 = 400;
 /// Ctrl-C 静默门限：输出静默 ≥2s 视为 idle（raw 态才允许 Ctrl-C；忙态/canonical
-/// 一律 Ctrl-U 兜底——忙态 Ctrl-C 语义是打断工作轮）
+/// 一律不 Ctrl-C——忙态 Ctrl-C 语义是打断/无效（phase_c SC3 实证：忙态下两个
+/// Ctrl-C 均未清场），canonical 自愈）
 const INJECT_CLEAR_QUIET_MS: u64 = 2000;
+/// dirty 会话恢复清理的等静默窗（上限）：上一条注入失败留下疑似残留、且 TUI
+/// 尚未回到静默时，等它安静下来再全量清场——期间注入请求被推迟（总时长有界）
+const INJECT_RECOVER_WAIT_MS: u64 = 20000;
 
 /// agentId → 复用 attach 会话。
 pub struct ClaudeSendRouter {
@@ -74,6 +78,10 @@ pub struct ClaudeSendRouter {
     /// 发送走原路径零额外开销——稳态零回归面（斜杠命令等 chip 渲染文本不参与
     /// 回显匹配，见 coder.md §方案取舍）。release/respawn 复位后重新布防。
     first_send_confirmed: Mutex<HashSet<String>>,
+    /// 疑似残缓冲 agent（agentId）：写入成功但回显/提交未确认的会话——输入区
+    /// 可能残留本次正文，且残留规模与新文本行数无关。下次注入写前强制走
+    /// 「等静默 → Ctrl-C 全量清场」恢复通道；写入确认成功即解除。
+    dirty: Mutex<HashSet<String>>,
 }
 
 impl ClaudeSendRouter {
@@ -82,6 +90,7 @@ impl ClaudeSendRouter {
             bin,
             attaches: Mutex::new(HashMap::new()),
             first_send_confirmed: Mutex::new(HashSet::new()),
+            dirty: Mutex::new(HashSet::new()),
         }
     }
 
@@ -167,12 +176,12 @@ impl ClaudeSendRouter {
         Ok(rx)
     }
 
-    /// 回滚整块清理（#80 缺陷 2：提交未确认时的零残留收场；已消费/已排队场景
-    /// 输入区为空 = 清理原语 no-op，安全）。调用方须在确认转录未落盘后才调用
+    /// 回滚清理（#80 缺陷 2：提交未确认时的收场；idle = Ctrl-C 全量清场，忙态 =
+    /// 跳过盲清理由 dirty 恢复通道兜底）。调用方须在确认转录未落盘后才调用
     /// （防清掉已排队的消息）。
     pub async fn clear_input_block(&self, id: &str) -> Result<()> {
         let (sess, _) = self.get_or_attach(id)?;
-        smart_clear(&sess, INJECT_CLEAR_MAX, id).await
+        rollback_clear(&sess, id).await
     }
 }
 
@@ -211,9 +220,43 @@ impl ClaudeSendRouter {
         }
         // 写前整块清理（#80 缺陷 3：无判据可查缓冲区，则以清理保证已知干净态——
         // 任何残缓冲（上次失败残留/用户手输草稿）都被替换，绝不追加）
-        smart_clear(&sess, clear_presses(text), id).await?;
-        // 写入 + 回显确认（与首发确认层同款有界重试；失败 = 零残留明确报错）
-        write_confirmed(&sess, text, id).await?;
+        if self
+            .dirty
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dirty 锁失效"))?
+            .contains(id)
+        {
+            // 恢复通道：上一次注入失败疑似留残（规模未知），等 TUI 回静默后
+            // Ctrl-C 全量清场（phase_c SC3→SC4 拼接污染的根治路径）
+            if wait_tui_quiet(&sess, INJECT_RECOVER_WAIT_MS).await {
+                rollback_clear(&sess, id).await?;
+            } else {
+                // 超时仍忙：放弃本次写入（零副作用明确失败），保持 dirty
+                tracing::warn!(agent = %id, "inject: dirty session never went quiet, aborting write");
+                anyhow::bail!(
+                    "目标会话输入区疑似残留上一条失败注入且会话持续忙碌，本轮未写入任何内容——请稍后重试"
+                );
+            }
+        } else {
+            smart_clear(&sess, clear_presses(text), id).await?;
+        }
+        // 写入 + 回显确认（与首发确认层同款有界重试；失败 = 明确报错并标记 dirty，
+        // 由下一次注入的恢复通道清场）
+        match write_confirmed(&sess, text, id).await {
+            Ok(()) => {
+                self.dirty
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("dirty 锁失效"))?
+                    .remove(id);
+            }
+            Err(e) => {
+                self.dirty
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("dirty 锁失效"))?
+                    .insert(id.to_string());
+                return Err(e);
+            }
+        }
         // 提交：\r 自适应重发，每次等渲染证据（转录落盘/忙态排队）
         let needles = echo_needles(text);
         let seq = sess
@@ -233,8 +276,14 @@ impl ClaudeSendRouter {
                 "inject_confirmed: text written+echo ok but commit evidence missing (retrying \\r)"
             );
         }
-        // 渲染证据缺失：不在此清理（转录可能已落、忙态可能已排队——回滚决策权
-        // 在调用方结合 jsonl 判定，避免误清排队消息或打断工作轮）
+        // 渲染证据缺失：文本已在输入区（echo 确认过）——标 dirty，下一次注入的
+        // 恢复通道负责清场；本轮不做盲清理（忙态清理字节已被证明无效甚至有害，
+        // 转录可能已落/忙态可能已排队，最终判定权在调用方结合 jsonl）
+        self.dirty
+            .lock()
+            .map_err(|_| anyhow::anyhow!("dirty 锁失效"))?
+            .insert(id.to_string());
+        tracing::warn!(agent = %id, phase = "commit", "inject: commit unconfirmed, session marked dirty");
         Ok(InjectCommit::Missing)
     }
 }
@@ -356,6 +405,10 @@ impl MessageSender for ClaudeSendRouter {
         if let Ok(mut done) = self.first_send_confirmed.lock() {
             done.remove(id);
         }
+        // dirty 疑残标记同步复位：attach 已销毁，输入区不复存在
+        if let Ok(mut dirty) = self.dirty.lock() {
+            dirty.remove(id);
+        }
         Ok(())
     }
 
@@ -433,11 +486,9 @@ async fn write_confirmed(sess: &Arc<Mutex<AttachSession>>, text: &str, agent: &s
             "first-send: no echo within window (CLI not consuming?)"
         );
     }
-    // 用尽仍失败：整块清理再报错（#57 升级）——残留正文若留在 TUI 输入框，
-    // 用户重试时会与 web 侧保留的草稿拼成两段提交；TUI 侧回到空行才与
-    // 「失败留草稿在 web」的语义对齐。cap 用上限：残留可能来自多次失败写入，
-    // 规模与新文本行数无关（tester-report-1 实证）
-    smart_clear(sess, INJECT_CLEAR_MAX, agent).await?;
+    // 用尽仍失败：残留可能来自多次失败写入、规模与新文本行数无关（tester-report-1
+    // 实证）——盲清理字节在忙态被证明无效（phase_c SC3），这里不再盲清；dirty 标记
+    // 已由调用方（inject_confirmed）落盘，下一次注入的恢复通道负责等静默后全量清场
     anyhow::bail!(
         "首发注入未被 CLI 消费：{} 次写入均在 {}ms 内无回显（会话可能仍在初始化或 TUI 未接管 stdin），请稍后重试",
         FIRST_SEND_ATTEMPTS,
@@ -445,39 +496,62 @@ async fn write_confirmed(sess: &Arc<Mutex<AttachSession>>, text: &str, agent: &s
     )
 }
 
-/// 整块清理原语（按 TUI 状态选档，tester-report-1 冻结回滚不净的修复）：
-/// - **raw 且静默 ≥2s（idle）→ Ctrl-C 单字节**：一次清空任意形态缓冲（含折叠
-///   chip），burst 到达也只 1 字节不会被丢（Ctrl-U 连发在冻结队列 resume 时以
-///   burst 释出会丢键/语义失效——实测锚）。空输入下 Ctrl-C 会短暂武装「再按退出」
-///   （~2s 自动解除；键入任意正文即解除——实验锚），本原语与后续正文之间隔有
-///   正文字节，不会构成双按退出。
-/// - **其余（canonical / 输出活跃）→ Ctrl-U 逐发兜底**：canonical 态 CLI 未接管
-///   stdin，转 raw 时会 flush 未读输入（experiments.md §A，残留自愈）；输出活跃
-///   （忙态）下 Ctrl-C 语义是打断工作轮，绝不可用——忙态输入区残留场景罕见
-///   （排队输入随轮消费），Ctrl-U 按新文本行数兜底并如实上报残余。
+/// 写前清理：idle（raw + 静默 ≥2s）→ Ctrl-C 全量清场（单字节，含折叠 chip，
+/// 一次清空任意规模残缓冲）；忙态/canonical → Ctrl-U 逐发兜底（忙态不 Ctrl-C：
+/// 语义是打断工作轮；canonical 残留转 raw 时自愈——experiments.md §A）。
 async fn smart_clear(sess: &Arc<Mutex<AttachSession>>, presses: u32, agent: &str) -> Result<()> {
-    let (raw, quiet) = {
-        let s = sess
-            .lock()
-            .map_err(|_| anyhow::anyhow!("attach 会话锁失效"))?;
-        let quiet = s.has_output()
-            && super::attach::now_ms().saturating_sub(s.output_snapshot_ms())
-                >= INJECT_CLEAR_QUIET_MS;
-        (s.raw_mode(), quiet)
-    };
-    if raw == Some(true) && quiet {
-        write_raw(sess, CLEAR_INPUT).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(INJECT_CLEAR_SETTLE_MS)).await;
-        tracing::info!(agent = %agent, "inject: block cleared (Ctrl-C, idle raw TUI)");
-        Ok(())
+    if tui_idle(sess) {
+        rollback_clear(sess, agent).await
     } else {
         tracing::info!(
             agent = %agent,
-            raw = ?raw,
-            quiet,
-            "inject: Ctrl-C gate not met (busy/canonical), Ctrl-U fallback"
+            raw = ?sess.lock().map(|s| s.raw_mode()).unwrap_or(None),
+            "inject: pre-clear Ctrl-C gate not met (busy/canonical), Ctrl-U fallback"
         );
         robust_clear(sess, presses, agent).await
+    }
+}
+
+/// 回滚清理（仅 idle）：Ctrl-C 单字节全量清场。忙态一律跳过（盲清理字节无效，
+/// dirty 标记交由下一次注入恢复）。
+async fn rollback_clear(sess: &Arc<Mutex<AttachSession>>, agent: &str) -> Result<()> {
+    if !tui_idle(sess) {
+        tracing::warn!(
+            agent = %agent,
+            "inject: rollback skipped (TUI busy/canonical), recovery deferred to next inject"
+        );
+        return Ok(());
+    }
+    write_raw(sess, CLEAR_INPUT).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(INJECT_CLEAR_SETTLE_MS)).await;
+    tracing::info!(agent = %agent, "inject: block cleared (Ctrl-C, idle raw TUI)");
+    Ok(())
+}
+
+/// TUI idle 判定：raw 态 + 输出静默 ≥2s（锁内只取快照）。
+fn tui_idle(sess: &Arc<Mutex<AttachSession>>) -> bool {
+    match sess.lock() {
+        Ok(s) => {
+            s.raw_mode() == Some(true)
+                && s.has_output()
+                && super::attach::now_ms().saturating_sub(s.output_snapshot_ms())
+                    >= INJECT_CLEAR_QUIET_MS
+        }
+        Err(_) => false,
+    }
+}
+
+/// 等 TUI 回静默（dirty 恢复通道用）：`wait_ms` 内静默即真。
+async fn wait_tui_quiet(sess: &Arc<Mutex<AttachSession>>, wait_ms: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+    loop {
+        if tui_idle(sess) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }
 
