@@ -51,6 +51,9 @@ const INJECT_CLEAR_MAX: u32 = 64;
 const INJECT_COMMIT_MS: u64 = 2000;
 /// \r 自适应重发上限（拿到提交证据即停；沿用「渲染期 \r 可能被吞」的既有认知）
 const INJECT_COMMIT_ATTEMPTS: u32 = 3;
+/// 转录落盘（consumed 判定）等待窗：claude turn 启动含上下文装载，实测
+/// e2e（2026-11-12）提交后 ~4s 才落盘，3s 窗会漏报 submitted；6s 覆盖冷启动。
+pub(crate) const INJECT_CONSUME_MS: u64 = 6000;
 
 /// agentId → 复用 attach 会话。
 pub struct ClaudeSendRouter {
@@ -116,7 +119,7 @@ impl ClaudeSendRouter {
         if need_tui_check {
             ensure_tui_ready(&sess).await?;
         }
-        // 命令 + 提交 （TUI raw mode 只认 ）；同 send 的 spawn_blocking 纪律
+        // 命令 + 提交 \r（TUI raw mode 只认 \r）；同 send 的 spawn_blocking 纪律
         let payload = format!("{command}\r");
         let sess_for_write = sess.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {

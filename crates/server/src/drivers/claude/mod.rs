@@ -347,6 +347,28 @@ impl ClaudeDriver {
     }
 }
 
+/// 转录落盘轮询（consumed 判定）：`INJECT_CONSUME_MS` 窗内基线后追加内容命中
+/// 线索即真；无 jsonl/无基线 = false（不判消费，降级 submitted，语义不虚报）。
+async fn consume_landed(jsonl: &Option<PathBuf>, before: Option<u64>, needle: &[u8]) -> bool {
+    let (Some(p), Some(b)) = (jsonl, before) else {
+        return false;
+    };
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_millis(send::INJECT_CONSUME_MS);
+    loop {
+        if session::file_appended_has(p, b, needle)
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 impl SessionControl for ClaudeDriver {
     fn send<'a>(&'a self, id: &'a str, text: &'a str) -> BoxFuture<'a, Result<()>> {
         // 委托轨一 ClaudeSendRouter（同一实例，见字段注释）+ 注入后置校验（2.4 内化）
@@ -395,12 +417,7 @@ impl SessionControl for ClaudeDriver {
                     reason: format!("{e:#}"),
                 },
                 Ok(commit) => {
-                    let landed = match (&jsonl, before) {
-                        (Some(p), Some(b)) => session::file_appended_has(p, b, &needle)
-                            .await
-                            .unwrap_or(false),
-                        _ => false,
-                    };
+                    let landed = consume_landed(&jsonl, before, &needle).await;
                     match (commit, landed) {
                         (_, true) => InjectOutcome::Consumed,
                         (InjectCommit::Seen, false) => InjectOutcome::Submitted,
