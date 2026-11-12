@@ -424,7 +424,7 @@ impl SessionControl for ClaudeDriver {
                         (InjectCommit::Missing, false) => {
                             // 提交未确认且转录未落：整块清理回滚（#57 单行升级为
                             // 多行整块；已消费/排队场景输入区为空 = no-op，安全）
-                            let cleared = self.sender.clear_input_block(id, text).await.is_ok();
+                            let cleared = self.sender.clear_input_block(id).await.is_ok();
                             InjectOutcome::Failed {
                                 phase: "commit",
                                 reason: format!(
