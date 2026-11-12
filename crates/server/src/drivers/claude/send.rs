@@ -35,6 +35,23 @@ const FIRST_SEND_NEEDLE_CHARS: usize = 16;
 /// 防「上一次其实写成功了但判据没认出来」时把正文写重复（experiments.md §D）
 const CLEAR_LINE: &[u8] = b"\x15";
 
+/// 注入确认通道有界参数（agent-hub-injection-atomicity，issue #80）。实测锚点
+/// （2026-11-12，claude 2.1.322，pyte 屏幕取证，详见本批 coder.md）：
+/// - Ctrl-U **一次只清一行**（4 行块 3 连发只清 2 行——burst 同发会丢键，逐行补发
+///   才可靠）；多行粘贴块必须按行数逐发清理。
+/// - 超高多行块在输入框折叠为粘贴 chip，渲染流只含**尾部 ~28 字符预览**（头部
+///   完全不在输出流）——回显线索必须头尾双探，仅头 16 字符会永久漏判（#80
+///   「3 次写入均无回显而文本可见」的根因）。
+const INJECT_CLEAR_STEP_MS: u64 = 60;
+/// 整块清理行数下限：短文本（<2 行）也至少覆盖残一行 + 余量
+const INJECT_CLEAR_MIN: u32 = 8;
+/// 整块清理行数上限：超长块的清理边界（残余如实上报，不无限补发）
+const INJECT_CLEAR_MAX: u32 = 64;
+/// \r 后提交证据等待窗（转录/队列渲染），单次
+const INJECT_COMMIT_MS: u64 = 2000;
+/// \r 自适应重发上限（拿到提交证据即停；沿用「渲染期 \r 可能被吞」的既有认知）
+const INJECT_COMMIT_ATTEMPTS: u32 = 3;
+
 /// agentId → 复用 attach 会话。
 pub struct ClaudeSendRouter {
     bin: PathBuf,
@@ -136,6 +153,84 @@ impl ClaudeSendRouter {
             .subscribe_output();
         Ok(rx)
     }
+
+    /// 按注入文本行数整块清理目标输入区（#80 缺陷 2 回滚路径：提交未确认时的
+    /// 零残留收场；已消费/已排队场景输入区为空 = Ctrl-U 连发 no-op，安全）。
+    /// 调用方须在确认转录未落盘后才调用（防清掉已排队的消息）。
+    pub async fn clear_input_block(&self, id: &str, text: &str) -> Result<()> {
+        let (sess, _) = self.get_or_attach(id)?;
+        robust_clear(&sess, clear_presses(text), id).await
+    }
+}
+
+impl ClaudeSendRouter {
+    /// 注入确认通道（agent-hub-injection-atomicity，issue #80）：写入 → 回显确认
+    /// → 提交（\r 自适应重发）→ 提交证据（转录/队列渲染）。任一阶段失败都以
+    /// **零残留**收场：写前与失败路径都做整块清理（Ctrl-U × 行数逐发），重试
+    /// 因此是替换而非追加。返回提交是否拿到渲染证据；终态（consumed/submitted/
+    /// failed）由调用方结合转录落盘判定。
+    pub async fn inject_confirmed(&self, id: &str, text: &str) -> Result<InjectCommit> {
+        // 死条目复位 / 真死复活：与 send 同源守卫（attach 进程已退出或 daemon
+        // 清单缺席 → release/respawn 后重建）
+        if self.is_finished(id) {
+            let _ = self.release(id);
+        }
+        if self.job_needs_respawn(id).await {
+            cli::respawn(&self.bin, id)
+                .await
+                .with_context(|| format!("respawn {id} 失败"))?;
+            let _ = self.release(id);
+        }
+        tracing::info!(
+            agent = %id,
+            fingerprint = %text.chars().take(16).collect::<String>(),
+            bytes = text.len(),
+            "inject_confirmed: begin"
+        );
+        let (sess, is_new) = self.get_or_attach(id)?;
+        let need_tui_check = !sess
+            .lock()
+            .map_err(|_| anyhow::anyhow!("attach 会话锁失效"))?
+            .has_output();
+        tracing::info!(agent = %id, is_new, need_tui_check, "inject_confirmed: attach");
+        if need_tui_check {
+            ensure_tui_ready(&sess).await?;
+        }
+        // 写前整块清理（#80 缺陷 3：无判据可查缓冲区，则以清理保证已知干净态——
+        // 任何残缓冲（上次失败残留/用户手输草稿）都被替换，绝不追加）
+        robust_clear(&sess, clear_presses(text), id).await?;
+        // 写入 + 回显确认（与首发确认层同款有界重试；失败 = 零残留明确报错）
+        write_confirmed(&sess, text, id).await?;
+        // 提交：\r 自适应重发，每次等渲染证据（转录落盘/忙态排队）
+        let needles = echo_needles(text);
+        let seq = sess
+            .lock()
+            .map_err(|_| anyhow::anyhow!("attach 会话锁失效"))?
+            .output_seq();
+        for attempt in 1..=INJECT_COMMIT_ATTEMPTS {
+            write_raw(&sess, b"\r").await?;
+            if wait_output_evidence(&sess, seq, &needles, INJECT_COMMIT_MS).await {
+                tracing::info!(agent = %id, attempt, "inject_confirmed: commit evidence seen");
+                return Ok(InjectCommit::Seen);
+            }
+            tracing::warn!(
+                agent = %id,
+                attempt,
+                attempts = INJECT_COMMIT_ATTEMPTS,
+                "inject_confirmed: text written+echo ok but commit evidence missing (retrying \\r)"
+            );
+        }
+        // 渲染证据缺失：不在此清理（转录可能已落、忙态可能已排队——回滚决策权
+        // 在调用方结合 jsonl 判定，避免误清排队消息或打断工作轮）
+        Ok(InjectCommit::Missing)
+    }
+}
+
+/// 提交证据：\r 之后目标 TUI 是否渲染了该消息（转录气泡 / 忙态队列条目）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectCommit {
+    Seen,
+    Missing,
 }
 
 impl MessageSender for ClaudeSendRouter {
@@ -186,8 +281,8 @@ impl MessageSender for ClaudeSendRouter {
             let payload_len = payload.len();
             if first_send {
                 // 首发投递确认层（agent-hub-first-send-ready）：写入成功 ≠ CLI 消费。
-                // 未确认则清行重写，全部用尽 → 明确失败（禁静默吞没）。
-                write_first_send_confirmed(&sess, &payload, id).await?;
+                // 未确认则整块清理重写，全部用尽 → 明确失败（禁静默吞没）。
+                write_confirmed(&sess, &payload, id).await?;
                 self.first_send_confirmed
                     .lock()
                     .map_err(|_| anyhow::anyhow!("first_send_confirmed 锁失效"))?
@@ -287,34 +382,29 @@ impl MessageSender for ClaudeSendRouter {
     }
 }
 
-/// 首发投递确认层（agent-hub-first-send-ready，issue #3）：
+/// 首发投递确认层（agent-hub-first-send-ready，issue #3；#80 起升级为整块清理 +
+/// 头尾双线索）：
 /// 现状缺口 = `ensure_tui_ready` 的判据是「TUI 已渲染」，不是「CLI 已开始消费 stdin」——
 /// 写入成功（HTTP 200 + `written` 日志）与「被消费」是两件事：实测 PTY 在 canonical
 /// 态会自行回显键入字节（父进程看得到），而 CLI 转 raw 时会 flush 掉窗口期未读输入
-/// （experiments.md §A）。故首发改为**以 TUI 回显为消费证据**：
-/// 写入 → 轮询最近输出中是否出现该文本 → 未出现则 Ctrl-U 清行后重写（防重复提交），
-/// 尝试用尽仍未确认 → `bail!` 明确失败（禁静默降级为「假装成功」，F1/F3）。
-/// 只覆盖每条 attach 生命周期的首次发送；提交原子性（`\r`×3）与忙态放行零改动（F2/F4）。
-async fn write_first_send_confirmed(
-    sess: &Arc<Mutex<AttachSession>>,
-    text: &str,
-    agent: &str,
-) -> Result<()> {
-    let needle = echo_needle(text);
+/// （experiments.md §A）。故以 TUI 回显为消费证据：
+/// 写入 → 轮询最近输出是否出现该文本（头或尾线索）→ 未出现则整块清理后重写
+/// （防重复提交），尝试用尽仍未确认 → 整块清理 + `bail!` 明确失败（禁静默降级）。
+async fn write_confirmed(sess: &Arc<Mutex<AttachSession>>, text: &str, agent: &str) -> Result<()> {
+    let needles = echo_needles(text);
     let started = tokio::time::Instant::now();
     for attempt in 1..=FIRST_SEND_ATTEMPTS {
         if attempt > 1 {
-            // 上一次写入未被消费（回显缺失）→ 清行，防「其实已进输入框」时写重复：
-            // 残留正文会被紧随的 \r 提交两次（experiments.md §D：Ctrl-U 可可靠清行）
-            write_raw(sess, CLEAR_LINE).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(FIRST_SEND_CLEAR_SETTLE_MS)).await;
+            // 上一次写入未被消费（回显缺失）→ 整块清理，防「其实已进输入框」时写重复：
+            // 残留正文会被紧随的 \r 提交两次（#80 实证：单发 Ctrl-U 清不净多行块）
+            robust_clear(sess, clear_presses(text), agent).await?;
         }
         let seq = sess
             .lock()
             .map_err(|_| anyhow::anyhow!("attach 会话锁失效"))?
             .output_seq();
         write_raw(sess, text.as_bytes()).await?;
-        if wait_echo(sess, seq, &needle).await {
+        if wait_output_evidence(sess, seq, &needles, FIRST_SEND_CONFIRM_MS).await {
             tracing::info!(
                 agent = %agent,
                 attempt,
@@ -330,15 +420,35 @@ async fn write_first_send_confirmed(
             "first-send: no echo within window (CLI not consuming?)"
         );
     }
-    // 用尽仍失败：清行再报错（#57）——最后一次写入的残留正文若留在 TUI 输入行，
+    // 用尽仍失败：整块清理再报错（#57 升级）——残留正文若留在 TUI 输入框，
     // 用户重试时会与 web 侧保留的草稿拼成两段提交；TUI 侧回到空行才与
-    // 「失败留草稿在 web」的语义对齐（Ctrl-U 同 attempt>1 的既有清行形态）
-    write_raw(sess, CLEAR_LINE).await?;
+    // 「失败留草稿在 web」的语义对齐
+    robust_clear(sess, clear_presses(text), agent).await?;
     anyhow::bail!(
         "首发注入未被 CLI 消费：{} 次写入均在 {}ms 内无回显（会话可能仍在初始化或 TUI 未接管 stdin），请稍后重试",
         FIRST_SEND_ATTEMPTS,
         FIRST_SEND_CONFIRM_MS
     )
+}
+
+/// 整块清理：Ctrl-U 逐发（实测 burst 同发会丢键，60ms 间隔可靠）清掉至多
+/// `presses` 行，末尾留 settle 让 TUI 消化。#57 的单发清行只覆盖单行场景，
+/// 多行粘贴块必须按行数补发（#80 缺陷 2）。
+async fn robust_clear(sess: &Arc<Mutex<AttachSession>>, presses: u32, agent: &str) -> Result<()> {
+    for _ in 0..presses {
+        write_raw(sess, CLEAR_LINE).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(INJECT_CLEAR_STEP_MS)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(FIRST_SEND_CLEAR_SETTLE_MS)).await;
+    tracing::info!(agent = %agent, presses, "inject: block cleared (Ctrl-U x presses)");
+    Ok(())
+}
+
+/// 清理行数：正文行数 + 余量，夹在 [8, 64]。下限保证短文本也清掉残一行与
+/// 未知零散残行；上限防超长块无限补发（残余如实上报）。纯函数（单测锚点）。
+fn clear_presses(text: &str) -> u32 {
+    let lines = text.lines().count() as u32;
+    (lines + 6).clamp(INJECT_CLEAR_MIN, INJECT_CLEAR_MAX)
 }
 
 /// 单次写入（spawn_blocking 纪律同 send：PTY 写可能阻塞，不占 tokio worker）
@@ -355,10 +465,15 @@ async fn write_raw(sess: &Arc<Mutex<AttachSession>>, data: &[u8]) -> Result<()> 
     .map_err(|e| anyhow::anyhow!("join write task: {e}"))?
 }
 
-/// 在 `seq` 之后的输出里等 TUI 回显（消费证据）。锁内只取快照，轮询 sleep 在锁外。
-async fn wait_echo(sess: &Arc<Mutex<AttachSession>>, seq: u64, needle: &[u8]) -> bool {
-    let deadline =
-        tokio::time::Instant::now() + std::time::Duration::from_millis(FIRST_SEND_CONFIRM_MS);
+/// 在 `seq` 之后的输出里等证据线索（回显/提交渲染，消费证据）。锁内只取快照，
+/// 轮询 sleep 在锁外。任一线索命中即真。
+async fn wait_output_evidence(
+    sess: &Arc<Mutex<AttachSession>>,
+    seq: u64,
+    needles: &[Vec<u8>],
+    window_ms: u64,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(window_ms);
     let mut baseline = seq;
     loop {
         let (raw, cur_seq, tail) = {
@@ -374,7 +489,8 @@ async fn wait_echo(sess: &Arc<Mutex<AttachSession>>, seq: u64, needle: &[u8]) ->
             Some(false) => baseline = cur_seq,
             _ => {
                 // 与线索同口径归一化后比对（TUI 重绘在字符间插转义/换行）
-                if contains_needle(&normalize_output(&tail), needle) {
+                let norm = normalize_output(&tail);
+                if needles.iter().any(|n| contains_needle(&norm, n)) {
                     return true;
                 }
             }
@@ -386,12 +502,25 @@ async fn wait_echo(sess: &Arc<Mutex<AttachSession>>, seq: u64, needle: &[u8]) ->
     }
 }
 
-/// 回显线索：归一化正文的前 `FIRST_SEND_NEEDLE_CHARS` 个字符。
-/// 纯函数（单测锚点）——长文本在 TUI 里会换行/被增量重绘拆段，整段匹配会漏。
-fn echo_needle(text: &str) -> Vec<u8> {
-    let mut n = normalize_output(text.as_bytes());
-    n.truncate(FIRST_SEND_NEEDLE_CHARS);
-    n
+/// 回显线索：归一化正文的**前与后** `FIRST_SEND_NEEDLE_CHARS` 字节（去重）。
+/// 纯函数（单测锚点）——长文本在 TUI 里换行/被增量重绘拆段，整段匹配会漏；
+/// 折叠粘贴 chip 更是只渲染尾部 ~28 字符预览（#80 实测），仅头线索会永久漏判。
+/// 字节切面可能落在多字节字符中间：渲染流含同款字节序列，子串匹配不受影响。
+fn echo_needles(text: &str) -> Vec<Vec<u8>> {
+    let n = normalize_output(text.as_bytes());
+    if n.is_empty() {
+        return Vec::new();
+    }
+    if n.len() <= FIRST_SEND_NEEDLE_CHARS {
+        return vec![n];
+    }
+    let head = n[..FIRST_SEND_NEEDLE_CHARS].to_vec();
+    let tail = n[n.len() - FIRST_SEND_NEEDLE_CHARS..].to_vec();
+    if head == tail {
+        vec![head]
+    } else {
+        vec![head, tail]
+    }
 }
 
 /// 归一化 PTY 输出：剥 ANSI/OSC 转义 → 去空白与控制字节 → ASCII 小写。
@@ -493,7 +622,9 @@ async fn ensure_tui_ready(sess: &Arc<Mutex<AttachSession>>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_needle, echo_needle, normalize_output};
+    use super::{
+        clear_presses, contains_needle, echo_needles, normalize_output, FIRST_SEND_NEEDLE_CHARS,
+    };
 
     /// 归一化：剥 CSI/OSC 转义、去空白与控制字节、ASCII 小写。
     /// 实测形态（experiments.md §C）：TUI 在字符之间插光标定位转义。
@@ -512,14 +643,40 @@ mod tests {
         assert_eq!(normalize_output(st_terminated), b"tail".to_vec());
     }
 
-    /// 线索 = 归一化正文前 16 字符：长文本在 TUI 里换行/分块，整段匹配会漏。
+    /// 线索 = 归一化正文前 16 + 后 16 字节：长文本在 TUI 里换行/分块，整段匹配
+    /// 会漏；折叠粘贴 chip 只渲染尾部预览（#80 实测），仅头线索会永久漏判。
     #[test]
-    fn needle_is_truncated_normalized_prefix() {
-        assert_eq!(echo_needle("Hello World"), b"helloworld".to_vec());
-        let long = echo_needle(&"x".repeat(40));
-        assert_eq!(long.len(), 16);
+    fn needles_cover_head_and_tail() {
+        // 短文本：归一化正文整体单线索
+        assert_eq!(echo_needles("Hello World"), vec![b"helloworld".to_vec()]);
+        // 长文本：头尾双线索
+        let long = format!("{}{}", "x".repeat(40), "y".repeat(40));
+        let ns = echo_needles(&long);
+        assert_eq!(ns.len(), 2);
+        assert_eq!(ns[0], vec![b'x'; FIRST_SEND_NEEDLE_CHARS]);
+        assert_eq!(ns[1], vec![b'y'; FIRST_SEND_NEEDLE_CHARS]);
+        // 头尾相同（重复字符填充）→ 去重单线索
+        let same = "z".repeat(40);
+        assert_eq!(echo_needles(&same).len(), 1);
         // CJK 与标点：非空白字节原样保留（不上 ASCII 小写，避免破坏多字节编码）
-        assert_eq!(echo_needle("中文 探针").len(), "中文探针".len());
+        assert_eq!(echo_needles("中文 探针").len(), 1);
+        assert_eq!(echo_needles("中文 探针")[0], "中文探针".as_bytes().to_vec());
+        // 纯空白正文 → 空线索（禁止「正文全空白时误判已消费」）
+        assert!(echo_needles("  \n\t ").is_empty());
+    }
+
+    /// 折叠 chip 渲染形态（#80 实测）：输出流只有尾部 x-run + chip 提示文案，
+    /// 尾线索应命中、头线索不命中。
+    #[test]
+    fn tail_needle_matches_collapsed_chip_preview() {
+        let text = format!("HEAD-{}\n{}", "a".repeat(30), "x".repeat(40));
+        let ns = echo_needles(&text);
+        let chip_render = b"\xe2\x9d\xafxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\npaste again to expand";
+        let norm = normalize_output(chip_render);
+        assert!(
+            ns.iter().any(|n| contains_needle(&norm, n)),
+            "尾线索应命中 chip 预览: needles={ns:?} norm={norm:?}"
+        );
     }
 
     /// 匹配语义：命中/未命中、空线索一律判否（禁止「正文全空白时误判已消费」）。
@@ -535,7 +692,7 @@ mod tests {
     #[test]
     fn echo_pipeline_recognizes_tui_render() {
         let text = "把线上的问题先修掉";
-        let needle = echo_needle(text);
+        let needles = echo_needles(text);
         // 模拟 TUI 渲染：边框、正文字符间夹光标定位转义、尾部状态栏
         let render = format!(
             "\x1b[2K│ ❯ {}\x1b[10;1H─── status ───",
@@ -543,8 +700,19 @@ mod tests {
         );
         let tail = normalize_output(render.as_bytes());
         assert!(
-            contains_needle(&tail, &needle),
-            "回显渲染应被识别为消费证据: needle={needle:?} tail={tail:?}"
+            needles.iter().any(|n| contains_needle(&tail, n)),
+            "回显渲染应被识别为消费证据: needles={needles:?} tail={tail:?}"
         );
+    }
+
+    /// 清理行数：正文行数+余量，夹在 [8, 64]；多行块按行数覆盖，超长块封顶。
+    #[test]
+    fn clear_presses_scale_with_block_lines() {
+        assert_eq!(clear_presses("single line"), 8);
+        assert_eq!(clear_presses("a\nb"), 8);
+        assert_eq!(clear_presses(&"l\n".repeat(20)), 26);
+        assert_eq!(clear_presses(&"l\n".repeat(1000)), 64);
+        // 纯空文本也走下限（写前清理兜底未知残行）
+        assert_eq!(clear_presses(""), 8);
     }
 }
