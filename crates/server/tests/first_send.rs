@@ -95,9 +95,11 @@ async fn first_send_confirmation_paths() {
         1,
         "恢复后正文应恰好一份（清行重写不产生重复），log={log:?}"
     );
+    // #80 升级：清行动作原语从单发 Ctrl-U（只清单行）改为 idle 态 Ctrl-C（整块
+    // 清空，含多行粘贴块）——断言「重写前有清行动作」而非特定字节
     assert!(
-        count(&log, "\\x15") >= 1,
-        "重写前应有清行动作（Ctrl-U），log={log:?}"
+        count(&log, "\\x03") + count(&log, "\\x15") >= 1,
+        "重写前应有清行动作（Ctrl-C 整块 / Ctrl-U 单行），log={log:?}"
     );
     assert!(
         window_elapsed >= Duration::from_millis(2500),
