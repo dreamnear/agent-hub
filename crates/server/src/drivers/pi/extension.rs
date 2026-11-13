@@ -230,7 +230,8 @@ export default function (pi: ExtensionAPI) {
           text: params.text,
         }),
       })) as Record<string, unknown>;
-      // status: accepted / failed——如实转告用户（busy 排队等以会话实际输出为准）
+      // status: consumed / submitted / failed（failed 带 phase=write|commit）——
+      // 如实转告用户；failed 已整块清理输入区可安全重试，submitted 禁盲目重发同一内容
       return text(res);
     },
   });

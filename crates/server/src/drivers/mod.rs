@@ -81,9 +81,38 @@ pub struct StartSpec {
     pub resume_session_id: Option<String>,
 }
 
+/// 注入投递终态（agent-hub-injection-atomicity，issue #80）：真实反映投递链路，
+/// 替代旧 `accepted`（写入即报成功、不区分提交与消费）。
+/// - `Consumed`：写入 + 提交均确认，转录落盘已含该消息（完整成功）。
+/// - `Submitted`：写入 + 提交有渲染证据，转录尚未确认（忙态排队属正常；调用方
+///   禁止盲目重试同一内容）。
+/// - `Failed { phase }`：`phase="write"` 回显未确认（写入未被 TUI 消费）；
+///   `phase="commit"` 写入确认但回车提交未确认。两态失败路径均已整块清理输入区
+///   （零残留），可安全重试。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InjectOutcome {
+    Consumed,
+    Submitted,
+    Failed { phase: &'static str, reason: String },
+}
+
 /// 轨二 A：会话控制面（MessageSender 的加法扩展，签名对齐其现有方法）。
 pub trait SessionControl: Send + Sync {
     fn send<'a>(&'a self, id: &'a str, text: &'a str) -> BoxFuture<'a, Result<()>>;
+    /// 注入确认通道（助手 session_inject 专用）：带回显/提交确认与失败回滚的
+    /// 投递，返回真实终态。默认实现 = 旧 `send` 路径（无确认层），语义视为
+    /// `Submitted`（发送方受理、无独立消费证据）——无确认机制的驱动（pi RPC 等）
+    /// 行为与批前一致，仅响应标签更真实。
+    fn send_confirmed<'a>(
+        &'a self,
+        id: &'a str,
+        text: &'a str,
+    ) -> BoxFuture<'a, Result<InjectOutcome>> {
+        Box::pin(async move {
+            Self::send(self, id, text).await?;
+            Ok(InjectOutcome::Submitted)
+        })
+    }
     /// 中断当前处理（= MessageSender::interrupt）。
     fn cancel<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>>;
     fn is_finished(&self, id: &str) -> bool;

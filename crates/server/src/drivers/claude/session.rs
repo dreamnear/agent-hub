@@ -192,6 +192,48 @@ pub async fn find_subagent_path(
     None
 }
 
+/// 注入消费证据（agent-hub-injection-atomicity，issue #80）：基线字节长之后追加的
+/// jsonl 片段是否含给定线索（注入文本首行前 48 字节）。jsonl 追加写入是行原子，
+/// `before` 通常对齐行首；错位时线索可能横跨边界 → 漏报为未消费（降级 submitted，
+/// 不误报）。纯函数（单测锚点）。
+pub fn appended_contains(before: u64, appended: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let skip = (before as usize).min(appended.len());
+    let region = &appended[skip..];
+    region.windows(needle.len()).any(|w| w == needle)
+}
+
+/// 注入文本的 jsonl 检索线索：首行前 48 字节（原始 UTF-8，不做转义归一——
+/// jsonl 内正文除引号/反斜杠外原样存储；首行 48 字节落在转义敏感区的概率极低，
+/// 退化 = 漏报为 submitted，不误报）。空首行 → 空线索（消费判定保守为 false）。
+pub fn jsonl_needle(text: &str) -> &[u8] {
+    let Some(first) = text.lines().next() else {
+        return b"";
+    };
+    let mut end = first.len().min(48);
+    while !first.is_char_boundary(end) {
+        end -= 1;
+    }
+    &first.as_bytes()[..end]
+}
+
+/// 读取 jsonl 基线之后追加的字节并检索线索。无文件/读失败/基线后无追加 = None
+/// （调用方据此不判消费）；命中 = Some(true)，否则 Some(false)。
+pub async fn file_appended_has(path: &Path, before: u64, needle: &[u8]) -> Option<bool> {
+    let f = tokio::fs::File::open(path).await.ok()?;
+    let len = f.metadata().await.ok()?.len();
+    if len <= before || needle.is_empty() {
+        return Some(false);
+    }
+    let mut f = f;
+    f.seek(std::io::SeekFrom::Start(before)).await.ok()?;
+    let mut buf = Vec::with_capacity((len - before) as usize);
+    f.read_to_end(&mut buf).await.ok()?;
+    Some(appended_contains(0, &buf, needle))
+}
+
 /// 会话 jsonl 最近写入时刻（反馈轮 19：中断标记解除判据）。无文件/非法 id = None。
 pub async fn session_mtime(projects_dir: &Path, session_id: &str) -> Option<std::time::SystemTime> {
     if session_id.is_empty()
@@ -795,6 +837,54 @@ async fn count_lines(path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 基线守卫：start 之前的旧内容不参与匹配（防旧消息/旧会话同文误判消费）
+    #[test]
+    fn appended_contains_only_scans_since_baseline() {
+        let old_region = b"tail msg-needle pre-existing line\n".to_vec();
+        let new_region = b"{\"type\":\"user\",\"message\":{\"content\":\"msg 3\"}}\n".to_vec();
+        let mut all = old_region.clone();
+        let before = all.len() as u64;
+        all.extend_from_slice(&new_region);
+        // 只存在于基线之前的线索 → 不算消费（防旧同文误报）
+        assert!(!appended_contains(before, &all, b"msg-needle"));
+        // 基线之后追加的消息 → 判消费
+        assert!(appended_contains(before, &all, b"msg 3"));
+        // 空线索一律判否
+        assert!(!appended_contains(0, &all, b""));
+        // 追加区域短于线索 → 不命中
+        assert!(!appended_contains(0, b"ab", b"abcdefgh"));
+    }
+
+    /// 线索 = 首行前 48 字节（多字节安全，不切字符）
+    #[test]
+    fn jsonl_needle_takes_first_line_head() {
+        assert_eq!(jsonl_needle("hello world\nsecond"), b"hello world");
+        assert_eq!(jsonl_needle(&"中".repeat(30)), "中".repeat(16).as_bytes());
+        // 空首行 / 空正文 → 空线索（消费判定保守为 false）
+        assert_eq!(jsonl_needle("\nsecond"), b"");
+        assert_eq!(jsonl_needle(""), b"");
+    }
+
+    /// 端到端（tempfile）：基线后追加的 user 行被抓到，旧行不算
+    #[tokio::test]
+    async fn file_appended_has_roundtrip() {
+        let path = fixture(&[user_line(1), user_line(2)]).await;
+        let base = tokio::fs::metadata(&path).await.unwrap().len();
+        let needle = jsonl_needle("msg 3").to_vec();
+        assert!(!file_appended_has(&path, base, &needle).await.unwrap());
+        let mut f = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
+        use tokio::io::AsyncWriteExt;
+        f.write_all(format!("\n{}", user_line(3)).as_bytes())
+            .await
+            .unwrap();
+        drop(f);
+        assert!(file_appended_has(&path, base, &needle).await.unwrap());
+    }
 
     fn user_line(n: usize) -> String {
         format!(
