@@ -4,6 +4,23 @@
 
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.11.0] - 2026-11-13
+
+本批：backlog 三件（#46/#47/#54）+ 注入链路原子性修复（#80）。
+
+### Added — backlog 三件
+
+- **#46 插件直装 URL 入口**：PluginManagerPage 新增自由输入安装入口（https 仓库 URL / 本机绝对路径 → 既有审计确认面；http/ssh/相对路径前置拒绝；安装日志零凭据回显）
+- **#47 claude attach 会话 hooks**：list-polling 点加 known-sessions 账本（opencode reconcile 形态），attach 会话派发 onSessionCreate/onSessionClose 恰一次（行型分流结构性防双发）；bg 路径零回归
+- **#54 菜单能力表**：per-driver `ROW_CAPABILITIES` 收紧 Stop/Respawn 可见性（pi/opencode/dsh 撤 Respawn；interactive 仅移除）——7 行型形状断言锚 + 审计结论表
+
+### Fixed — 注入链路原子性（#80）
+
+- 注入要么完整成功（写入+提交+echo 核验到位）要么零副作用失败（输入区不被触碰）；失败整块回滚（Ctrl-C idle 清场 + 忙态零盲清）+ 脏会话下次注入延迟恢复（根治重试拼接）+ 恢复超时零写入保护
+- interactive 前台 TUI 会话 API 层 403 前置拒绝（零写入路径）
+- 状态机真实化：consumed / submitted / failed{write,commit}，日志区分「写入成功但提交失败」与「写入失败」；误报 accepted 消除
+- 消费核验窗口 6s（e2e 实测 turn start ~4s）；#57 单行场景回归锚不弱化
+
 ## [0.10.1] - 2026-11-09
 
 本批：watcher v0.10.0 审查遗留清理（#77）。
