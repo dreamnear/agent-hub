@@ -383,6 +383,64 @@ describe('AgentList Sidebar-v2', () => {
     expect(screen.getByRole('menuitem', { name: '中断' })).not.toBeNull();
   });
 
+  // #54 per-driver Stop/Respawn 能力表菜单形状锚：每行类型一档断言。
+  // stop 实装 = claude/pi/opencode/dsh；respawn 仅 claude；remove claude+acp（#45）；
+  // omp 文件行危险区全空（无分隔线防悬空）；interactive 仅保留「从列表移除」。
+  it('AgentRow ⋯ 菜单：per-driver Stop/Respawn 能力表（#54 菜单形状锚）', () => {
+    const shape = (over: Partial<AgentSummary>) => {
+      render(
+        <AgentRow
+          agent={{ ...mk('x1', '菜单形状', 'other'), ...over }}
+          onSelect={vi.fn()}
+          onAction={vi.fn()}
+        />,
+        { wrapper },
+      );
+      fireEvent.click(screen.getByRole('button', { name: /菜单形状 更多操作/ }));
+      // 菜单经 createPortal 挂 document.body——从 document 查询（container 内为空）
+      const items = new Set(
+        Array.from(document.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent),
+      );
+      const sep = document.querySelector('.agent-row-menu-sep') != null;
+      cleanup();
+      return { items, sep };
+    };
+    // claude bg：全量（respawn 唯二实装驱动）
+    let s = shape({ driver: 'claude', kind: 'background' });
+    expect(s.items.has('Stop')).toBe(true);
+    expect(s.items.has('Respawn')).toBe(true);
+    expect(s.items.has('删除会话')).toBe(true);
+    expect(s.sep).toBe(true);
+    // claude interactive：无进程句柄（Stop/Respawn/删除全隐），保留从列表移除
+    s = shape({ driver: 'claude', kind: 'interactive', sessionId: 'sid-shape-1' });
+    expect(s.items.has('Stop')).toBe(false);
+    expect(s.items.has('Respawn')).toBe(false);
+    expect(s.items.has('删除会话')).toBe(false);
+    expect(s.items.has('从列表移除')).toBe(true);
+    expect(s.sep).toBe(true);
+    // acp：stop/respawn 的 agents REST 面缺失（404 契约）；remove 保留（#45）
+    s = shape({ driver: 'acp', kind: 'acp' });
+    expect(s.items.has('Stop')).toBe(false);
+    expect(s.items.has('Respawn')).toBe(false);
+    expect(s.items.has('删除会话')).toBe(true);
+    expect(s.sep).toBe(true);
+    // omp 文件行：危险区全空（只读事实源），中断保留
+    s = shape({ driver: 'omp', kind: 'omp' });
+    expect(s.items.has('Stop')).toBe(false);
+    expect(s.items.has('Respawn')).toBe(false);
+    expect(s.items.has('删除会话')).toBe(false);
+    expect(s.items.has('中断')).toBe(true);
+    expect(s.sep).toBe(false);
+    // pi / opencode / dsh：Stop 实装保留，Respawn 收紧隐藏（旧宽义误显处）
+    for (const driver of ['pi', 'opencode', 'dsh']) {
+      s = shape({ driver, kind: 'assistant' });
+      expect(s.items.has('Stop')).toBe(true);
+      expect(s.items.has('Respawn')).toBe(false);
+      expect(s.items.has('删除会话')).toBe(false);
+      expect(s.sep).toBe(true);
+    }
+  });
+
   // #20：Esc 关闭行菜单（document 级监听——焦点在 body 也生效，原形态 Esc 全失效）
   // + 关闭后首击直达下层真实元素（backdrop 随菜单卸载，不吞点击）
   it('行 ⋯ 菜单：Esc 关闭（焦点在 body），关闭后首击落到行目标（#20）', () => {

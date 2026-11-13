@@ -286,6 +286,9 @@ function MarketSection({ onDone }: { onDone: (msg: string) => void }): ReactElem
   const [source, setSource] = useState('');
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
+  // #46 git 直装自由 URL 入口：输入 + 确认 → install-git → 既有安装确认面
+  const [direct, setDirect] = useState('');
+  const [directInvalid, setDirectInvalid] = useState(false);
   const market = useQuery({ queryKey: ['plugins', 'market'], queryFn: plugins.market });
 
   const run = async (fn: () => Promise<string>): Promise<void> => {
@@ -312,6 +315,23 @@ function MarketSection({ onDone }: { onDone: (msg: string) => void }): ReactElem
             (e.description ?? '').toLowerCase().includes(kw) ||
             e.tags.some((tag) => tag.toLowerCase().includes(kw)),
         );
+
+  // #46 直装提交：前端只做形态预检（https:// 或绝对路径；非空由按钮 disabled 保证），
+  // 权威校验在后端（https + 本机路径白名单 / 120s 超时 / 凭据脱敏 / subPath 逃逸守卫）。
+  // toast 只带 id 与 status，不回显输入 URL（凭据零回显）。
+  const directInstall = (): void => {
+    const url = direct.trim();
+    if (!url.startsWith('https://') && !url.startsWith('/')) {
+      setDirectInvalid(true);
+      return;
+    }
+    setDirectInvalid(false);
+    void run(async () => {
+      const r = await plugins.installGit(url);
+      setDirect('');
+      return `${t('plugin.market.installTriggered')} · ${r.id} (${r.status})`;
+    });
+  };
 
   return (
     <section className="plugin-market" aria-label={t('plugin.market.title')}>
@@ -373,6 +393,36 @@ function MarketSection({ onDone }: { onDone: (msg: string) => void }): ReactElem
           </button>
         </p>
       ))}
+      {/* #46 git 直装自由 URL 入口（B4 已知边界补全）：安装仍落既有确认面 */}
+      <div className="plugin-market-source-row">
+        <input
+          type="text"
+          className="plugin-cred-input plugin-market-source-input"
+          aria-label={t('plugin.market.directPlaceholder')}
+          placeholder={t('plugin.market.directPlaceholder')}
+          value={direct}
+          onChange={(e) => {
+            setDirect(e.target.value);
+            setDirectInvalid(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && direct.trim() !== '' && !busy) directInstall();
+          }}
+        />
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy || direct.trim() === ''}
+          onClick={directInstall}
+        >
+          {t('plugin.market.directInstall')}
+        </button>
+      </div>
+      {directInvalid ? (
+        <p className="plugin-hint" role="alert">
+          {t('plugin.market.directInvalid')}
+        </p>
+      ) : null}
       <input
         type="search"
         className="plugin-cred-input"
