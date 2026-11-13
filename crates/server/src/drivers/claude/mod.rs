@@ -390,6 +390,28 @@ impl ClaudeDriver {
     }
 }
 
+/// 转录落盘轮询（consumed 判定）：`INJECT_CONSUME_MS` 窗内基线后追加内容命中
+/// 线索即真；无 jsonl/无基线 = false（不判消费，降级 submitted，语义不虚报）。
+async fn consume_landed(jsonl: &Option<PathBuf>, before: Option<u64>, needle: &[u8]) -> bool {
+    let (Some(p), Some(b)) = (jsonl, before) else {
+        return false;
+    };
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_millis(send::INJECT_CONSUME_MS);
+    loop {
+        if session::file_appended_has(p, b, needle)
+            .await
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 impl SessionControl for ClaudeDriver {
     fn send<'a>(&'a self, id: &'a str, text: &'a str) -> BoxFuture<'a, Result<()>> {
         // 委托轨一 ClaudeSendRouter（同一实例，见字段注释）+ 注入后置校验（2.4 内化）
@@ -397,6 +419,92 @@ impl SessionControl for ClaudeDriver {
             crate::drivers::MessageSender::send(&*self.sender, id, text).await?;
             self.spawn_send_post_check(id).await;
             Ok(())
+        })
+    }
+
+    /// 注入确认通道（agent-hub-injection-atomicity，issue #80）：PTY 确认写入+
+    /// 提交，转录落盘判消费。终态映射：
+    /// - 写入未被消费（无回显）→ `failed(phase=write)`，整块清理，零残留可重试；
+    /// - 提交未确认 → 先查转录：已落 = consumed（渲染漏判不打翻）；未落 = 整块
+    ///   清理回滚 + `failed(phase=commit)`（日志区分「写入成功但提交失败」）；
+    /// - 提交有渲染证据 → 转录 3s 窗内落盘判 `consumed`，否则 `submitted`（忙态
+    ///   排队属正常，调用方不得盲目重试）。
+    fn send_confirmed<'a>(
+        &'a self,
+        id: &'a str,
+        text: &'a str,
+    ) -> BoxFuture<'a, Result<crate::drivers::InjectOutcome>> {
+        Box::pin(async move {
+            use crate::drivers::InjectOutcome;
+            use send::InjectCommit;
+            // 转录落盘基线（写入前采样）；找不到 jsonl（新会话未落盘/无 session_id）
+            // 则跳过消费判定——submitted/failed 语义仍然真实
+            let jsonl = match ClaudeDriver::get(self, id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|a| a.session_id)
+            {
+                Some(sid) => session::find_session_path(&self.projects_dir, &sid).await,
+                None => None,
+            };
+            let before = match &jsonl {
+                Some(p) => tokio::fs::metadata(p).await.ok().map(|m| m.len()),
+                None => None,
+            };
+            let needle = session::jsonl_needle(text).to_vec();
+
+            let outcome = match self.sender.inject_confirmed(id, text).await {
+                Err(e) => InjectOutcome::Failed {
+                    phase: "write",
+                    reason: format!("{e:#}"),
+                },
+                Ok(commit) => {
+                    let landed = consume_landed(&jsonl, before, &needle).await;
+                    match (commit, landed) {
+                        (_, true) => InjectOutcome::Consumed,
+                        (InjectCommit::Seen, false) => InjectOutcome::Submitted,
+                        (InjectCommit::Missing, false) => {
+                            // 提交未确认且转录未落：整块清理回滚（#57 单行升级为
+                            // 多行整块；已消费/排队场景输入区为空 = no-op，安全）
+                            let cleared = self.sender.clear_input_block(id).await.is_ok();
+                            InjectOutcome::Failed {
+                                phase: "commit",
+                                reason: format!(
+                                    "消息已写入目标输入区（回显确认）但提交（回车）未确认，转录亦未落盘；已{}输入区。{}",
+                                    if cleared { "整块清理" } else { "尝试清理（未确认成功）" },
+                                    "若目标会话正忙，消息可能已在排队——重试前请人工核对输入区",
+                                ),
+                            }
+                        }
+                    }
+                }
+            };
+            // 日志区分「写入成功但提交失败」与「写入失败」（验收 4）
+            match &outcome {
+                InjectOutcome::Consumed => tracing::info!(
+                    agent = %id,
+                    "inject: consumed (write+commit+transcript landed)"
+                ),
+                InjectOutcome::Submitted => tracing::info!(
+                    agent = %id,
+                    "inject: submitted (write+commit rendered; consumption pending — busy queue)"
+                ),
+                InjectOutcome::Failed { phase: "write", .. } => tracing::warn!(
+                    agent = %id,
+                    phase = "write",
+                    "inject: write failed (no echo — text not consumed by TUI); input cleared, safe to retry"
+                ),
+                InjectOutcome::Failed {
+                    phase: "commit", ..
+                } => tracing::warn!(
+                    agent = %id,
+                    phase = "commit",
+                    "inject: commit failed (written + echo ok, but Enter/transcript unconfirmed); rolled back, safe to retry"
+                ),
+                _ => {}
+            }
+            Ok(outcome)
         })
     }
 

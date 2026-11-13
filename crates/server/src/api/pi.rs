@@ -317,9 +317,14 @@ struct InjectBody {
 }
 
 /// POST /api/pi/inject：助手向指定会话注入消息（授权双闸的服务端闸）。
-/// 开关关 → 403；interactive 会话 → 403（R7：前台 TUI 注入纪律）；
-/// 通过后走既有 route_send 链路（注入行为与 UI 发送完全同构）。
-/// 返回 {status:"accepted"|"failed", message?}——助手可如实转告用户。
+/// 开关关 → 403；interactive 会话 → 403（R7：前台 TUI 注入纪律，API 层前置拒绝，
+/// 不进写入路径）；
+/// status 反映真实投递终态（agent-hub-injection-atomicity，issue #80）。终态判定
+/// 经驱动 `send_confirmed`（claude = PTY 确认通道；无确认层驱动的默认实现语义
+/// = submitted，行为与批前一致）：
+/// - consumed：写入+提交+转录落盘三重确认（完整成功）；
+/// - submitted：写入+提交确认，转录待落（忙态排队；禁止盲目重试同一内容）；
+/// - failed（phase=write|commit）：失败路径已整块清理输入区，可安全重试。
 async fn post_inject(
     State(state): State<SharedState>,
     Json(body): Json<InjectBody>,
@@ -350,16 +355,25 @@ async fn post_inject(
     }
     // 失败也以 200 + status=failed 返回（extension 工具语义：助手要能拿到
     // 结构化失败原因转告用户，而非 HTTP 错误丢细节）。
-    // std 锁守卫不跨 await：先克隆路由表再异步发送（Send 红线）
-    let routes = state.message_routes.read().expect("routes lock").clone();
-    match crate::drivers::route_send(&routes, &body.driver, &body.id, text).await {
-        Ok(()) => Ok(Json(serde_json::json!({
-            "status": "accepted",
-            "message": "消息已受理注入（若目标会话正忙，处理结果以会话实际输出为准）",
+    use crate::drivers::InjectOutcome;
+    match d.send_confirmed(&body.id, text).await {
+        Ok(InjectOutcome::Consumed) => Ok(Json(serde_json::json!({
+            "status": "consumed",
+            "message": "消息已投递并被目标会话消费（回显与转录落盘均已确认）",
+        }))),
+        Ok(InjectOutcome::Submitted) => Ok(Json(serde_json::json!({
+            "status": "submitted",
+            "message": "消息已提交至目标会话（发送方受理；独立消费确认未含或待落盘，忙态排队属正常）——请勿重复发送同一内容",
+        }))),
+        Ok(InjectOutcome::Failed { phase, reason }) => Ok(Json(serde_json::json!({
+            "status": "failed",
+            "phase": phase,
+            "message": reason,
         }))),
         Err(e) => Ok(Json(serde_json::json!({
             "status": "failed",
-            "message": e.to_string(),
+            "phase": "write",
+            "message": format!("{e:#}（未写入目标会话输入区，可安全重试）"),
         }))),
     }
 }
